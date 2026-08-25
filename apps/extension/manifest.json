@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Halo Learning - Magic Hand (Basic)",
+  "version": "0.2.0",
+  "description": "Local-first English/Traditional-Chinese marking with configurable, reversible POS projection.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Halo Learning - Magic Hand"
+  }
+}

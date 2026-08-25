@@ -1,0 +1,61 @@
+/* Halo Learning Basic MVP: semantic label is primary; color is optional enhancement. */
+.halo-token {
+  position: relative !important;
+  display: inline !important;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.halo-token.halo-label-top-right::after,
+.halo-token.halo-label-top-left::after,
+.halo-token.halo-label-bottom-right::after,
+.halo-token.halo-label-inline::after {
+  content: attr(data-halo-pos);
+  pointer-events: none;
+  user-select: none;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.52em;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: lowercase;
+  color: currentColor;
+  opacity: 0.78;
+  z-index: 2147483646;
+}
+
+.halo-token.halo-label-top-right::after {
+  position: absolute;
+  top: -0.78em;
+  right: -0.22em;
+}
+
+.halo-token.halo-label-top-left::after {
+  position: absolute;
+  top: -0.78em;
+  left: -0.22em;
+}
+
+.halo-token.halo-label-bottom-right::after {
+  position: absolute;
+  bottom: -0.72em;
+  right: -0.22em;
+}
+
+.halo-token.halo-label-inline::after {
+  position: static;
+  margin-left: 0.12em;
+  vertical-align: super;
+}
+
+/* Color is deliberately redundant with the textual POS label. */
+.halo-pos-n { color: var(--halo-pos-n, #2563eb) !important; }
+.halo-pos-v { color: var(--halo-pos-v, #dc2626) !important; }
+.halo-pos-adj { color: var(--halo-pos-adj, #16803d) !important; }
+.halo-pos-adv { color: var(--halo-pos-adv, #7c3aed) !important; }
+.halo-pos-prep { color: var(--halo-pos-prep, #a16207) !important; }
+.halo-pos-conj { color: var(--halo-pos-conj, #0e7490) !important; }
+.halo-pos-det { color: var(--halo-pos-det, #52525b) !important; }
+.halo-pos-pron { color: var(--halo-pos-pron, #be185d) !important; }
+.halo-pos-aux { color: var(--halo-pos-aux, #c2410c) !important; }
+.halo-pos-modal { color: var(--halo-pos-modal, #6d28d9) !important; }

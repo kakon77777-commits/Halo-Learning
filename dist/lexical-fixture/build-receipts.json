@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "indexPath": "lexical-index.json",
+  "indexHash": {
+    "algorithm": "sha256",
+    "value": "228b0a749152b87acc925ed506b4146fd4fa1b8c7c4409fd089b843d81ea1855"
+  },
+  "receipts": [
+    {
+      "schemaVersion": 1,
+      "receiptId": "cc-cedict-synthetic@synthetic.1:halo-cc-cedict-importer:87ca022de6fc7321",
+      "datasetId": "cc-cedict-synthetic",
+      "datasetVersion": "synthetic.1",
+      "importer": {
+        "id": "halo-cc-cedict-importer",
+        "version": "1.0.0"
+      },
+      "inputHash": {
+        "algorithm": "sha256",
+        "value": "87ca022de6fc73218e6b0310745778b62532399875ecee588a23c57c2b88a320"
+      },
+      "outputHash": {
+        "algorithm": "sha256",
+        "value": "228b0a749152b87acc925ed506b4146fd4fa1b8c7c4409fd089b843d81ea1855"
+      },
+      "entryCount": 4,
+      "rejectedCount": 2,
+      "builtAt": "2026-08-25T00:00:00.000Z",
+      "reproducibility": {
+        "canonicalOrder": true,
+        "deterministicIndexHash": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "receiptId": "princeton-wordnet-3.0-synthetic@3.0-synthetic.1:halo-wordnet-data-importer:c0f5c83148788e40",
+      "datasetId": "princeton-wordnet-3.0-synthetic",
+      "datasetVersion": "3.0-synthetic.1",
+      "importer": {
+        "id": "halo-wordnet-data-importer",
+        "version": "1.0.0"
+      },
+      "inputHash": {
+        "algorithm": "sha256",
+        "value": "c0f5c83148788e406c39442c7ad6fc6bbc58aa5950c6698a414ee3a453b93158"
+      },
+      "outputHash": {
+        "algorithm": "sha256",
+        "value": "228b0a749152b87acc925ed506b4146fd4fa1b8c7c4409fd089b843d81ea1855"
+      },
+      "entryCount": 5,
+      "rejectedCount": 1,
+      "builtAt": "2026-08-25T00:00:00.000Z",
+      "reproducibility": {
+        "canonicalOrder": true,
+        "deterministicIndexHash": true
+      }
+    }
+  ]
+}

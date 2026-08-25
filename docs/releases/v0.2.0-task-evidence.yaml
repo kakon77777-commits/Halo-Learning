@@ -1,0 +1,245 @@
+release: v0.2.0
+baseline:
+  source: Halo_Learning_Basic_MVP_v0.1.0_bundle.zip
+  imported_git_head: 776d3a69b3b23378c93e934beb4fc497a3d7e6ce
+  tests: "16/16 PASS; exit 0"
+tasks:
+  V020-01:
+    status: completed
+    files_changed:
+      - package.json
+      - .gitignore
+      - packages/contracts/lexical-contracts.js
+      - packages/contracts/schemas/dataset-manifest.schema.json
+      - packages/contracts/schemas/license-record.schema.json
+      - packages/contracts/schemas/lexical-entry.schema.json
+      - packages/contracts/schemas/corpus-build-receipt.schema.json
+      - tests/lexical-contracts.test.js
+    contracts_changed:
+      - DatasetManifest@1
+      - LicenseRecord@1
+      - LexicalEntry@1
+      - CorpusBuildReceipt@1
+    migrations_added: []
+    tests_added:
+      - tests/lexical-contracts.test.js
+    tests_passed:
+      - "node --test tests/lexical-contracts.test.js: 5/5"
+      - "node --test tests/*.test.js: 21/21"
+    acceptance_evidence:
+      - "Required schemaVersion/source/license/version/hash/locale and provenance fields are runtime-validated."
+      - "Only en and zh-Hant locales are admitted."
+    known_limitations:
+      - "JSON Schema files are handoff artifacts; dependency-free runtime validators are canonical for this release."
+    security_notes:
+      - "Contracts contain no provider SDK, network call, secret, user history, or renderer state."
+    next_dependencies:
+      - V020-02
+  V020-02:
+    status: completed
+    files_changed:
+      - docs/data-sources/source-records.json
+      - docs/data-sources/PRINCETON_WORDNET_3.0.md
+      - docs/data-sources/CC_CEDICT.md
+      - docs/data-sources/REJECTED_SOURCES.md
+      - packages/lexical-data/source-gate.js
+      - tests/data-source-records.test.js
+      - docs/superpowers/plans/2026-08-25-lexical-data-layer-v0.2.0.md
+    contracts_changed:
+      - "Source selection requires exactly one verified, commercially usable, redistributable source for each scoped locale."
+    migrations_added: []
+    tests_added:
+      - tests/data-source-records.test.js
+    tests_passed:
+      - "node --test tests/data-source-records.test.js: 4/4"
+      - "node --test tests/*.test.js: 25/25"
+    acceptance_evidence:
+      - "Princeton WordNet 3.0 was selected for English with official license and data-format evidence."
+      - "A verified CC-CEDICT release was selected for Traditional Chinese with exact-release license capture required."
+      - "NTU Chinese Wordnet was explicitly rejected because its public terms are noncommercial and nonredistributable."
+    known_limitations:
+      - "No upstream corpus bytes are bundled; only synthetic format fixtures may enter this release."
+      - "CC-CEDICT does not provide structured POS, so later POS derivation must remain low-confidence and separately sourced."
+    security_notes:
+      - "The source gate has no downloader or network path and fails closed on ineligible or out-of-scope selections."
+    next_dependencies:
+      - V020-03
+  V020-03:
+    status: completed
+    files_changed:
+      - packages/lexical-data/shared/build-utils.js
+      - packages/lexical-data/en/wordnet-importer.js
+      - fixtures/lexical/wordnet-3.0-synthetic/data.noun
+      - fixtures/lexical/wordnet-3.0-synthetic/data.verb
+      - fixtures/lexical/wordnet-3.0-synthetic/dataset-manifest.json
+      - tests/wordnet-importer.test.js
+    contracts_changed:
+      - "importWordNetFiles(files, manifest) returns frozen entries, explicit rejections, and a deterministic receipt draft."
+    migrations_added: []
+    tests_added:
+      - tests/wordnet-importer.test.js
+    tests_passed:
+      - "node --test tests/wordnet-importer.test.js: 5/5"
+      - "node --test tests/*.test.js: 30/30"
+    acceptance_evidence:
+      - "The parser covers documented synset offset/type, hexadecimal word count, word/lexical-ID pairs, pointer count boundary, and gloss."
+      - "Every output field retains dataset, version, record, line, and field-origin evidence."
+      - "Input file and aggregate SHA-256 mismatches are rejected before parsing."
+    known_limitations:
+      - "Pointers, adjective markers, and verb frames are intentionally not interpreted in importer v1."
+      - "The bundled records are synthetic format fixtures, not Princeton WordNet corpus bytes."
+    security_notes:
+      - "The importer has no downloader, network call, provider SDK, renderer dependency, or executable content path."
+    next_dependencies:
+      - V020-04
+  V020-04:
+    status: completed
+    files_changed:
+      - packages/contracts/lexical-contracts.js
+      - packages/contracts/schemas/lexical-entry.schema.json
+      - packages/lexical-data/zh/cc-cedict-importer.js
+      - fixtures/lexical/cc-cedict-synthetic/cedict_ts.u8
+      - fixtures/lexical/cc-cedict-synthetic/dataset-manifest.json
+      - tests/cc-cedict-importer.test.js
+    contracts_changed:
+      - "LexicalEntry source evidence may retain a validated string recordData map without making it indexable semantics."
+      - "importCcCedict(text, manifest) returns frozen entries, explicit rejections, max Traditional surface length, and a deterministic receipt draft."
+    migrations_added: []
+    tests_added:
+      - tests/cc-cedict-importer.test.js
+    tests_passed:
+      - "node --test tests/cc-cedict-importer.test.js: 6/6"
+      - "node --test tests/*.test.js: 36/36"
+    acceptance_evidence:
+      - "Traditional headwords are canonical surfaces; Simplified headwords and pinyin remain non-indexed source recordData."
+      - "Only an unambiguous all-infinitive gloss cue yields v at confidence 0.55; mixed or uncued glosses remain x at 0."
+      - "Exact duplicates and malformed records are reported with record and line evidence."
+    known_limitations:
+      - "CC-CEDICT has no structured POS truth; the cue is explicitly a low-confidence derivation, not corpus fact."
+      - "The bundled records are synthetic format fixtures, not CC-CEDICT corpus bytes."
+    security_notes:
+      - "The importer has no downloader, network call, alias indexing, provider SDK, or executable content path."
+    next_dependencies:
+      - V020-05
+  V020-05:
+    status: completed
+    files_changed:
+      - packages/lexical-index/lexical-index.js
+      - scripts/benchmark-lexical-index.js
+      - tests/lexical-index.test.js
+    contracts_changed:
+      - "LexicalIndex v1 canonical bytes contain validated lexical entries, source dataset IDs, and a SHA-256 envelope; lookup maps remain rebuildable runtime state."
+      - "lookup(surface, locale) returns all senses; longestMatch(text, start, zh-Hant) returns exact UTF-16 offsets."
+    migrations_added: []
+    tests_added:
+      - tests/lexical-index.test.js
+    tests_passed:
+      - "node --test tests/lexical-index.test.js: 5/5"
+      - "node --test tests/*.test.js: 41/41"
+      - "node --expose-gc scripts/benchmark-lexical-index.js: exit 0"
+    acceptance_evidence:
+      - "Index SHA-256 and serialized bytes are identical after reversing input order."
+      - "Payload or hash tampering raises LexicalIndexIntegrityError before lookup."
+      - "Synthetic 20k benchmark: lookup p95 0.000636 ms; 633.01405 serialized bytes/entry; 1102.1108 heap bytes/entry."
+    known_limitations:
+      - "The benchmark is a synthetic 20k engineering gate, not a full-corpus performance or NLP-accuracy claim."
+      - "Longest-match is available only for the scoped zh-Hant locale."
+    security_notes:
+      - "The canonical index has no visual projection fields, downloader, network call, provider SDK, or executable content."
+      - "CC-CEDICT Simplified recordData is retained as evidence but never enters lookup keys."
+    next_dependencies:
+      - V020-06
+  V020-06:
+    status: completed
+    files_changed:
+      - packages/lexical-index/dictionary-registry.js
+      - tests/dictionary-registry.test.js
+    contracts_changed:
+      - "createDictionaryRegistry({ bootstrapProvider, indexes }) preserves the lookup seam, normalizes zh to zh-Hant only at the corpus boundary, and exposes sanitized status."
+    migrations_added: []
+    tests_added:
+      - tests/dictionary-registry.test.js
+    tests_passed:
+      - "node --test tests/dictionary-registry.test.js: 5/5"
+      - "node --test tests/*.test.js: 46/46"
+      - "node --test tests/linguistics.test.js tests/projection.test.js tests/source-contract.test.js: original 16/16"
+    acceptance_evidence:
+      - "Verified corpus lookup precedes bootstrap lookup; missing and corrupt indexes preserve the bootstrap result."
+      - "Unsupported locale lookup returns null without calling the bootstrap provider."
+      - "Status reports only stable error codes, not paths, messages, or corpus content."
+    known_limitations:
+      - "Registry lookup returns the first canonical sense; callers needing all senses use LexicalIndex.lookup directly."
+    security_notes:
+      - "The registry catches only known lexical-index integrity failures and never mutates the bootstrap provider."
+      - "No file reader, network call, provider SDK, user data, or renderer state was added."
+    next_dependencies:
+      - V020-07
+  V020-07:
+    status: completed
+    files_changed:
+      - scripts/build-lexical-data.js
+      - tests/lexical-build.test.js
+      - THIRD_PARTY_NOTICES.md
+      - dist/data-manifest.json
+      - dist/lexical-fixture/lexical-index.json
+      - dist/lexical-fixture/build-receipts.json
+    contracts_changed:
+      - "Local build CLI: node scripts/build-lexical-data.js --en-dir <dir> --zh-file <file> --out <dir>."
+      - "Published output is atomic, refuses an existing target, and contains a data manifest, canonical index, and one normalized receipt per dataset."
+    migrations_added: []
+    tests_added:
+      - tests/lexical-build.test.js
+    tests_passed:
+      - "node --test tests/lexical-build.test.js: 4/4"
+      - "node --test tests/*.test.js: 50/50"
+      - "SOURCE_DATE_EPOCH=1787616000 fixture build: exit 0"
+    acceptance_evidence:
+      - "Two builds with different builtAt timestamps produced byte-identical lexical-index.json files."
+      - "Release fixture index payload SHA-256: 228b0a749152b87acc925ed506b4146fd4fa1b8c7c4409fd089b843d81ea1855."
+      - "Release fixture contains 9 accepted entries and 3 explicit rejected records across both locales."
+      - "Each receipt retains importer version, input hash, output hash, counts, timestamp, and reproducibility flags."
+    known_limitations:
+      - "Release output contains synthetic records only; users must provide separately acquired and licensed upstream bytes for a full local build."
+    security_notes:
+      - "The CLI never downloads data, blocks manifest path traversal, verifies hashes before parsing, and removes temporary output after failure."
+      - "Existing output directories are never overwritten."
+    next_dependencies:
+      - V020-08
+  V020-08:
+    status: completed
+    files_changed:
+      - package.json
+      - README.md
+      - apps/extension/manifest.json
+      - apps/extension/README.md
+      - scripts/validate-v0.2.0.js
+      - tests/release-validator.test.js
+      - docs/VALIDATION_REPORT_v0.2.0.md
+      - docs/validation/v0.2.0-index-benchmark.json
+      - docs/workbench/Halo_Learning_v0.1.0_to_v1.0_Workbench.xlsx
+      - docs/workbench/Halo_Learning_v0.1.0_to_v1.0_Workflow.md
+      - dist/halo-learning-magic-hand-v0.2.0.zip
+    contracts_changed:
+      - "Canonical release command: node scripts/validate-v0.2.0.js."
+      - "Extension package version advances to 0.2.0 while preserving v0.1 browser semantics and bootstrap-only startup."
+    migrations_added: []
+    tests_added:
+      - tests/release-validator.test.js
+    tests_passed:
+      - "node --test tests/release-validator.test.js: 3/3"
+      - "node --test tests/*.test.js: 53/53"
+      - "node scripts/validate-v0.2.0.js: normal exit 0; 10/10 gates"
+    acceptance_evidence:
+      - "Release validator negative fixtures return nonzero for missing license provenance and remote executable URLs."
+      - "Fresh gate verified 16 executable JavaScript files, deterministic fixture bytes, two receipts, 9 index entries, and extension ZIP version 0.2.0 at archive root."
+      - "Workbook Dashboard/Roadmap/v0.2.0 were updated; all 15 sheets rendered; formula-error scan returned zero; v0.3.0 remains Not Started."
+      - "Workbook status-list validation and conditional formatting for J10:J17 remain present after export."
+    known_limitations:
+      - "Complete cross-site browser E2E remains unclaimed."
+      - "The extension still uses the bootstrap dictionary; browser consumption of richer semantic annotations is v0.3.0 scope."
+      - "Full upstream corpus performance and production-grade NLP accuracy remain unclaimed."
+    security_notes:
+      - "Fresh audit found no remote executable URL or secret pattern and preserved minimal MV3 permissions with no host permissions."
+      - "No upstream corpus bytes, remote provider, analytics, account, billing, cloud sync, or user-learning store were added."
+    next_dependencies:
+      - "STOP at v0.2.0 release gate; v0.3.0 requires a new instruction."

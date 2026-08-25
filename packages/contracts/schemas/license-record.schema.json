@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo-learning.local/schemas/license-record.schema.json",
+  "title": "LicenseRecord",
+  "type": "object",
+  "required": ["schemaVersion", "licenseId", "name", "url", "commercialUse", "redistribution", "attributionRequired", "shareAlike", "redistributionNote", "verifiedAt", "verificationUrl"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "licenseId": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "url": { "type": "string", "minLength": 1 },
+    "commercialUse": { "enum": ["allowed", "prohibited"] },
+    "redistribution": { "enum": ["allowed", "allowed-with-notice", "share-alike", "prohibited"] },
+    "attributionRequired": { "type": "boolean" },
+    "shareAlike": { "type": "boolean" },
+    "redistributionNote": { "type": "string", "minLength": 1 },
+    "verifiedAt": { "type": "string", "format": "date" },
+    "verificationUrl": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo-learning.local/schemas/dataset-manifest.schema.json",
+  "title": "DatasetManifest",
+  "type": "object",
+  "required": ["schemaVersion", "datasetId", "name", "locale", "version", "source", "license", "hash", "files", "bundled", "redistributionNote"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "datasetId": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "locale": { "enum": ["en", "zh-Hant"] },
+    "version": { "type": "string", "minLength": 1 },
+    "source": {
+      "type": "object",
+      "required": ["publisher", "canonicalUrl", "acquiredAt", "retrievalMode"],
+      "additionalProperties": false
+    },
+    "license": { "$ref": "license-record.schema.json" },
+    "hash": {
+      "type": "object",
+      "required": ["algorithm", "value"],
+      "properties": { "algorithm": { "const": "sha256" }, "value": { "type": "string", "pattern": "^[a-f0-9]{64}$" } },
+      "additionalProperties": false
+    },
+    "files": { "type": "array", "minItems": 1 },
+    "bundled": { "type": "boolean" },
+    "redistributionNote": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": false
+}

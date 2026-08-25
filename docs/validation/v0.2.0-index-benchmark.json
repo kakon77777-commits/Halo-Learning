@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "benchmarkId": "halo-lexical-index-synthetic-20k-v1",
+  "runtime": "v24.19.0",
+  "entryCount": 20000,
+  "lookupSamples": 5000,
+  "indexHash": "675c0053826637d0ebbac2e630605641b6e86cf054f81d26e73a8971c886620b",
+  "measurements": {
+    "p95LookupMs": 0.0006960000000617583,
+    "serializedBytesPerEntry": 633.01405,
+    "heapBytesPerEntry": 1086.0848
+  },
+  "budgets": {
+    "p95LookupMs": 5,
+    "serializedBytesPerEntry": 1024,
+    "heapBytesPerEntry": 8192
+  },
+  "gates": {
+    "p95LookupMs": true,
+    "serializedBytesPerEntry": true,
+    "heapBytesPerEntry": true
+  },
+  "allPassed": true,
+  "limitation": "Synthetic 20k-entry engineering budget only; not a full-corpus production performance or NLP-accuracy claim."
+}

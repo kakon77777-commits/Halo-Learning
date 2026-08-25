@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Halo Learning - Magic Hand</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="panel">
+    <header>
+      <div class="eyebrow">HALO LEARNING · BASIC</div>
+      <h1>Magic Hand <span>魔法之手</span></h1>
+      <p>English / 中文 semantic marking</p>
+    </header>
+
+    <section class="group">
+      <label class="row switch-row">
+        <span><strong>POS labels</strong><small>詞性小標</small></span>
+        <input id="posLabels" type="checkbox">
+      </label>
+      <label class="row switch-row">
+        <span><strong>POS colors</strong><small>詞性顏色</small></span>
+        <input id="posColors" type="checkbox">
+      </label>
+    </section>
+
+    <section class="group">
+      <label for="density" class="stack">
+        <span class="label-line"><strong>Density</strong><small>標記密度 <output id="densityValue">65%</output></small></span>
+        <input id="density" type="range" min="0" max="100" step="5">
+      </label>
+
+      <label for="languageMode" class="stack">
+        <span class="label-line"><strong>Language</strong><small>語言</small></span>
+        <select id="languageMode">
+          <option value="both">English + 中文</option>
+          <option value="en">English only</option>
+          <option value="zh">中文 only</option>
+        </select>
+      </label>
+
+      <label for="labelPosition" class="stack">
+        <span class="label-line"><strong>POS position</strong><small>詞性位置</small></span>
+        <select id="labelPosition">
+          <option value="top-right">Top right · 右上</option>
+          <option value="top-left">Top left · 左上</option>
+          <option value="bottom-right">Bottom right · 右下</option>
+          <option value="inline">Inline · 行內</option>
+        </select>
+      </label>
+    </section>
+
+    <section class="actions">
+      <button id="applyButton" class="primary" type="button">Apply · 套用</button>
+      <button id="removeButton" class="secondary" type="button">Remove · 移除</button>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite">Ready · 就緒</p>
+    <p class="privacy">Local only · No page upload · 本機處理</p>
+  </main>
+
+  <script src="shared/settings.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

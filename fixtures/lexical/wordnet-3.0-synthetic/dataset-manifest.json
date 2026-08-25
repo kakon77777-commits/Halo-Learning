@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "princeton-wordnet-3.0-synthetic",
+  "name": "Synthetic Princeton WordNet 3.0 format fixture",
+  "locale": "en",
+  "version": "3.0-synthetic.1",
+  "source": {
+    "publisher": "Halo Learning test fixtures",
+    "canonicalUrl": "https://wordnet.princeton.edu/documentation/wndb5wn",
+    "acquiredAt": "2026-08-25T00:00:00.000Z",
+    "retrievalMode": "synthetic-fixture"
+  },
+  "license": {
+    "schemaVersion": 1,
+    "licenseId": "LicenseRef-Halo-Synthetic-Fixture",
+    "name": "Halo Learning synthetic test fixture",
+    "url": "https://halo-learning.local/licenses/synthetic-fixture",
+    "commercialUse": "allowed",
+    "redistribution": "allowed",
+    "attributionRequired": false,
+    "shareAlike": false,
+    "redistributionNote": "Synthetic records only; contains no Princeton WordNet corpus data.",
+    "verifiedAt": "2026-08-25",
+    "verificationUrl": "https://wordnet.princeton.edu/documentation/wndb5wn"
+  },
+  "hash": {
+    "algorithm": "sha256",
+    "value": "c0f5c83148788e406c39442c7ad6fc6bbc58aa5950c6698a414ee3a453b93158"
+  },
+  "files": [
+    {
+      "role": "noun",
+      "path": "data.noun",
+      "bytes": 214,
+      "sha256": "20b1519c4863c5d4902b4d5a8c429ac5ce79148dddedff285977eae54a07d591"
+    },
+    {
+      "role": "verb",
+      "path": "data.verb",
+      "bytes": 76,
+      "sha256": "ba169e1b332d73a53f749725d9fb8453b4ec42cb87a44bed6dff643191b65bd1"
+    }
+  ],
+  "bundled": true,
+  "redistributionNote": "Only synthetic format fixtures are bundled."
+}

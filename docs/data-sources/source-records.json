@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-08-25",
+  "sources": [
+    {
+      "sourceId": "princeton-wordnet-3.0",
+      "name": "Princeton WordNet 3.0",
+      "locale": "en",
+      "versionPolicy": "Pin release 3.0 and hash every acquired data.* byte stream before import.",
+      "officialSourceUrl": "https://wordnet.princeton.edu/",
+      "officialLicenseUrl": "https://wordnet.princeton.edu/documentation/wnlicens7wn",
+      "officialFormatUrl": "https://wordnet.princeton.edu/documentation/wndb5wn",
+      "licenseId": "WordNet",
+      "commercialUseAllowed": true,
+      "redistributionAllowed": true,
+      "redistributionRequirements": [
+        "Preserve the WordNet copyright, license, and disclaimer on every copy of the database or a modification.",
+        "Do not use Princeton University or Princeton for advertising or publicity."
+      ],
+      "verifiedAt": "2026-08-25",
+      "selected": true,
+      "bundled": false,
+      "rejectionReason": "Selected importer target; upstream data is deliberately not bundled."
+    },
+    {
+      "sourceId": "cc-cedict-verified-release",
+      "name": "CC-CEDICT verified release (Traditional field)",
+      "locale": "zh-Hant",
+      "versionPolicy": "Acquire the verified MDBG release, capture its release timestamp and license notice, and hash the exact cedict_ts.u8 bytes.",
+      "officialSourceUrl": "https://cc-cedict.org/editor/editor.php?handler=Download",
+      "officialLicenseUrl": "https://cc-cedict.org/editor/editor.php?handler=Download",
+      "officialFormatUrl": "https://cc-cedict.org/wiki/syntax",
+      "licenseId": "CC-BY-SA-4.0",
+      "commercialUseAllowed": true,
+      "redistributionAllowed": true,
+      "redistributionRequirements": [
+        "Attribute CC-CEDICT/MDBG and retain the license notice for a redistributed snapshot.",
+        "Distribute adaptations of the data under the same license.",
+        "Capture the license shown with the exact acquired release because older wiki pages still mention CC BY-SA 3.0."
+      ],
+      "verifiedAt": "2026-08-25",
+      "selected": true,
+      "bundled": false,
+      "rejectionReason": "Selected importer target; upstream data is deliberately not bundled."
+    },
+    {
+      "sourceId": "ntu-chinese-wordnet-2.0",
+      "name": "NTU Chinese Wordnet 2.0",
+      "locale": "zh-Hant",
+      "versionPolicy": "v2022.08 site release",
+      "officialSourceUrl": "https://lopentu.github.io/CwnWeb/",
+      "officialLicenseUrl": "https://lopentu.github.io/CwnWeb/",
+      "officialFormatUrl": "https://lopentu.github.io/CwnWeb/",
+      "licenseId": "LicenseRef-CWN-Academic-Only",
+      "commercialUseAllowed": false,
+      "redistributionAllowed": false,
+      "redistributionRequirements": [
+        "Academic research use only.",
+        "Do not reproduce the data without permission."
+      ],
+      "verifiedAt": "2026-08-25",
+      "selected": false,
+      "bundled": false,
+      "rejectionReason": "Rejected for this product release: the official terms prohibit commercial use and prohibit redistribution without permission."
+    }
+  ]
+}

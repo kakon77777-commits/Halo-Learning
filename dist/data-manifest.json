@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "release": "v0.2.0",
+  "generatedAt": "2026-08-25T00:00:00.000Z",
+  "locales": [
+    "en",
+    "zh-Hant"
+  ],
+  "datasets": [
+    {
+      "schemaVersion": 1,
+      "datasetId": "princeton-wordnet-3.0-synthetic",
+      "name": "Synthetic Princeton WordNet 3.0 format fixture",
+      "locale": "en",
+      "version": "3.0-synthetic.1",
+      "source": {
+        "publisher": "Halo Learning test fixtures",
+        "canonicalUrl": "https://wordnet.princeton.edu/documentation/wndb5wn",
+        "acquiredAt": "2026-08-25T00:00:00.000Z",
+        "retrievalMode": "synthetic-fixture"
+      },
+      "license": {
+        "schemaVersion": 1,
+        "licenseId": "LicenseRef-Halo-Synthetic-Fixture",
+        "name": "Halo Learning synthetic test fixture",
+        "url": "https://halo-learning.local/licenses/synthetic-fixture",
+        "commercialUse": "allowed",
+        "redistribution": "allowed",
+        "attributionRequired": false,
+        "shareAlike": false,
+        "redistributionNote": "Synthetic records only; contains no Princeton WordNet corpus data.",
+        "verifiedAt": "2026-08-25",
+        "verificationUrl": "https://wordnet.princeton.edu/documentation/wndb5wn"
+      },
+      "hash": {
+        "algorithm": "sha256",
+        "value": "c0f5c83148788e406c39442c7ad6fc6bbc58aa5950c6698a414ee3a453b93158"
+      },
+      "files": [
+        {
+          "role": "noun",
+          "path": "data.noun",
+          "bytes": 214,
+          "sha256": "20b1519c4863c5d4902b4d5a8c429ac5ce79148dddedff285977eae54a07d591"
+        },
+        {
+          "role": "verb",
+          "path": "data.verb",
+          "bytes": 76,
+          "sha256": "ba169e1b332d73a53f749725d9fb8453b4ec42cb87a44bed6dff643191b65bd1"
+        }
+      ],
+      "bundled": true,
+      "redistributionNote": "Only synthetic format fixtures are bundled."
+    },
+    {
+      "schemaVersion": 1,
+      "datasetId": "cc-cedict-synthetic",
+      "name": "Synthetic CC-CEDICT format fixture",
+      "locale": "zh-Hant",
+      "version": "synthetic.1",
+      "source": {
+        "publisher": "Halo Learning test fixtures",
+        "canonicalUrl": "https://cc-cedict.org/wiki/syntax",
+        "acquiredAt": "2026-08-25T00:00:00.000Z",
+        "retrievalMode": "synthetic-fixture"
+      },
+      "license": {
+        "schemaVersion": 1,
+        "licenseId": "LicenseRef-Halo-Synthetic-Fixture",
+        "name": "Halo Learning synthetic test fixture",
+        "url": "https://halo-learning.local/licenses/synthetic-fixture",
+        "commercialUse": "allowed",
+        "redistribution": "allowed",
+        "attributionRequired": false,
+        "shareAlike": false,
+        "redistributionNote": "Synthetic records only; contains no CC-CEDICT corpus data.",
+        "verifiedAt": "2026-08-25",
+        "verificationUrl": "https://cc-cedict.org/wiki/syntax"
+      },
+      "hash": {
+        "algorithm": "sha256",
+        "value": "87ca022de6fc73218e6b0310745778b62532399875ecee588a23c57c2b88a320"
+      },
+      "files": [
+        {
+          "role": "dictionary",
+          "path": "cedict_ts.u8",
+          "bytes": 308,
+          "sha256": "a8601e0048b31ebe4223bafea4e3a19c92ce0ba6f8c56480cbce393a4a3d2a76"
+        }
+      ],
+      "bundled": true,
+      "redistributionNote": "Only synthetic format fixtures are bundled."
+    }
+  ],
+  "index": {
+    "path": "lexical-fixture/lexical-index.json",
+    "indexId": "halo-lexical-data-v0.2.0",
+    "format": "halo-lexical-index-v1",
+    "hash": {
+      "algorithm": "sha256",
+      "value": "228b0a749152b87acc925ed506b4146fd4fa1b8c7c4409fd089b843d81ea1855"
+    },
+    "entryCount": 9,
+    "rejectedCount": 3
+  },
+  "receipts": {
+    "path": "lexical-fixture/build-receipts.json",
+    "count": 2
+  },
+  "releaseFixture": {
+    "syntheticOnly": true,
+    "upstreamCorpusBytesBundled": false,
+    "note": "Release output contains only Halo Learning synthetic format fixtures; no Princeton WordNet or CC-CEDICT corpus bytes."
+  }
+}

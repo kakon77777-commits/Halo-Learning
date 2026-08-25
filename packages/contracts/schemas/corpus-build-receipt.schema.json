@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo-learning.local/schemas/corpus-build-receipt.schema.json",
+  "title": "CorpusBuildReceipt",
+  "type": "object",
+  "required": ["schemaVersion", "receiptId", "datasetId", "datasetVersion", "importer", "inputHash", "outputHash", "entryCount", "rejectedCount", "builtAt", "reproducibility"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "receiptId": { "type": "string", "minLength": 1 },
+    "datasetId": { "type": "string", "minLength": 1 },
+    "datasetVersion": { "type": "string", "minLength": 1 },
+    "importer": { "type": "object" },
+    "inputHash": { "type": "object" },
+    "outputHash": { "type": "object" },
+    "entryCount": { "type": "integer", "minimum": 0 },
+    "rejectedCount": { "type": "integer", "minimum": 0 },
+    "builtAt": { "type": "string", "format": "date-time" },
+    "reproducibility": { "type": "object" }
+  },
+  "additionalProperties": false
+}

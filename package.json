@@ -1,0 +1,16 @@
+{
+  "name": "halo-learning",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Local-first, provider-agnostic Halo Learning reference implementation",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:baseline": "node --test tests/linguistics.test.js tests/projection.test.js tests/source-contract.test.js",
+    "build:data": "node scripts/build-lexical-data.js",
+    "benchmark:index": "node --expose-gc scripts/benchmark-lexical-index.js",
+    "validate": "node scripts/validate-v0.2.0.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
