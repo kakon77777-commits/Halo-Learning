@@ -67,10 +67,13 @@ function eventFor(target, overrides) {
 function rendererFixture(owned) {
   const opened = [];
   const closed = [];
+  const panels = new Set();
   return {
     opened,
     closed,
+    panels,
     ownsToken(element) { return owned.has(element); },
+    ownsPanel(element) { return panels.has(element); },
     openPanel(model) { opened.push(model); return { action: 'opened' }; },
     closePanel(reason) { closed.push(reason); return { action: 'closed' }; }
   };
@@ -90,29 +93,54 @@ test('explicit-selection envelope is exact and selection must be live, ranged, a
     assert.equal(Content.validateExplicitSelectionMessage(value), false);
   }
 
+  const document = {};
+  const boundary = { isConnected: true, ownerDocument: document };
+  const range = {
+    collapsed: false,
+    startContainer: boundary,
+    endContainer: boundary,
+    commonAncestorContainer: boundary,
+    getBoundingClientRect: () => ({ left: 12, bottom: 24 })
+  };
   const selection = {
     rangeCount: 1,
     isCollapsed: false,
     toString: () => '  selected locally  ',
-    getRangeAt: () => ({ getBoundingClientRect: () => ({ left: 12, bottom: 24 }) })
+    getRangeAt: () => range
   };
-  const request = Content.readExplicitSelection({ getSelection: () => selection });
+  const request = Content.readExplicitSelection({ document, getSelection: () => selection });
   assert.deepEqual(request, {
     text: 'selected locally',
     anchor: { x: 12, y: 32 }
   });
   assert.equal(Object.isFrozen(request), true);
   assert.equal(Content.readExplicitSelection({
-    getSelection: () => ({ ...selection, isCollapsed: true })
+    document, getSelection: () => ({ ...selection, isCollapsed: true })
   }), null);
   assert.equal(Content.readExplicitSelection({
-    getSelection: () => ({ ...selection, toString: () => '   ' })
+    document, getSelection: () => ({ ...selection, toString: () => '   ' })
   }), null);
   assert.equal(Content.readExplicitSelection({
     getSelection() { throw new Error('page override'); }
   }), null);
   assert.equal(Content.readExplicitSelection({
-    getSelection: () => ({ ...selection, toString() { throw new Error('page override'); } })
+    document, getSelection: () => ({ ...selection, toString() { throw new Error('page override'); } })
+  }), null);
+
+  for (const invalid of [
+    { ...selection, rangeCount: 2 },
+    { ...selection, getRangeAt: () => null },
+    { ...selection, getRangeAt: () => ({ ...range, collapsed: true }) },
+    { ...selection, getRangeAt: () => ({ ...range, startContainer: { isConnected: false, ownerDocument: document } }) },
+    { ...selection, getRangeAt: () => ({ ...range, commonAncestorContainer: { isConnected: true, ownerDocument: {} } }) }
+  ]) assert.equal(Content.readExplicitSelection({ document, getSelection: () => invalid }), null);
+  assert.equal(Content.readExplicitSelection({
+    document,
+    getSelection: () => ({ ...selection, getRangeAt() { throw new Error('range override'); } })
+  }), null);
+  assert.equal(Content.readExplicitSelection({
+    document,
+    getSelection: () => ({ ...selection, getRangeAt: () => ({ ...range, getBoundingClientRect() { throw new Error('geometry override'); } }) })
   }), null);
 });
 
@@ -150,12 +178,13 @@ test('owned token click opens through the renderer while an ordinary link click 
   const token = elementFixture({ textContent: 'learns', attributes: { 'data-halo-pos': 'v' } });
   const link = elementFixture({ textContent: 'ordinary link' });
   owned.add(token);
+  let now = 0;
   const runtime = Content.createContentTriggerRuntime({
     eventTarget: events,
     renderer,
     triggerModule: Trigger,
     mode: 'hybrid',
-    now: () => 1
+    now: () => ++now
   });
 
   const tokenClick = eventFor(token);
@@ -200,13 +229,15 @@ test('selection action, Esc, panel focus recovery, outside click, and cleanup sh
   const owned = new Set();
   const renderer = rendererFixture(owned);
   const panel = elementFixture({ attributes: { 'data-halo-owned': 'panel' } });
+  renderer.panels.add(panel);
   const normal = elementFixture();
+  let now = 0;
   const runtime = Content.createContentTriggerRuntime({
     eventTarget: events,
     renderer,
     triggerModule: Trigger,
     mode: 'hybrid',
-    now: () => 2
+    now: () => ++now
   });
 
   assert.equal(runtime.openSelection({ text: 'local selection', anchor: { x: 5, y: 6 } }), true);
@@ -226,4 +257,74 @@ test('selection action, Esc, panel focus recovery, outside click, and cleanup sh
   events.emit('click', eventFor(normal));
   assert.equal(renderer.opened.length, before);
   assert.deepEqual(runtime.state(), { name: 'cancelled' });
+});
+
+test('retargeted composed paths find private tokens and panels while forged or throwing paths fail safely', () => {
+  const events = eventTargetFixture();
+  const owned = new Set();
+  const renderer = rendererFixture(owned);
+  const retarget = elementFixture();
+  const token = elementFixture({ textContent: 'private', attributes: { 'data-halo-pos': 'n' } });
+  const panel = elementFixture({ attributes: { 'data-halo-owned': 'panel' } });
+  const forged = elementFixture({ attributes: { 'data-halo-owned': 'panel' } });
+  owned.add(token);
+  renderer.panels.add(panel);
+  let now = 0;
+  const runtime = Content.createContentTriggerRuntime({ eventTarget: events, renderer, triggerModule: Trigger, mode: 'hybrid', now: () => ++now });
+
+  const click = eventFor(retarget, { composedPath: () => [retarget, token] });
+  events.emit('click', click);
+  assert.equal(click.prevented(), 1);
+  assert.equal(renderer.opened.length, 1);
+  events.emit('click', eventFor(retarget, { composedPath: () => [retarget, panel] }));
+  assert.equal(renderer.closed.length, 0);
+  events.emit('click', eventFor(forged));
+  assert.deepEqual(renderer.closed, ['outside-click']);
+  assert.doesNotThrow(() => events.emit('click', eventFor(retarget, { composedPath() { throw new Error('hostile'); } })));
+  runtime.cleanup('CANCEL');
+});
+
+test('cleanup removes listeners even when controller close effect fails and remains idempotent', () => {
+  const events = eventTargetFixture();
+  const owned = new Set();
+  const renderer = rendererFixture(owned);
+  renderer.closePanel = () => { throw new Error('close failed'); };
+  const errors = [];
+  const runtime = Content.createContentTriggerRuntime({ eventTarget: events, renderer, triggerModule: Trigger, mode: 'hybrid', now: () => 4, onError: (error) => errors.push(error.message) });
+  runtime.openSelection({ text: 'safe', anchor: { x: 1, y: 2 } });
+  assert.doesNotThrow(() => runtime.cleanup('ROUTE_CLEANUP'));
+  assert.equal(events.listenerCount(), 0);
+  assert.deepEqual(runtime.state(), { name: 'cancelled' });
+  assert.doesNotThrow(() => runtime.cleanup('ROUTE_CLEANUP'));
+  assert.deepEqual(errors, ['close failed']);
+});
+
+test('cleanup retains a live runtime until hostile listener teardown can be retried', () => {
+  const events = eventTargetFixture();
+  const remove = events.removeEventListener.bind(events);
+  let fail = true;
+  events.removeEventListener = (type, listener) => {
+    if (fail && type === 'pointerover') {
+      fail = false;
+      throw new Error('temporary teardown failure');
+    }
+    remove(type, listener);
+  };
+  const errors = [];
+  const renderer = rendererFixture(new Set());
+  const runtime = Content.createContentTriggerRuntime({
+    eventTarget: events,
+    renderer,
+    triggerModule: Trigger,
+    mode: 'hybrid',
+    now: () => 5,
+    onError: (error) => errors.push(error.message)
+  });
+  runtime.cleanup('CANCEL');
+  assert.equal(runtime.isCleaned(), false);
+  assert.equal(events.listenerCount(), 1);
+  runtime.cleanup('CANCEL');
+  assert.equal(runtime.isCleaned(), true);
+  assert.equal(events.listenerCount(), 0);
+  assert.deepEqual(errors, ['temporary teardown failure']);
 });

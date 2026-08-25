@@ -102,6 +102,7 @@ function markingProfileFixture(overrides) {
   return {
     schemaVersion: 2,
     profileId: 'default-v0.3.0',
+    profileRevision: 0,
     enabled: true,
     languageMode: 'both',
     triggerMode: 'hybrid',
@@ -119,6 +120,16 @@ function markingProfileFixture(overrides) {
     density: 0.65,
     minConfidence: 0.6,
     labelPosition: 'top-right',
+    runtimeBudgets: {
+      maxTextNodes: 24,
+      maxCharacters: 12000,
+      maxSentences: 24,
+      maxSemanticTokens: 600,
+      maxShardIds: 24,
+      timeSliceMs: 8,
+      maxQueuedRoots: 200,
+      viewportBufferPx: 1200
+    },
     maxTextNodes: 600,
     maxMarkedTokens: 3000,
     ...(overrides || {})

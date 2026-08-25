@@ -221,3 +221,77 @@ rejection, and content reinjection without duplicate listeners.
   native command/context delivery, Shadow DOM focus/pointer retargeting, and
   popup-to-tab behavior remain unexecuted here. The authored browser gate fails
   explicitly with zero skips rather than claiming coverage from Node tests.
+
+## Fix round 1 — adversarial controller/runtime hardening
+
+The review findings were reproduced with new tests before production changes.
+The first focused RED run had 53 tests, 44 passing and 9 failing. The failures
+covered reentrant `openPanel`/`closePanel`, throwing effects, explicit-only
+re-entry, equal-time event priority, exact selection validation, composed-path
+lookup, cleanup exceptions, and missing private panel ownership. The popup RED
+failed because `shared/popup-actions.js` did not exist, and the schema RED
+reported `profileRevision` and `runtimeBudgets` as forbidden additional fields.
+
+The controller now commits its frozen transition and timer generations before
+calling renderer effects. Effects are contained through a non-throwing
+`onError` boundary, so a reentrant terminal or newer explicit dispatch remains
+authoritative and terminal cleanup stays permanent even when panel closure
+throws. Equal-time ordering records explicit/terminal priority, including an
+explicit event carrying an older timestamp. In `explicit-only`, same-target
+re-entry cancels delayed dismissal before plain-hover rejection.
+
+Selection admission now requires exactly one non-collapsed range, consistent
+non-collapsed selection state, three connected boundary nodes owned by the
+current document, bounded nonempty text, and safe geometry. Every hostile
+getter, range, string, and geometry failure returns `NO_SELECTION`; selected
+text remains absent from messages and storage. Event lookup uses a guarded
+`composedPath()` before fallback traversal. Task 7 now exposes a private
+WeakSet-backed `ownsPanel` capability, so page-authored panel markers have no
+dismissal authority.
+
+Runtime cleanup enters the controller's terminal state first, attempts every
+listener removal, retains failed removals for retry, and exposes completion so
+the browser runtime is not discarded early. Popup Apply, Remove, and Analyze
+Selection share one owner-token mutex that preserves prior disabled state,
+blocks overlapping actions, and releases controls only from the owning
+operation's `finally` path.
+
+The MarkingProfile schema and runtime contract now include required
+`profileRevision` and the complete, closed `runtimeBudgets` object with the same
+integer ranges as settings normalization. The tests use a strict recursive
+schema validator that checks required fields, additional properties, types,
+and numeric bounds rather than only parsing JSON.
+
+The browser fixture was replaced with an installed MV3 test. It launches the
+unpacked extension, discovers the real extension ID from its service-worker
+URL, uses a loopback fixture server and the actual popup document, performs
+packaged injection through Chrome APIs, exercises token click, all modes,
+modifier hover, dismissal/recovery, popup selection, the native command
+shortcut, ordinary-link preservation, reinjection, and worker termination and
+restart. Chromium's native context-menu UI is not exposed by Playwright; the
+test states that limitation inline and verifies the registered menu through
+the installed worker's real `chrome.contextMenus` API without claiming native
+click delivery.
+
+Final fix-round verification:
+
+```text
+node --test tests/*.test.js
+tests 341
+pass 341
+fail 0
+cancelled 0
+skipped 0
+todo 0
+```
+
+All changed JavaScript passed `node --check`; the manifest and MarkingProfile
+schema parsed as JSON; `git diff --check` exited zero. The installed browser
+gate remains an explicit environmental failure with one failed test and zero
+skips:
+
+```text
+Error: Chromium executable is required for Halo browser gates
+```
+
+`progress.md` was not edited.

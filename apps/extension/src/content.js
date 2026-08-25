@@ -24,14 +24,20 @@
   function readExplicitSelection(windowLike) {
     if (!windowLike || typeof windowLike.getSelection !== 'function') return null;
     try {
+      const document = windowLike.document;
+      if (!document || typeof document !== 'object') return null;
       const selection = windowLike.getSelection();
-      if (!selection || selection.isCollapsed || !Number.isSafeInteger(selection.rangeCount) || selection.rangeCount < 1) {
+      if (!selection || selection.isCollapsed !== false || selection.rangeCount !== 1) {
         return null;
+      }
+      const range = selection.getRangeAt(0);
+      if (!range || typeof range !== 'object' || range.collapsed !== false) return null;
+      for (const node of [range.startContainer, range.endContainer, range.commonAncestorContainer]) {
+        if (!node || typeof node !== 'object' || node.isConnected !== true || node.ownerDocument !== document) return null;
       }
       const text = String(selection.toString()).trim();
       if (!text || text.length > 4000) return null;
-      const range = selection.getRangeAt(0);
-      const rect = range && typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
+      const rect = typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
       const x = rect && Number.isFinite(Number(rect.left)) ? Number(rect.left) : 8;
       const bottom = rect && Number.isFinite(Number(rect.bottom)) ? Number(rect.bottom) : 8;
       return Object.freeze({
@@ -74,8 +80,8 @@
       throw new TypeError('eventTarget: must provide addEventListener and removeEventListener');
     }
     if (!renderer || typeof renderer.openPanel !== 'function' || typeof renderer.closePanel !== 'function' ||
-        typeof renderer.ownsToken !== 'function') {
-      throw new TypeError('renderer: panel and private token APIs are required');
+        typeof renderer.ownsToken !== 'function' || typeof renderer.ownsPanel !== 'function') {
+      throw new TypeError('renderer: panel and private ownership APIs are required');
     }
     if (!Trigger || typeof Trigger.createTriggerController !== 'function') {
       throw new TypeError('triggerModule.createTriggerController: is required');
@@ -121,7 +127,8 @@
       },
       closePanel(reason) {
         renderer.closePanel(reason);
-      }
+      },
+      onError: settings.onError
     };
     for (const name of ['setTimeout', 'clearTimeout', 'primeThresholdMs', 'openThresholdMs', 'dismissDelayMs']) {
       if (Object.prototype.hasOwnProperty.call(settings, name)) controllerOptions[name] = settings[name];
@@ -142,19 +149,35 @@
       return null;
     }
 
-    function isPanelNode(node) {
-      if (!node) return false;
-      if (typeof node.getAttribute === 'function' && node.getAttribute('data-halo-owned') === 'panel') return true;
-      return typeof node.closest === 'function' && Boolean(node.closest('[data-halo-owned="panel"]'));
+    function closestPanel(node) {
+      for (let current = node && node.nodeType === 1 ? node : node && node.parentElement;
+        current;
+        current = current.parentElement) {
+        if (renderer.ownsPanel(current)) return current;
+      }
+      return null;
     }
 
     function eventPath(event) {
-      if (event && typeof event.composedPath === 'function') return event.composedPath();
+      try {
+        if (event && typeof event.composedPath === 'function') {
+          const path = event.composedPath();
+          if (Array.isArray(path)) return path;
+        }
+      } catch (_error) {}
       return event && event.target ? [event.target] : [];
     }
 
+    function tokenForEvent(event) {
+      for (const node of eventPath(event)) {
+        const token = closestToken(node);
+        if (token) return token;
+      }
+      return null;
+    }
+
     function isPanelEvent(event) {
-      return eventPath(event).some(isPanelNode);
+      return eventPath(event).some((node) => Boolean(closestPanel(node)));
     }
 
     function dispatch(event) {
@@ -173,7 +196,7 @@
     }
 
     function enter(event) {
-      const token = closestToken(event && event.target);
+      const token = tokenForEvent(event);
       if (token) {
         const targetId = targetIdFor(token);
         dispatch({
@@ -189,9 +212,9 @@
     }
 
     function leave(event) {
-      const sourceToken = closestToken(event && event.target);
+      const sourceToken = tokenForEvent(event);
       if (!sourceToken && !isPanelEvent(event)) return;
-      if (closestToken(event && event.relatedTarget) || isPanelNode(event && event.relatedTarget)) return;
+      if (closestToken(event && event.relatedTarget) || closestPanel(event && event.relatedTarget)) return;
       const targetId = sourceToken ? targetIdFor(sourceToken) : activeTargetId();
       if (targetId) dispatch({ type: 'POINTER_LEAVE', targetId });
     }
@@ -201,7 +224,7 @@
     add('focusin', enter);
     add('focusout', leave);
     add('click', (event) => {
-      const token = closestToken(event && event.target);
+      const token = tokenForEvent(event);
       if (token) {
         if (typeof event.preventDefault === 'function') event.preventDefault();
         if (typeof event.stopPropagation === 'function') event.stopPropagation();
@@ -231,16 +254,28 @@
 
     function cleanup(type) {
       if (cleaned) return controller.state();
-      cleaned = true;
+      controller.dispatch({ type: type === 'ROUTE_CLEANUP' ? 'ROUTE_CLEANUP' : 'CANCEL', at: clock() });
+      const retained = [];
       for (const [eventType, listener] of listeners.splice(0)) {
-        eventTarget.removeEventListener(eventType, listener);
+        try {
+          eventTarget.removeEventListener(eventType, listener);
+        } catch (error) {
+          retained.push([eventType, listener]);
+          if (typeof settings.onError === 'function') {
+            try { settings.onError(error); } catch (_ignored) {}
+          }
+        }
       }
-      tokenReferences.clear();
-      selectionModels.clear();
-      return controller.dispatch({ type: type === 'ROUTE_CLEANUP' ? 'ROUTE_CLEANUP' : 'CANCEL', at: clock() });
+      listeners.push(...retained);
+      cleaned = listeners.length === 0;
+      if (cleaned) {
+        tokenReferences.clear();
+        selectionModels.clear();
+      }
+      return controller.state();
     }
 
-    return Object.freeze({ openSelection, cleanup, state: controller.state });
+    return Object.freeze({ openSelection, cleanup, state: controller.state, isCleaned: () => cleaned });
   }
 
   function canonicalContentRoot(element) {
@@ -1148,8 +1183,8 @@
     function cleanupTriggerRuntime(type) {
       if (!activeTriggerRuntime) return;
       const triggerRuntime = activeTriggerRuntime;
-      activeTriggerRuntime = null;
       triggerRuntime.cleanup(type);
+      if (triggerRuntime.isCleaned() && activeTriggerRuntime === triggerRuntime) activeTriggerRuntime = null;
     }
 
     function removeMarking() {

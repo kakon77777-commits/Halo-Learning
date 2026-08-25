@@ -35,6 +35,7 @@
     status: get('status')
   };
   for (const [channel, id] of Object.entries(CHANNEL_CONTROLS)) controls[channel] = get(id);
+  const actionMutex = HaloPopupActions.createActionMutex(document.querySelectorAll('input, select, button'));
 
   function showStatus(message, isError) {
     controls.status.textContent = message;
@@ -87,63 +88,52 @@
   }
 
   async function analyzeSelection() {
-    controls.analyzeSelectionButton.disabled = true;
-    controls.applyButton.disabled = true;
-    controls.removeButton.disabled = true;
-    showStatus('Analyzing selection… · 正在解析選取', false);
-    try {
-      await persistSettings();
-      const tab = await currentTab();
-      const result = await HaloBrowserEntry.injectAndSendExplicitSelection({ chrome, tabId: tab.id });
-      if (!result || result.accepted !== true) {
-        showStatus('Select page text first · 請先選取頁面文字', false);
-        return;
+    return actionMutex.run(async () => {
+      showStatus('Analyzing selection… · 正在解析選取', false);
+      try {
+        await persistSettings();
+        const tab = await currentTab();
+        const result = await HaloBrowserEntry.injectAndSendExplicitSelection({ chrome, tabId: tab.id });
+        if (!result || result.accepted !== true) {
+          showStatus('Select page text first · 請先選取頁面文字', false);
+          return;
+        }
+        showStatus('Selection opened locally · 已在本機開啟', false);
+      } catch (error) {
+        showStatus(`Cannot analyze this selection · ${error.message || error}`, true);
       }
-      showStatus('Selection opened locally · 已在本機開啟', false);
-    } catch (error) {
-      showStatus(`Cannot analyze this selection · ${error.message || error}`, true);
-    } finally {
-      controls.analyzeSelectionButton.disabled = false;
-      controls.applyButton.disabled = false;
-      controls.removeButton.disabled = false;
-    }
+    });
   }
 
   async function apply() {
-    controls.applyButton.disabled = true;
-    controls.removeButton.disabled = true;
-    showStatus('Applying… · 正在套用', false);
-    try {
-      const settings = await persistSettings();
-      const tab = await currentTab();
-      await inject(tab.id);
-      const result = await chrome.tabs.sendMessage(tab.id, { type: 'HALO_APPLY_MARKING', settings });
-      if (result && result.lastError) throw new Error(result.lastError);
-      const marked = result && result.markedTokens ? result.markedTokens : 0;
-      const semantic = result && result.semanticTokens ? result.semanticTokens : 0;
-      const queued = result && result.queuedRoots ? ` · ${result.queuedRoots} queued` : '';
-      showStatus(`Marked ${marked} / ${semantic} semantic tokens${queued} · 已標記`, false);
-    } catch (error) {
-      showStatus(`Cannot mark this page · ${error.message || error}`, true);
-    } finally {
-      controls.applyButton.disabled = false;
-      controls.removeButton.disabled = false;
-    }
+    return actionMutex.run(async () => {
+      showStatus('Applying… · 正在套用', false);
+      try {
+        const settings = await persistSettings();
+        const tab = await currentTab();
+        await inject(tab.id);
+        const result = await chrome.tabs.sendMessage(tab.id, { type: 'HALO_APPLY_MARKING', settings });
+        if (result && result.lastError) throw new Error(result.lastError);
+        const marked = result && result.markedTokens ? result.markedTokens : 0;
+        const semantic = result && result.semanticTokens ? result.semanticTokens : 0;
+        const queued = result && result.queuedRoots ? ` · ${result.queuedRoots} queued` : '';
+        showStatus(`Marked ${marked} / ${semantic} semantic tokens${queued} · 已標記`, false);
+      } catch (error) {
+        showStatus(`Cannot mark this page · ${error.message || error}`, true);
+      }
+    });
   }
 
   async function remove() {
-    controls.applyButton.disabled = true;
-    controls.removeButton.disabled = true;
-    try {
-      const tab = await currentTab();
-      await chrome.tabs.sendMessage(tab.id, { type: 'HALO_REMOVE_MARKING' });
-      showStatus('Removed · 已移除', false);
-    } catch (_error) {
-      showStatus('No active Halo marks · 目前沒有標記', false);
-    } finally {
-      controls.applyButton.disabled = false;
-      controls.removeButton.disabled = false;
-    }
+    return actionMutex.run(async () => {
+      try {
+        const tab = await currentTab();
+        await chrome.tabs.sendMessage(tab.id, { type: 'HALO_REMOVE_MARKING' });
+        showStatus('Removed · 已移除', false);
+      } catch (_error) {
+        showStatus('No active Halo marks · 目前沒有標記', false);
+      }
+    });
   }
 
   async function init() {

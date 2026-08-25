@@ -222,3 +222,80 @@ test('route cleanup and cancel dispose every timer and permanently reject later 
     assert.deepEqual(fixture.opened, []);
   }
 });
+
+test('state is committed before effects and reentrant terminal dispatch wins', () => {
+  let controller;
+  const fixture = fixtureOptions({
+    openPanel() { controller.dispatch({ type: 'CANCEL', at: 1 }); }
+  });
+  controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'first', at: 0 });
+  assert.deepEqual(controller.state(), { name: 'cancelled' });
+  assert.deepEqual(fixture.closed, ['cancel']);
+  assert.equal(fixture.pending().length, 0);
+});
+
+test('a newer reentrant explicit open from closePanel is never overwritten', () => {
+  let controller;
+  const opened = [];
+  const fixture = fixtureOptions({
+    openPanel(value) { opened.push(value.targetId); },
+    closePanel() { controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'newer', at: 2 }); }
+  });
+  controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'old', at: 0 });
+  controller.dispatch({ type: 'ESCAPE', at: 1 });
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'newer', source: 'explicit' });
+  assert.deepEqual(opened, ['old', 'newer']);
+});
+
+test('effect failures are contained while terminal cancellation remains permanent', () => {
+  const errors = [];
+  const fixture = fixtureOptions({
+    openPanel() { throw new Error('open failed'); },
+    closePanel() { throw new Error('close failed'); },
+    onError(error) { errors.push(error.message); }
+  });
+  const controller = Trigger.createTriggerController(fixture.options);
+  assert.doesNotThrow(() => controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'one', at: 0 }));
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'one', source: 'explicit' });
+  assert.doesNotThrow(() => controller.dispatch({ type: 'ROUTE_CLEANUP', at: 1 }));
+  assert.deepEqual(controller.state(), { name: 'cancelled' });
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'late', at: 2 });
+  assert.deepEqual(controller.state(), { name: 'cancelled' });
+  assert.deepEqual(errors, ['open failed', 'close failed']);
+});
+
+test('explicit-only same-target re-entry cancels dismissal while another plain target is ignored', () => {
+  const fixture = fixtureOptions({ mode: 'explicit-only' });
+  const controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'owned', at: 0 });
+  controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'owned', at: 1 });
+  const stale = fixture.pending()[0][0];
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'owned', at: 2 });
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'other', at: 3 });
+  fixture.fire(stale, 70);
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'owned', source: 'explicit' });
+  assert.deepEqual(fixture.closed, []);
+});
+
+test('equal-time inferred events cannot displace explicit authority but explicit ties preempt inferred work', () => {
+  const fixture = fixtureOptions();
+  const controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'candidate', at: 5 });
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'explicit', at: 5 });
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'forged-tie', at: 5 });
+  controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'explicit', at: 5 });
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'explicit', source: 'explicit' });
+  assert.equal(fixture.pending().length, 0);
+
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'second', at: 5 });
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'second', source: 'explicit' });
+
+  const staleClock = fixtureOptions();
+  const staleController = Trigger.createTriggerController(staleClock.options);
+  staleController.dispatch({ type: 'POINTER_ENTER', targetId: 'newer-clock', at: 20 });
+  staleController.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'stale-clock-explicit', at: 5 });
+  staleController.dispatch({ type: 'POINTER_ENTER', targetId: 'inferred-tie', at: 20 });
+  assert.deepEqual(staleController.state(), { name: 'core-open', targetId: 'stale-clock-explicit', source: 'explicit' });
+});

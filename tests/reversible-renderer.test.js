@@ -579,6 +579,10 @@ test('core panel uses an isolated dialog, literal text, fixed clamped positionin
   const panel = host.shadowRoot.querySelector('[role="dialog"]');
 
   assert.equal(opened.action, 'opened');
+  assert.equal(renderer.ownsPanel(host), true);
+  const forgedPanel = dom.document.createElement('div');
+  forgedPanel.setAttribute('data-halo-owned', 'panel');
+  assert.equal(renderer.ownsPanel(forgedPanel), false);
   assert.equal(host.style.position, 'fixed');
   assert.equal(panel.getAttribute('aria-modal'), 'false');
   assert.equal(panel.getAttribute('aria-labelledby'), 'halo-panel-title');
@@ -599,6 +603,7 @@ test('core panel uses an isolated dialog, literal text, fixed clamped positionin
   const closed = renderer.closePanel('route-cleanup');
   assert.equal(closed.action, 'closed');
   assert.equal(host.parentNode, null);
+  assert.equal(renderer.ownsPanel(host), false);
   assert.deepEqual(renderer.status().panel, { open: false, closeReason: 'route-cleanup' });
   assert.equal(renderer.closePanel('again').action, 'noop');
 });

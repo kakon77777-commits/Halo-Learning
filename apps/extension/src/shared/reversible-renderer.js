@@ -403,6 +403,7 @@
       ? { WeakRef: settings.WeakRef }
       : {});
     const wrapperCapabilities = new WeakSet();
+    const panelCapabilities = new WeakSet();
     const wrapperMetadata = new WeakMap();
     let panelParts = null;
     let panelOpen = false;
@@ -976,6 +977,7 @@
       );
       panelParts = null;
       panelOpen = false;
+      panelCapabilities.delete(closingParts.host);
       panelCloseReason = closeReason;
       lastAction = 'panel-closed';
       return frozenResult({ action: 'closed', reason: closeReason });
@@ -1009,6 +1011,7 @@
       revokeWrappers(releasedWrappers);
       for (const entry of entries) renderState.remove(entry.rootId);
       if (closingParts) {
+        panelCapabilities.delete(closingParts.host);
         panelParts = null;
         panelOpen = false;
         panelCloseReason = 'remove-all';
@@ -1051,6 +1054,8 @@
       });
       panelParts = nextParts;
       panelOpen = true;
+      panelCapabilities.add(nextParts.host);
+      if (priorParts) panelCapabilities.delete(priorParts.host);
       panelCloseReason = null;
       lastAction = 'panel-opened';
       return frozenResult({ action: 'opened', position });
@@ -1075,7 +1080,11 @@
       return expectedRootId === undefined || metadata.rootId === expectedRootId;
     }
 
-    return Object.freeze({ apply, reconcile, removeRoot, removeAll, openPanel, closePanel, status, ownsToken });
+    function ownsPanel(element) {
+      return Boolean(element && panelCapabilities.has(element) && panelOpen && panelParts && panelParts.host === element);
+    }
+
+    return Object.freeze({ apply, reconcile, removeRoot, removeAll, openPanel, closePanel, status, ownsToken, ownsPanel });
   }
 
   return Object.freeze({

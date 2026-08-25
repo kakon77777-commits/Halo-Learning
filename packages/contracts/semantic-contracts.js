@@ -259,6 +259,7 @@ function normalizeAnnotationSet(value) {
 function normalizeMarkingProfile(value) {
   const raw = objectAt(value, 'profile');
   const channels = objectAt(raw.channels, 'profile.channels');
+  const runtimeBudgets = objectAt(raw.runtimeBudgets, 'profile.runtimeBudgets');
   const normalizedChannels = {};
   for (const channel of CHANNELS) {
     normalizedChannels[channel] = booleanAt(channels[channel], `profile.channels.${channel}`);
@@ -280,6 +281,16 @@ function normalizeMarkingProfile(value) {
     density: numberAt(raw.density, 'profile.density', 0, 1),
     minConfidence: numberAt(raw.minConfidence, 'profile.minConfidence', 0, 1),
     labelPosition: enumAt(raw.labelPosition, LABEL_POSITIONS, 'profile.labelPosition'),
+    runtimeBudgets: {
+      maxTextNodes: integerAt(runtimeBudgets.maxTextNodes, 'profile.runtimeBudgets.maxTextNodes', 1, 24),
+      maxCharacters: integerAt(runtimeBudgets.maxCharacters, 'profile.runtimeBudgets.maxCharacters', 1, 12000),
+      maxSentences: integerAt(runtimeBudgets.maxSentences, 'profile.runtimeBudgets.maxSentences', 1, 24),
+      maxSemanticTokens: integerAt(runtimeBudgets.maxSemanticTokens, 'profile.runtimeBudgets.maxSemanticTokens', 1, 600),
+      maxShardIds: integerAt(runtimeBudgets.maxShardIds, 'profile.runtimeBudgets.maxShardIds', 1, 24),
+      timeSliceMs: integerAt(runtimeBudgets.timeSliceMs, 'profile.runtimeBudgets.timeSliceMs', 1, 8),
+      maxQueuedRoots: integerAt(runtimeBudgets.maxQueuedRoots, 'profile.runtimeBudgets.maxQueuedRoots', 1, 200),
+      viewportBufferPx: integerAt(runtimeBudgets.viewportBufferPx, 'profile.runtimeBudgets.viewportBufferPx', 0, 1200)
+    },
     maxTextNodes: integerAt(raw.maxTextNodes, 'profile.maxTextNodes', 1, 10000),
     maxMarkedTokens: integerAt(raw.maxMarkedTokens, 'profile.maxMarkedTokens', 1, 100000)
   });

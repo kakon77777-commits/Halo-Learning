@@ -57,6 +57,7 @@
     const now = typeof settings.now === 'function' ? settings.now : () => Date.now();
     const openPanel = typeof settings.openPanel === 'function' ? settings.openPanel : () => {};
     const closePanel = typeof settings.closePanel === 'function' ? settings.closePanel : () => {};
+    const onError = typeof settings.onError === 'function' ? settings.onError : () => {};
     const primeThresholdMs = finiteDelay(settings.primeThresholdMs, 600, 'primeThresholdMs');
     const openThresholdMs = finiteDelay(settings.openThresholdMs, 1000, 'openThresholdMs');
     const dismissDelayMs = finiteDelay(settings.dismissDelayMs, 180, 'dismissDelayMs');
@@ -66,10 +67,19 @@
 
     let current = frozenState({ name: 'idle' });
     let lastAt = -Infinity;
+    let lastPriority = -Infinity;
     let hoverGeneration = 0;
     let dismissGeneration = 0;
     let hoverTimer = null;
     let dismissTimer = null;
+
+    function safeEffect(effect) {
+      try {
+        effect();
+      } catch (error) {
+        try { onError(error); } catch (_ignored) {}
+      }
+    }
 
     function cancelHover() {
       hoverGeneration += 1;
@@ -117,9 +127,8 @@
 
     function open(targetId, source) {
       cancelTimers();
-      const next = frozenState({ name: 'core-open', targetId, source });
-      openPanel(Object.freeze({ targetId, source }));
-      current = next;
+      current = frozenState({ name: 'core-open', targetId, source });
+      safeEffect(() => openPanel(Object.freeze({ targetId, source })));
       return current;
     }
 
@@ -127,23 +136,26 @@
       cancelTimers();
       if (current.name === 'idle' || current.name === 'dismissed') return current;
       const targetId = current.targetId;
-      if (current.name === 'core-open') closePanel(reason);
+      const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'dismissed', targetId, reason });
+      if (wasOpen) safeEffect(() => closePanel(reason));
       return current;
     }
 
     function beginHover(targetId) {
-      if (settings.mode === 'explicit-only') return current;
       if (current.name === 'core-open' && current.targetId === targetId) {
         cancelDismiss();
         return current;
       }
+      if (settings.mode === 'explicit-only') return current;
       if ((current.name === 'candidate' || current.name === 'primed') && current.targetId === targetId) {
         return current;
       }
-      if (current.name === 'core-open') closePanel('target-switch');
+      const wasOpen = current.name === 'core-open';
       cancelTimers();
       current = frozenState({ name: 'candidate', targetId });
+      if (wasOpen) safeEffect(() => closePanel('target-switch'));
+      if (current.name !== 'candidate' || current.targetId !== targetId) return current;
       scheduleHover(targetId, primeThresholdMs);
       return current;
     }
@@ -163,8 +175,9 @@
 
     function terminate(type) {
       cancelTimers();
-      if (current.name === 'core-open') closePanel(type === 'ROUTE_CLEANUP' ? 'route-cleanup' : 'cancel');
+      const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'cancelled' });
+      if (wasOpen) safeEffect(() => closePanel(type === 'ROUTE_CLEANUP' ? 'route-cleanup' : 'cancel'));
       return current;
     }
 
@@ -176,10 +189,19 @@
       }
       const at = eventAt(rawEvent, now);
       const explicit = rawEvent.type === 'EXPLICIT_OPEN' || rawEvent.type === 'MODIFIER_HOVER';
-      if (!explicit && at < lastAt) return current;
-      lastAt = Math.max(lastAt, at);
+      const terminal = rawEvent.type === 'ROUTE_CLEANUP' || rawEvent.type === 'CANCEL';
+      const priority = terminal ? 2 : (explicit ? 1 : 0);
+      if (!explicit && !terminal && (at < lastAt || (at === lastAt && lastPriority > priority))) return current;
+      if (at > lastAt) {
+        lastAt = at;
+        lastPriority = priority;
+      } else if (at === lastAt) {
+        lastPriority = Math.max(lastPriority, priority);
+      } else if (explicit || terminal) {
+        lastPriority = Math.max(lastPriority, priority);
+      }
 
-      if (rawEvent.type === 'ROUTE_CLEANUP' || rawEvent.type === 'CANCEL') return terminate(rawEvent.type);
+      if (terminal) return terminate(rawEvent.type);
       if (rawEvent.type === 'EXPLICIT_OPEN' || rawEvent.type === 'MODIFIER_HOVER') {
         return open(targetIdOf(rawEvent), 'explicit');
       }
