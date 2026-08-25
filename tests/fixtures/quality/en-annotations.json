@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "halo-v0.3.0-en-semantic-quality",
+  "fixtureVersion": "1.0.0",
+  "locale": "en",
+  "license": "CC0-1.0",
+  "annotationGuideline": "Halo Learning simplified POS v1; authored test sentences; punctuation is outside semantic-token spans.",
+  "cases": [
+    {
+      "id": "en-present-transitive",
+      "text": "The child reads books.",
+      "tokens": [
+        { "surface": "The", "simplifiedPos": "det", "lemma": "the" },
+        { "surface": "child", "simplifiedPos": "n", "lemma": "child" },
+        { "surface": "reads", "simplifiedPos": "v", "lemma": "read", "morphologyForm": "third-person-singular" },
+        { "surface": "books", "simplifiedPos": "n", "lemma": "book", "morphologyForm": "plural" }
+      ]
+    },
+    {
+      "id": "en-progressive",
+      "text": "She is reading a book.",
+      "tokens": [
+        { "surface": "She", "simplifiedPos": "pron", "lemma": "she" },
+        { "surface": "is", "simplifiedPos": "aux", "lemma": "be" },
+        { "surface": "reading", "simplifiedPos": "v", "lemma": "read", "morphologyForm": "present-participle" },
+        { "surface": "a", "simplifiedPos": "det", "lemma": "a" },
+        { "surface": "book", "simplifiedPos": "n", "lemma": "book" }
+      ]
+    },
+    {
+      "id": "en-adverb",
+      "text": "They quickly learn language.",
+      "tokens": [
+        { "surface": "They", "simplifiedPos": "pron", "lemma": "they" },
+        { "surface": "quickly", "simplifiedPos": "adv", "lemma": "quickly" },
+        { "surface": "learn", "simplifiedPos": "v", "lemma": "learn" },
+        { "surface": "language", "simplifiedPos": "n", "lemma": "language" }
+      ]
+    },
+    {
+      "id": "en-adjective-subject",
+      "text": "A happy student studies language.",
+      "tokens": [
+        { "surface": "A", "simplifiedPos": "det", "lemma": "a" },
+        { "surface": "happy", "simplifiedPos": "adj", "lemma": "happy" },
+        { "surface": "student", "simplifiedPos": "n", "lemma": "student" },
+        { "surface": "studies", "simplifiedPos": "v", "lemma": "study", "morphologyForm": "third-person-singular" },
+        { "surface": "language", "simplifiedPos": "n", "lemma": "language" }
+      ]
+    },
+    {
+      "id": "en-plural-object",
+      "text": "We write clear sentences.",
+      "tokens": [
+        { "surface": "We", "simplifiedPos": "pron", "lemma": "we" },
+        { "surface": "write", "simplifiedPos": "v", "lemma": "write" },
+        { "surface": "clear", "simplifiedPos": "adj", "lemma": "clear" },
+        { "surface": "sentences", "simplifiedPos": "n", "lemma": "sentence", "morphologyForm": "plural" }
+      ]
+    },
+    {
+      "id": "en-adjective-noun-boundary",
+      "text": "The old model needs data.",
+      "tokens": [
+        { "surface": "The", "simplifiedPos": "det", "lemma": "the" },
+        { "surface": "old", "simplifiedPos": "adj", "lemma": "old" },
+        { "surface": "model", "simplifiedPos": "n", "lemma": "model" },
+        { "surface": "needs", "simplifiedPos": "v", "lemma": "need", "morphologyForm": "third-person-singular" },
+        { "surface": "data", "simplifiedPos": "n", "lemma": "data" }
+      ]
+    },
+    {
+      "id": "en-perfect-shape",
+      "text": "He has studied the system.",
+      "tokens": [
+        { "surface": "He", "simplifiedPos": "pron", "lemma": "he" },
+        { "surface": "has", "simplifiedPos": "aux", "lemma": "have" },
+        { "surface": "studied", "simplifiedPos": "v", "lemma": "study", "morphologyForm": "irregular" },
+        { "surface": "the", "simplifiedPos": "det", "lemma": "the" },
+        { "surface": "system", "simplifiedPos": "n", "lemma": "system" }
+      ]
+    },
+    {
+      "id": "en-local-dictionary",
+      "text": "This local dictionary works.",
+      "tokens": [
+        { "surface": "This", "simplifiedPos": "det", "lemma": "this" },
+        { "surface": "local", "simplifiedPos": "adj", "lemma": "local" },
+        { "surface": "dictionary", "simplifiedPos": "n", "lemma": "dictionary" },
+        { "surface": "works", "simplifiedPos": "v", "lemma": "work", "morphologyForm": "third-person-singular" }
+      ]
+    },
+    {
+      "id": "en-modal",
+      "text": "You can read the page.",
+      "tokens": [
+        { "surface": "You", "simplifiedPos": "pron", "lemma": "you" },
+        { "surface": "can", "simplifiedPos": "modal", "lemma": "can" },
+        { "surface": "read", "simplifiedPos": "v", "lemma": "read" },
+        { "surface": "the", "simplifiedPos": "det", "lemma": "the" },
+        { "surface": "page", "simplifiedPos": "n", "lemma": "page" }
+      ]
+    },
+    {
+      "id": "en-contextual-ambiguity",
+      "text": "An important word shows meaning.",
+      "tokens": [
+        { "surface": "An", "simplifiedPos": "det", "lemma": "an" },
+        { "surface": "important", "simplifiedPos": "adj", "lemma": "important" },
+        { "surface": "word", "simplifiedPos": "n", "lemma": "word" },
+        { "surface": "shows", "simplifiedPos": "v", "lemma": "show", "morphologyForm": "third-person-singular" },
+        { "surface": "meaning", "simplifiedPos": "n", "lemma": "meaning" }
+      ]
+    },
+    {
+      "id": "en-unknown",
+      "text": "Qzxv appears.",
+      "tokens": [
+        { "surface": "Qzxv", "simplifiedPos": "x", "unknown": true },
+        { "surface": "appears", "simplifiedPos": "v", "lemma": "appear", "morphologyForm": "third-person-singular" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo-learning.local/schemas/annotation-set.schema.json",
+  "title": "AnnotationSet/v1",
+  "type": "object",
+  "required": [
+    "schemaVersion", "setId", "languageMode", "textLength", "algorithm",
+    "generatedAt", "providerRefs", "tokens", "diagnostics"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "setId": { "type": "string", "minLength": 1 },
+    "languageMode": { "enum": ["auto", "both", "en", "zh-Hant"] },
+    "textLength": { "type": "integer", "minimum": 0 },
+    "algorithm": { "$ref": "#/$defs/identity" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "providerRefs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version", "status"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "version": { "type": "string", "minLength": 1 },
+          "status": { "enum": ["verified", "bootstrap", "unavailable"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tokens": { "type": "array", "items": { "$ref": "semantic-token.schema.json" } },
+    "diagnostics": {
+      "type": "object",
+      "required": ["fallbackActivated", "unavailableCapabilities", "warnings"],
+      "properties": {
+        "fallbackActivated": { "type": "boolean" },
+        "unavailableCapabilities": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "warnings": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,2 @@
+# Verified upstream corpus bytes are hash-pinned and must not be whitespace-normalized.
+data/corpora/** -whitespace

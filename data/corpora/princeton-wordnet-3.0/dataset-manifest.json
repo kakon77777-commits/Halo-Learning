@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "princeton-wordnet-3.0",
+  "name": "Princeton WordNet 3.0",
+  "locale": "en",
+  "version": "3.0",
+  "releaseIdentity": "Princeton-WordNet-3.0",
+  "formatVersion": "WordNet-database-files-3.0",
+  "source": {
+    "publisher": "Princeton University",
+    "canonicalUrl": "https://wordnetcode.princeton.edu/3.0/",
+    "acquiredAt": "2026-08-25T08:00:00.000Z",
+    "retrievalMode": "verified-release",
+    "transport": {
+      "kind": "direct-upstream",
+      "url": "https://wordnetcode.princeton.edu/3.0/WordNet-3.0.tar.gz",
+      "revision": "WordNet-3.0.tar.gz@sha256:640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52",
+      "note": "Direct download from the official Princeton WordNet 3.0 distribution index."
+    }
+  },
+  "license": {
+    "schemaVersion": 1,
+    "licenseId": "WordNet-3.0",
+    "name": "Princeton WordNet 3.0 License",
+    "url": "https://wordnet.princeton.edu/documentation/wnlicens7wn",
+    "commercialUse": "allowed",
+    "redistribution": "allowed-with-notice",
+    "attributionRequired": true,
+    "shareAlike": false,
+    "redistributionNote": "Preserve the WordNet copyright, license, and disclaimer on every copy or modification; do not use Princeton's name in advertising or publicity.",
+    "verifiedAt": "2026-08-25",
+    "verificationUrl": "https://wordnet.princeton.edu/documentation/wnlicens7wn"
+  },
+  "attributionRequirements": [
+    "Retain the WordNet 3.0 copyright, license, and disclaimer with every copy of the database, documentation, or modification.",
+    "Attribute Princeton WordNet 3.0 in third-party notices."
+  ],
+  "redistributionRequirements": [
+    "Preserve the complete license and copyright notice.",
+    "Do not use Princeton University or Princeton for advertising or publicity."
+  ],
+  "hash": {
+    "algorithm": "sha256",
+    "value": "9c082f9c9d193e0458e89bc5a290757d2d9fec54c8bed54eb2f85ad588cf60a2"
+  },
+  "files": [
+    {
+      "role": "adjective-exceptions",
+      "path": "adj.exc",
+      "bytes": 23019,
+      "sha256": "8824cc24bbedd797b9702316b27f07cd4c2b76b629539f0a1276f03926758016"
+    },
+    {
+      "role": "adverb-exceptions",
+      "path": "adv.exc",
+      "bytes": 85,
+      "sha256": "e7291461b629abfe63301bbe1998cee09fd575ed7107abd7ea9763adb05bf0a8"
+    },
+    {
+      "role": "adjective",
+      "path": "data.adj",
+      "bytes": 3155426,
+      "sha256": "f24b635368be441501c9b8001e9271fd3b30b203f00d91e332979e6f8fe35646"
+    },
+    {
+      "role": "adverb",
+      "path": "data.adv",
+      "bytes": 516696,
+      "sha256": "e66dbbda0e0359e41b7f225bff71dd0c263dc7c66c1b61abc9ba334973d92979"
+    },
+    {
+      "role": "noun",
+      "path": "data.noun",
+      "bytes": 15300280,
+      "sha256": "489f145e0f68877c0be5bd0eb4117adaaac52f38f6204eb8d85dbe2158b614cc"
+    },
+    {
+      "role": "verb",
+      "path": "data.verb",
+      "bytes": 2772517,
+      "sha256": "7fff397e93b4fb152fdaee116747cf1c40d7badedccb4b63f5503e8e962d9102"
+    },
+    {
+      "role": "license",
+      "path": "LICENSE",
+      "bytes": 1625,
+      "sha256": "7731175a77952e259390b496fab905e57118b8d19ad3a8383c67eee724ff443f"
+    },
+    {
+      "role": "noun-exceptions",
+      "path": "noun.exc",
+      "bytes": 38301,
+      "sha256": "2b5d675c380b39ecf595af9fa9d4e7feb1d58c643b0bff08c40ed5bfe41fab7a"
+    },
+    {
+      "role": "verb-exceptions",
+      "path": "verb.exc",
+      "bytes": 38033,
+      "sha256": "dbbcf9a601b2d77e934e413b91d90e88ec7f933a8b77cfc00602a923b891b42c"
+    }
+  ],
+  "bundled": true,
+  "redistributionNote": "The verified WordNet 3.0 dictionary, exception files, and complete upstream LICENSE are bundled for reproducible local builds."
+}
+

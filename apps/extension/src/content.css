@@ -24,6 +24,31 @@
   z-index: 2147483646;
 }
 
+.halo-token.halo-has-meta::before {
+  content: attr(data-halo-meta);
+  pointer-events: none;
+  user-select: none;
+  position: absolute;
+  left: 0;
+  bottom: -1.05em;
+  white-space: nowrap;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 0.48em;
+  font-weight: 650;
+  line-height: 1;
+  color: currentColor;
+  opacity: 0.78;
+  z-index: 2147483646;
+}
+
+/* Structure underline is redundant with the textual chunk meta label. */
+.halo-token.halo-structure-chunk {
+  text-decoration-line: underline !important;
+  text-decoration-style: dotted !important;
+  text-decoration-thickness: 0.08em !important;
+  text-underline-offset: 0.18em !important;
+}
+
 .halo-token.halo-label-top-right::after {
   position: absolute;
   top: -0.78em;

@@ -20,7 +20,7 @@
 |---|---|---|---|---|
 | v0.1.0 | Basic Marking RC | 建立可安裝的中／英文基本標記 MVP：SemanticToken → MarkingProfile → RenderToken → 可逆 DOM overlay。 | 16/16 tests；MV3；local-only；可逆標記；基本中英 POS；可配置 label/color/density。 | Complete |
 | v0.2.0 | Lexical Data Layer | 把中／英文開源字典與詞彙資料變成可驗證、可替換、可離線索引的資料供應層。 | 至少各一個 EN/ZH corpus importer；license/provenance/sha256 完整；核心仍可無 corpus 啟動。 | Complete |
-| v0.3.0 | Semantic Annotation Engine | 把 POS 擴成可配置的語意附加層：lemma、morphology、grammar role、chunk、tense/aspect、gloss refs 等，但 renderer 仍只投影使用者選擇的 channels。 | SemanticAnnotation contract 穩定；簡化 POS fixture macro-F1 ≥ 0.90；所有 channel 都可獨立關閉。 | Not Started |
+| v0.3.0 | Semantic Annotation Engine | 把 POS 擴成可配置的語意附加層：lemma、morphology、grammar role、chunk、tense/aspect、gloss refs 等，但 renderer 仍只投影使用者選擇的 channels。 | SemanticAnnotation contract 穩定；簡化 POS fixture macro-F1 ≥ 0.90；所有 channel 都可獨立關閉。 | Complete |
 | v0.4.0 | Browser Runtime & UX | 把 Basic renderer 升成可在真實網站長時間使用的低干擾瀏覽器 runtime。 | 20 類 fixture sites E2E；動態 DOM/SPA 可重掃；敏感網站封鎖；performance budget 達標。 | Not Started |
 | v0.5.0 | Local Data & Event Store | 加入 local-first IndexedDB、append-only learning events、可匯出/刪除/重建的資料基礎。 | 事件不可原地 update；projection 可重播；JSON/JSONL export/delete-by-scope 完整。 | Not Started |
 | v0.6.0 | Learner Model & Adaptive Scaffolding | 把事件轉成可重算 mastery/confidence，並控制標記密度、觸發門檻、transfer probe 與 gap planning。 | mastery/confidence 分離；同 event log 重建一致；低信心不過度降低支架。 | Not Started |
@@ -79,14 +79,16 @@ Release evidence: `docs/VALIDATION_REPORT_v0.2.0.md`, `docs/releases/v0.2.0-task
 
 | Task ID | Workstream | Task | Owner | Priority | Dependencies | Acceptance Evidence | Test/Gate | Deliverable | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| V030-01 | Contracts | 擴充 SemanticToken/AnnotationSet；新增 annotation provenance/confidence | Workbench | P0 | v0.2.0 | 舊 v0.1 token 可 migration/normalize | contract compatibility tests | shared/contracts | Not Started |
-| V030-02 | English NLP | 英文 lemma + morphology + simplified POS baseline | Workbench | P0 | V030-01,V020 index | fixture 可重現；未知詞不強猜 | EN NLP fixtures | nlp/en | Not Started |
-| V030-03 | Chinese NLP | 繁中 segmentation + simplified POS + lexical refs | Workbench | P0 | V030-01,V020 index | 詞界與 POS 可追溯 provider/version | ZH NLP fixtures | nlp/zh | Not Started |
-| V030-04 | Grammar Layer | 加入 chunk、predicate/core role、tense/aspect 的 bounded baseline | Workbench | P1 | V030-02,V030-03 | 語法 annotation 可缺省、不可假裝確定 | grammar fixture tests | semantic-annotations | Not Started |
-| V030-05 | Visual Profiles | 新增 POS/role/tense/gloss/chunk 等 channel toggle；位置與密度可設 | Workbench | P0 | V030-01,V030-04 | 每個 channel 可獨立 on/off；顏色不是唯一 carrier | projection tests | marking-engine | Not Started |
-| V030-06 | Profile Migration | v0.1 settings → v0.3 MarkingProfile migration | Workbench | P1 | V030-05 | 既有使用者設定不丟失 | migration tests | settings migrations | Not Started |
-| V030-07 | Quality Corpus | 建立中英標註 fixture 與 metrics harness | Workbench | P0 | V030-02,V030-03 | simplified POS macro-F1 ≥ 0.90（只對規格標籤） | metrics command | fixtures/sentences | Not Started |
-| V030-08 | Release Gate | 驗證 semantic truth 與 renderer projection 無反向污染 | Workbench | P0 | V030-01..07 | 關閉所有 channel 時原文零語義 UI 污染 | full suite | v0.3.0 release | Not Started |
+| V030-01 | Contracts | 擴充 SemanticToken/AnnotationSet；新增 annotation provenance/confidence | Workbench | P0 | v0.2.0 | 舊 v0.1 token 可 migration/normalize | contract compatibility tests | shared/contracts | Complete |
+| V030-02 | English NLP | 英文 lemma + morphology + simplified POS baseline | Workbench | P0 | V030-01,V020 index | fixture 可重現；未知詞不強猜 | EN NLP fixtures | nlp/en | Complete |
+| V030-03 | Chinese NLP | 繁中 segmentation + simplified POS + lexical refs | Workbench | P0 | V030-01,V020 index | 詞界與 POS 可追溯 provider/version | ZH NLP fixtures | nlp/zh | Complete |
+| V030-04 | Grammar Layer | 加入 chunk、predicate/core role、tense/aspect 的 bounded baseline | Workbench | P1 | V030-02,V030-03 | 語法 annotation 可缺省、不可假裝確定 | grammar fixture tests | semantic-annotations | Complete |
+| V030-05 | Visual Profiles | 新增 POS/role/tense/gloss/chunk 等 channel toggle；位置與密度可設 | Workbench | P0 | V030-01,V030-04 | 每個 channel 可獨立 on/off；顏色不是唯一 carrier | projection tests | marking-engine | Complete |
+| V030-06 | Profile Migration | v0.1 settings → v0.3 MarkingProfile migration | Workbench | P1 | V030-05 | 既有使用者設定不丟失 | migration tests | settings migrations | Complete |
+| V030-07 | Quality Corpus | 建立中英標註 fixture 與 metrics harness | Workbench | P0 | V030-02,V030-03 | simplified POS macro-F1 ≥ 0.90（只對規格標籤） | metrics command | fixtures/sentences | Complete |
+| V030-08 | Release Gate | 驗證 semantic truth 與 renderer projection 無反向污染 | Workbench | P0 | V030-01..07 | 關閉所有 channel 時原文零語義 UI 污染 | full suite | v0.3.0 release | Complete |
+
+Release evidence: `docs/VALIDATION_REPORT_v0.3.0.md`, `docs/releases/v0.3.0-task-evidence.yaml`, `docs/validation/v0.3.0-semantic-quality.json`, and `node scripts/validate-v0.3.0.js --development`. The v0.4.0 boundary remains untouched.
 
 ### v0.4.0 — Browser Runtime & UX
 

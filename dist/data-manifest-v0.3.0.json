@@ -1,0 +1,196 @@
+{
+  "schemaVersion": 1,
+  "release": "v0.3.0",
+  "generatedAt": "2026-08-25T00:00:00.000Z",
+  "locales": [
+    "en",
+    "zh-Hant"
+  ],
+  "datasets": [
+    {
+      "schemaVersion": 1,
+      "datasetId": "cc-cedict-v1-2026-08-24",
+      "name": "CC-CEDICT verified MDBG release — Version 1 edition",
+      "locale": "zh-Hant",
+      "version": "2026-08-24T05:05:01Z",
+      "source": {
+        "publisher": "MDBG / CC-CEDICT community",
+        "canonicalUrl": "https://www.mdbg.net/chinese/dictionary?page=cc-cedict",
+        "acquiredAt": "2026-08-25T08:00:00.000Z",
+        "retrievalMode": "verified-release",
+        "transport": {
+          "kind": "pinned-public-mirror",
+          "url": "https://github.com/rhcarvalho/cedict",
+          "revision": "6514f6822e8dc582fb924a00e1afdf5bbc66fe62",
+          "note": "Retrieval transport only. MDBG prohibits automated download; the pinned mirror bytes were matched to the official release timestamp, entry count, V1 header, and license notice."
+        }
+      },
+      "license": {
+        "schemaVersion": 1,
+        "licenseId": "CC-BY-SA-4.0",
+        "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+        "url": "https://creativecommons.org/licenses/by-sa/4.0/",
+        "commercialUse": "allowed",
+        "redistribution": "share-alike",
+        "attributionRequired": true,
+        "shareAlike": true,
+        "redistributionNote": "Attribute CC-CEDICT/MDBG, link the license, indicate changes, and distribute adaptations under CC BY-SA 4.0.",
+        "verifiedAt": "2026-08-25",
+        "verificationUrl": "https://www.mdbg.net/chinese/dictionary?page=cc-cedict"
+      },
+      "hash": {
+        "algorithm": "sha256",
+        "value": "205018c6e766de913f808a5a8471163ceca96ea8cca053883baba8bd55545541"
+      },
+      "files": [
+        {
+          "role": "dictionary",
+          "path": "cedict_1_0_ts_utf-8_mdbg.txt",
+          "bytes": 9838770,
+          "sha256": "27b881871e6ca5cacbc376e5b0fd0d60187e8940f9e6b2b7ac83d3c1f05bf5d4"
+        }
+      ],
+      "bundled": true,
+      "redistributionNote": "The exact verified V1 edition bytes are bundled for reproducible local builds under CC BY-SA 4.0.",
+      "releaseIdentity": "MDBG-2026-08-24T05:05:01Z-124925",
+      "formatVersion": "CC-CEDICT-V1",
+      "attributionRequirements": [
+        "Attribute CC-CEDICT and MDBG, retain the embedded publisher and license notice, and link CC BY-SA 4.0.",
+        "Indicate whether the dataset or generated lexical projection was modified."
+      ],
+      "redistributionRequirements": [
+        "Redistribute the dataset and adaptations under CC BY-SA 4.0.",
+        "Retain attribution, license link, and change notice."
+      ]
+    },
+    {
+      "schemaVersion": 1,
+      "datasetId": "princeton-wordnet-3.0",
+      "name": "Princeton WordNet 3.0",
+      "locale": "en",
+      "version": "3.0",
+      "source": {
+        "publisher": "Princeton University",
+        "canonicalUrl": "https://wordnetcode.princeton.edu/3.0/",
+        "acquiredAt": "2026-08-25T08:00:00.000Z",
+        "retrievalMode": "verified-release",
+        "transport": {
+          "kind": "direct-upstream",
+          "url": "https://wordnetcode.princeton.edu/3.0/WordNet-3.0.tar.gz",
+          "revision": "WordNet-3.0.tar.gz@sha256:640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52",
+          "note": "Direct download from the official Princeton WordNet 3.0 distribution index."
+        }
+      },
+      "license": {
+        "schemaVersion": 1,
+        "licenseId": "WordNet-3.0",
+        "name": "Princeton WordNet 3.0 License",
+        "url": "https://wordnet.princeton.edu/documentation/wnlicens7wn",
+        "commercialUse": "allowed",
+        "redistribution": "allowed-with-notice",
+        "attributionRequired": true,
+        "shareAlike": false,
+        "redistributionNote": "Preserve the WordNet copyright, license, and disclaimer on every copy or modification; do not use Princeton's name in advertising or publicity.",
+        "verifiedAt": "2026-08-25",
+        "verificationUrl": "https://wordnet.princeton.edu/documentation/wnlicens7wn"
+      },
+      "hash": {
+        "algorithm": "sha256",
+        "value": "9c082f9c9d193e0458e89bc5a290757d2d9fec54c8bed54eb2f85ad588cf60a2"
+      },
+      "files": [
+        {
+          "role": "adjective-exceptions",
+          "path": "adj.exc",
+          "bytes": 23019,
+          "sha256": "8824cc24bbedd797b9702316b27f07cd4c2b76b629539f0a1276f03926758016"
+        },
+        {
+          "role": "adverb-exceptions",
+          "path": "adv.exc",
+          "bytes": 85,
+          "sha256": "e7291461b629abfe63301bbe1998cee09fd575ed7107abd7ea9763adb05bf0a8"
+        },
+        {
+          "role": "adjective",
+          "path": "data.adj",
+          "bytes": 3155426,
+          "sha256": "f24b635368be441501c9b8001e9271fd3b30b203f00d91e332979e6f8fe35646"
+        },
+        {
+          "role": "adverb",
+          "path": "data.adv",
+          "bytes": 516696,
+          "sha256": "e66dbbda0e0359e41b7f225bff71dd0c263dc7c66c1b61abc9ba334973d92979"
+        },
+        {
+          "role": "noun",
+          "path": "data.noun",
+          "bytes": 15300280,
+          "sha256": "489f145e0f68877c0be5bd0eb4117adaaac52f38f6204eb8d85dbe2158b614cc"
+        },
+        {
+          "role": "verb",
+          "path": "data.verb",
+          "bytes": 2772517,
+          "sha256": "7fff397e93b4fb152fdaee116747cf1c40d7badedccb4b63f5503e8e962d9102"
+        },
+        {
+          "role": "license",
+          "path": "LICENSE",
+          "bytes": 1625,
+          "sha256": "7731175a77952e259390b496fab905e57118b8d19ad3a8383c67eee724ff443f"
+        },
+        {
+          "role": "noun-exceptions",
+          "path": "noun.exc",
+          "bytes": 38301,
+          "sha256": "2b5d675c380b39ecf595af9fa9d4e7feb1d58c643b0bff08c40ed5bfe41fab7a"
+        },
+        {
+          "role": "verb-exceptions",
+          "path": "verb.exc",
+          "bytes": 38033,
+          "sha256": "dbbcf9a601b2d77e934e413b91d90e88ec7f933a8b77cfc00602a923b891b42c"
+        }
+      ],
+      "bundled": true,
+      "redistributionNote": "The verified WordNet 3.0 dictionary, exception files, and complete upstream LICENSE are bundled for reproducible local builds.",
+      "releaseIdentity": "Princeton-WordNet-3.0",
+      "formatVersion": "WordNet-database-files-3.0",
+      "attributionRequirements": [
+        "Retain the WordNet 3.0 copyright, license, and disclaimer with every copy of the database, documentation, or modification.",
+        "Attribute Princeton WordNet 3.0 in third-party notices."
+      ],
+      "redistributionRequirements": [
+        "Preserve the complete license and copyright notice.",
+        "Do not use Princeton University or Princeton for advertising or publicity."
+      ]
+    }
+  ],
+  "index": {
+    "path": "apps/extension/data/lexical-runtime-index.json",
+    "indexId": "halo-lexical-runtime-v0.3.0",
+    "format": "halo-runtime-lexical-index-v1",
+    "hash": {
+      "algorithm": "sha256",
+      "value": "f2a63b7b5af3673a7faea6acaed53776cb94bcf4146949d965a37b76003fca21"
+    },
+    "entryCount": 331903,
+    "rejectedCount": 0,
+    "englishRowCount": 206978,
+    "chineseRowCount": 124925,
+    "morphologyRowCount": 6052,
+    "glossCount": 220471,
+    "serializedBytes": 48544254
+  },
+  "receipts": {
+    "path": "dist/lexical-v0.3.0/build-receipts.json",
+    "count": 2
+  },
+  "sourceInputs": {
+    "upstreamCorpusBytesBundled": true,
+    "verifiedReleaseOnly": true,
+    "note": "Runtime bytes are a deterministic compact projection rebuilt only from manifest-verified local corpus files."
+  }
+}

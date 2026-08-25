@@ -3,24 +3,36 @@
 
   const STORAGE_KEY = 'haloSettings';
   const INJECT_FILES = [
-    'src/shared/linguistics.js',
+    'src/shared/dictionary-provider.js',
+    'src/shared/semantic-annotations.js',
     'src/shared/projection.js',
     'src/shared/settings.js',
     'src/content.js'
   ];
+  const CHANNEL_CONTROLS = Object.freeze({
+    posLabel: 'posLabels',
+    posColor: 'posColors',
+    lemma: 'lemma',
+    morphology: 'morphology',
+    glossHint: 'glossHint',
+    grammarRole: 'grammarRole',
+    tenseAspect: 'tenseAspect',
+    chunk: 'chunk',
+    learningState: 'learningState'
+  });
+  let currentSettings = null;
 
-  const $ = (id) => document.getElementById(id);
+  const get = (id) => document.getElementById(id);
   const controls = {
-    posLabels: $('posLabels'),
-    posColors: $('posColors'),
-    density: $('density'),
-    densityValue: $('densityValue'),
-    languageMode: $('languageMode'),
-    labelPosition: $('labelPosition'),
-    applyButton: $('applyButton'),
-    removeButton: $('removeButton'),
-    status: $('status')
+    density: get('density'),
+    densityValue: get('densityValue'),
+    languageMode: get('languageMode'),
+    labelPosition: get('labelPosition'),
+    applyButton: get('applyButton'),
+    removeButton: get('removeButton'),
+    status: get('status')
   };
+  for (const [channel, id] of Object.entries(CHANNEL_CONTROLS)) controls[channel] = get(id);
 
   function showStatus(message, isError) {
     controls.status.textContent = message;
@@ -28,8 +40,10 @@
   }
 
   function renderSettings(settings) {
-    controls.posLabels.checked = settings.posLabels;
-    controls.posColors.checked = settings.posColors;
+    currentSettings = settings;
+    for (const channel of Object.keys(CHANNEL_CONTROLS)) {
+      controls[channel].checked = Boolean(settings.channels[channel]);
+    }
     controls.density.value = String(Math.round(settings.density * 100));
     controls.densityValue.value = `${Math.round(settings.density * 100)}%`;
     controls.languageMode.value = settings.languageMode;
@@ -37,18 +51,20 @@
   }
 
   function readSettings() {
-    return HaloSettings.normalizeSettings({
-      posLabels: controls.posLabels.checked,
-      posColors: controls.posColors.checked,
+    const channels = {};
+    for (const channel of Object.keys(CHANNEL_CONTROLS)) channels[channel] = controls[channel].checked;
+    return HaloProfileControls.mergeUiSettings(currentSettings || HaloSettings.DEFAULT_SETTINGS, {
+      channels,
       density: Number(controls.density.value) / 100,
       languageMode: controls.languageMode.value,
       labelPosition: controls.labelPosition.value
-    });
+    }, HaloSettings.normalizeSettings);
   }
 
   async function persistSettings() {
     const settings = readSettings();
     await chrome.storage.local.set({ [STORAGE_KEY]: settings });
+    currentSettings = settings;
     return settings;
   }
 
@@ -73,7 +89,9 @@
       await inject(tab.id);
       const result = await chrome.tabs.sendMessage(tab.id, { type: 'HALO_APPLY_MARKING', settings });
       if (result && result.lastError) throw new Error(result.lastError);
-      showStatus(`Marked ${result && result.markedTokens ? result.markedTokens : 0} tokens · 已標記`, false);
+      const marked = result && result.markedTokens ? result.markedTokens : 0;
+      const semantic = result && result.semanticTokens ? result.semanticTokens : 0;
+      showStatus(`Marked ${marked} / ${semantic} semantic tokens · 已標記`, false);
     } catch (error) {
       showStatus(`Cannot mark this page · ${error.message || error}`, true);
     } finally {
@@ -107,7 +125,13 @@
   controls.density.addEventListener('input', () => {
     controls.densityValue.value = `${controls.density.value}%`;
   });
-  for (const control of [controls.posLabels, controls.posColors, controls.density, controls.languageMode, controls.labelPosition]) {
+  const persistedControls = [
+    ...Object.keys(CHANNEL_CONTROLS).map((channel) => controls[channel]),
+    controls.density,
+    controls.languageMode,
+    controls.labelPosition
+  ];
+  for (const control of persistedControls) {
     control.addEventListener('change', () => { persistSettings().catch(() => {}); });
   }
   controls.applyButton.addEventListener('click', apply);

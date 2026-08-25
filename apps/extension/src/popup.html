@@ -9,7 +9,7 @@
 <body>
   <main class="panel">
     <header>
-      <div class="eyebrow">HALO LEARNING · BASIC</div>
+      <div class="eyebrow">HALO LEARNING · SEMANTIC</div>
       <h1>Magic Hand <span>魔法之手</span></h1>
       <p>English / 中文 semantic marking</p>
     </header>
@@ -25,6 +25,38 @@
       </label>
     </section>
 
+    <details class="group advanced">
+      <summary>Semantic channels · 語意頻道</summary>
+      <label class="row switch-row">
+        <span><strong>Lemma</strong><small>詞元</small></span>
+        <input id="lemma" type="checkbox">
+      </label>
+      <label class="row switch-row">
+        <span><strong>Morphology</strong><small>形態</small></span>
+        <input id="morphology" type="checkbox">
+      </label>
+      <label class="row switch-row">
+        <span><strong>Gloss hint</strong><small>釋義提示</small></span>
+        <input id="glossHint" type="checkbox">
+      </label>
+      <label class="row switch-row">
+        <span><strong>Grammar role</strong><small>文法角色</small></span>
+        <input id="grammarRole" type="checkbox">
+      </label>
+      <label class="row switch-row">
+        <span><strong>Tense / aspect</strong><small>時態／體</small></span>
+        <input id="tenseAspect" type="checkbox">
+      </label>
+      <label class="row switch-row">
+        <span><strong>Chunk / structure</strong><small>片語／結構</small></span>
+        <input id="chunk" type="checkbox">
+      </label>
+      <label class="row switch-row unavailable" title="Available in a later release">
+        <span><strong>Learning state</strong><small>學習狀態（尚未提供）</small></span>
+        <input id="learningState" type="checkbox" disabled>
+      </label>
+    </details>
+
     <section class="group">
       <label for="density" class="stack">
         <span class="label-line"><strong>Density</strong><small>標記密度 <output id="densityValue">65%</output></small></span>
@@ -36,7 +68,7 @@
         <select id="languageMode">
           <option value="both">English + 中文</option>
           <option value="en">English only</option>
-          <option value="zh">中文 only</option>
+          <option value="zh-Hant">中文 only</option>
         </select>
       </label>
 
@@ -61,6 +93,7 @@
   </main>
 
   <script src="shared/settings.js"></script>
+  <script src="shared/profile-controls.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

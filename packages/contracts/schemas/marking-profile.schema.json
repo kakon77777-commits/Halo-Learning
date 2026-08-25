@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo-learning.local/schemas/marking-profile.schema.json",
+  "title": "MarkingProfile/v2",
+  "type": "object",
+  "required": [
+    "schemaVersion", "profileId", "enabled", "languageMode", "channels",
+    "density", "minConfidence", "labelPosition", "maxTextNodes", "maxMarkedTokens"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "profileId": { "type": "string", "minLength": 1 },
+    "enabled": { "type": "boolean" },
+    "languageMode": { "enum": ["auto", "both", "en", "zh-Hant"] },
+    "channels": {
+      "type": "object",
+      "required": [
+        "posLabel", "posColor", "lemma", "morphology", "glossHint",
+        "grammarRole", "tenseAspect", "chunk", "learningState"
+      ],
+      "properties": {
+        "posLabel": { "type": "boolean" },
+        "posColor": { "type": "boolean" },
+        "lemma": { "type": "boolean" },
+        "morphology": { "type": "boolean" },
+        "glossHint": { "type": "boolean" },
+        "grammarRole": { "type": "boolean" },
+        "tenseAspect": { "type": "boolean" },
+        "chunk": { "type": "boolean" },
+        "learningState": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "density": { "type": "number", "minimum": 0, "maximum": 1 },
+    "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "labelPosition": { "enum": ["top-right", "top-left", "bottom-right", "inline"] },
+    "maxTextNodes": { "type": "integer", "minimum": 1, "maximum": 10000 },
+    "maxMarkedTokens": { "type": "integer", "minimum": 1, "maximum": 100000 }
+  },
+  "additionalProperties": false
+}

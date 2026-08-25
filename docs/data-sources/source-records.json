@@ -7,6 +7,9 @@
       "name": "Princeton WordNet 3.0",
       "locale": "en",
       "versionPolicy": "Pin release 3.0 and hash every acquired data.* byte stream before import.",
+      "upstreamVersion": "3.0",
+      "releaseIdentity": "Princeton-WordNet-3.0",
+      "formatVersion": "WordNet-database-files-3.0",
       "officialSourceUrl": "https://wordnet.princeton.edu/",
       "officialLicenseUrl": "https://wordnet.princeton.edu/documentation/wnlicens7wn",
       "officialFormatUrl": "https://wordnet.princeton.edu/documentation/wndb5wn",
@@ -17,16 +20,28 @@
         "Preserve the WordNet copyright, license, and disclaimer on every copy of the database or a modification.",
         "Do not use Princeton University or Princeton for advertising or publicity."
       ],
+      "sha256": "640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52",
+      "transport": {
+        "kind": "direct-upstream",
+        "url": "https://wordnetcode.princeton.edu/3.0/WordNet-3.0.tar.gz",
+        "revision": "WordNet-3.0.tar.gz@sha256:640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52",
+        "note": "Downloaded directly from the official Princeton WordNet 3.0 distribution index."
+      },
+      "acquisitionReceipt": "data/corpora/princeton-wordnet-3.0/acquisition-receipt.json",
+      "datasetManifest": "data/corpora/princeton-wordnet-3.0/dataset-manifest.json",
       "verifiedAt": "2026-08-25",
       "selected": true,
-      "bundled": false,
-      "rejectionReason": "Selected importer target; upstream data is deliberately not bundled."
+      "bundled": true,
+      "rejectionReason": "Selected and activated from hash-verified upstream bytes."
     },
     {
       "sourceId": "cc-cedict-verified-release",
       "name": "CC-CEDICT verified release (Traditional field)",
       "locale": "zh-Hant",
       "versionPolicy": "Acquire the verified MDBG release, capture its release timestamp and license notice, and hash the exact cedict_ts.u8 bytes.",
+      "upstreamVersion": "2026-08-24T05:05:01Z",
+      "releaseIdentity": "MDBG-2026-08-24T05:05:01Z-124925",
+      "formatVersion": "CC-CEDICT-V1",
       "officialSourceUrl": "https://cc-cedict.org/editor/editor.php?handler=Download",
       "officialLicenseUrl": "https://cc-cedict.org/editor/editor.php?handler=Download",
       "officialFormatUrl": "https://cc-cedict.org/wiki/syntax",
@@ -38,10 +53,19 @@
         "Distribute adaptations of the data under the same license.",
         "Capture the license shown with the exact acquired release because older wiki pages still mention CC BY-SA 3.0."
       ],
+      "sha256": "27b881871e6ca5cacbc376e5b0fd0d60187e8940f9e6b2b7ac83d3c1f05bf5d4",
+      "transport": {
+        "kind": "pinned-public-mirror",
+        "url": "https://github.com/rhcarvalho/cedict",
+        "revision": "6514f6822e8dc582fb924a00e1afdf5bbc66fe62",
+        "note": "Retrieval transport only. The file header and entry count match the official MDBG release; MDBG prohibits scripted download from its page."
+      },
+      "acquisitionReceipt": "data/corpora/cc-cedict-v1-2026-08-24/acquisition-receipt.json",
+      "datasetManifest": "data/corpora/cc-cedict-v1-2026-08-24/dataset-manifest.json",
       "verifiedAt": "2026-08-25",
       "selected": true,
-      "bundled": false,
-      "rejectionReason": "Selected importer target; upstream data is deliberately not bundled."
+      "bundled": true,
+      "rejectionReason": "Selected and activated from hash-verified V1 edition bytes."
     },
     {
       "sourceId": "ntu-chinese-wordnet-2.0",

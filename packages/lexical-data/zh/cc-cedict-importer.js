@@ -3,8 +3,41 @@
 const { normalizeLexicalEntry } = require('../../contracts/lexical-contracts');
 const { canonicalJson, verifyInputFiles } = require('../shared/build-utils');
 
-const IMPORTER = Object.freeze({ id: 'halo-cc-cedict-importer', version: '1.0.0' });
+const IMPORTER = Object.freeze({ id: 'halo-cc-cedict-importer', version: '1.1.0' });
 const DERIVATION_ID = 'derived:cc-cedict-gloss-cues-v1';
+
+function validateCcCedictV1Header(text) {
+  if (typeof text !== 'string' && !Buffer.isBuffer(text)) {
+    throw new TypeError('header: must be a string or Buffer');
+  }
+  const source = Buffer.isBuffer(text) ? text.toString('utf8') : text;
+  if (/\[\[[^\]]+\]\]/.test(source)) {
+    throw new TypeError('header: Version 2 double-bracket pinyin syntax is not accepted by the V1 importer');
+  }
+  const fields = {};
+  for (const line of source.split(/\r?\n/)) {
+    const match = /^#!\s*([A-Za-z]+)=(.*)$/.exec(line.trim());
+    if (match) fields[match[1].toLowerCase()] = match[2].trim();
+  }
+  if (fields.version !== '1') throw new TypeError('header.version: CC-CEDICT Version 1 is required');
+  if (fields.subversion !== '0') throw new TypeError('header.subversion: CC-CEDICT V1 subversion 0 is required');
+  if (fields.format !== 'ts') throw new TypeError('header.format: Traditional-Simplified ts edition is required');
+  if (fields.charset !== 'UTF-8') throw new TypeError('header.charset: UTF-8 is required');
+  if (!/^\d+$/.test(fields.entries || '') || Number(fields.entries) < 1) {
+    throw new TypeError('header.entries: positive entry count is required');
+  }
+  if (!fields.date || Number.isNaN(Date.parse(fields.date))) {
+    throw new TypeError('header.date: release timestamp is required');
+  }
+  return Object.freeze({
+    version: fields.version,
+    subversion: fields.subversion,
+    format: fields.format,
+    charset: fields.charset,
+    entries: Number(fields.entries),
+    date: fields.date
+  });
+}
 
 function deriveCcCedictPos(glosses) {
   if (!Array.isArray(glosses) || glosses.length === 0 || glosses.some((gloss) => typeof gloss !== 'string' || !gloss.trim())) {
@@ -102,6 +135,16 @@ function importCcCedict(text, manifestValue) {
   if (verified.manifest.locale !== 'zh-Hant') {
     throw new TypeError('manifest.locale: CC-CEDICT importer requires zh-Hant');
   }
+  let verifiedHeader = null;
+  if (verified.manifest.source.retrievalMode === 'verified-release') {
+    if (verified.manifest.formatVersion !== 'CC-CEDICT-V1') {
+      throw new TypeError('manifest.formatVersion: CC-CEDICT-V1 is required');
+    }
+    verifiedHeader = validateCcCedictV1Header(verified.files[0].content);
+    if (verifiedHeader.date !== verified.manifest.version) {
+      throw new TypeError('manifest.version: must match the pinned CC-CEDICT header release timestamp');
+    }
+  }
 
   const path = verified.files[0].path;
   const entries = [];
@@ -144,6 +187,7 @@ function importCcCedict(text, manifestValue) {
     entries: Object.freeze(entries),
     rejected: Object.freeze(rejections),
     maxSurfaceLength,
+    format: verifiedHeader,
     receiptDraft: Object.freeze({
       datasetId: verified.manifest.datasetId,
       datasetVersion: verified.manifest.version,
@@ -160,5 +204,6 @@ module.exports = Object.freeze({
   IMPORTER,
   DERIVATION_ID,
   deriveCcCedictPos,
+  validateCcCedictV1Header,
   importCcCedict
 });

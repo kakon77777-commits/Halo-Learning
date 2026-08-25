@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "acquisition:cc-cedict-v1:2026-08-24T05:05:01Z",
+  "datasetId": "cc-cedict-v1-2026-08-24",
+  "upstreamVersion": "2026-08-24T05:05:01Z",
+  "releaseIdentity": "MDBG-2026-08-24T05:05:01Z-124925",
+  "formatVersion": "CC-CEDICT-V1",
+  "retrievedAt": "2026-08-25T08:00:00.000Z",
+  "verifiedAt": "2026-08-25T08:30:00.000Z",
+  "upstreamArtifact": {
+    "url": "https://www.mdbg.net/chinese/dictionary?page=cc-cedict",
+    "bytes": 9838770,
+    "sha256": "27b881871e6ca5cacbc376e5b0fd0d60187e8940f9e6b2b7ac83d3c1f05bf5d4"
+  },
+  "transport": {
+    "kind": "pinned-public-mirror",
+    "url": "https://github.com/rhcarvalho/cedict",
+    "revision": "6514f6822e8dc582fb924a00e1afdf5bbc66fe62",
+    "note": "Transport only; not treated as the canonical upstream source. The pinned commit subject is CC-CEDICT 2026-08-24T05:05:01Z."
+  },
+  "verification": {
+    "officialReleaseUrl": "https://www.mdbg.net/chinese/dictionary?page=cc-cedict",
+    "officialSyntaxUrl": "https://cc-cedict.org/wiki/syntax",
+    "releaseTimestamp": "2026-08-24T05:05:01Z",
+    "entryCount": 124925,
+    "headerVersion": "1",
+    "headerSubversion": "0",
+    "headerFormat": "ts",
+    "licenseId": "CC-BY-SA-4.0",
+    "fileHashChecked": true
+  }
+}
+

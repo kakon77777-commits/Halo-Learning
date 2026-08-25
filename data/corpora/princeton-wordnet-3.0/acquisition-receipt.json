@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "acquisition:princeton-wordnet-3.0:2026-08-25",
+  "datasetId": "princeton-wordnet-3.0",
+  "upstreamVersion": "3.0",
+  "releaseIdentity": "Princeton-WordNet-3.0",
+  "formatVersion": "WordNet-database-files-3.0",
+  "retrievedAt": "2026-08-25T08:00:00.000Z",
+  "verifiedAt": "2026-08-25T08:30:00.000Z",
+  "upstreamArtifact": {
+    "url": "https://wordnetcode.princeton.edu/3.0/WordNet-3.0.tar.gz",
+    "bytes": 11537239,
+    "sha256": "640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52"
+  },
+  "transport": {
+    "kind": "direct-upstream",
+    "url": "https://wordnetcode.princeton.edu/3.0/WordNet-3.0.tar.gz",
+    "revision": "WordNet-3.0.tar.gz@sha256:640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52",
+    "note": "Direct official download; extracted without preserving archive ownership metadata."
+  },
+  "verification": {
+    "officialIndexUrl": "https://wordnetcode.princeton.edu/3.0/",
+    "officialLicenseUrl": "https://wordnet.princeton.edu/documentation/wnlicens7wn",
+    "archiveAndFileHashesChecked": true,
+    "licenseMatchedBundledFile": true
+  }
+}
+

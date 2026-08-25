@@ -1,25 +1,50 @@
-# Princeton WordNet 3.0 — v0.2.0 source review
+# Princeton WordNet 3.0 — v0.3.0 activated source
 
-**Decision:** selected as the English importer target; upstream data is not bundled.
+**Decision:** selected, hash-verified, and bundled as the English lexical build
+input for Halo Learning v0.3.0.
 
-## Evidence
+## Upstream and license evidence
 
-- Project and download entry point: https://wordnet.princeton.edu/
-- Official WordNet 3.0 license: https://wordnet.princeton.edu/documentation/wnlicens7wn
-- Official `data.*` file format: https://wordnet.princeton.edu/documentation/wndb5wn
-- License identifier: `WordNet`.
-- Review date: 2026-08-25.
+- Dataset: Princeton WordNet 3.0.
+- Upstream version: `3.0`.
+- Release identity: `Princeton-WordNet-3.0`.
+- Database format identity: `WordNet-database-files-3.0`.
+- Official release index: https://wordnetcode.princeton.edu/3.0/
+- Official archive: https://wordnetcode.princeton.edu/3.0/WordNet-3.0.tar.gz
+- Official database format: https://wordnet.princeton.edu/documentation/wndb5wn
+- Official license: https://wordnet.princeton.edu/documentation/wnlicens7wn
+- Archive SHA-256: `640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52`.
+- Archive bytes: `11,537,239`.
+- Review and retrieval date: 2026-08-25.
 
-The official license allows use, copy, modification, and distribution without fee or royalty. Redistribution requires the WordNet copyright, license statements, and disclaimer to remain on every copy, including modified copies. Princeton's name may not be used for advertising or publicity.
+The official license permits use, copying, modification, and distribution
+without fee or royalty. Every copy or modification must retain the WordNet
+copyright, license, and disclaimer. Princeton University or Princeton may not
+be used in advertising or publicity for the distribution.
 
-## Acquisition and provenance policy
+The exact upstream `LICENSE` is bundled at
+`data/corpora/princeton-wordnet-3.0/LICENSE` and is itself pinned by SHA-256.
 
-1. The importer accepts only local, user-acquired WordNet 3.0 `data.noun`, `data.verb`, `data.adj`, and `data.adv` files.
-2. The build records byte length and SHA-256 for every file before parsing.
-3. The manifest pins version `3.0`, official source/format/license URLs, retrieval timestamp, and redistribution note.
-4. Any hash mismatch fails closed; the existing bootstrap dictionary remains available.
-5. This release contains only synthetic format fixtures and makes no claim about a full-corpus build.
+## Activated bytes and provenance
+
+The repository bundles the four `data.*` files, four morphology exception
+files, and the upstream license. Their individual byte counts and SHA-256 values
+are in:
+
+- `data/corpora/princeton-wordnet-3.0/dataset-manifest.json`;
+- `data/corpora/princeton-wordnet-3.0/acquisition-receipt.json`.
+
+The aggregate descriptor hash is
+`9c082f9c9d193e0458e89bc5a290757d2d9fec54c8bed54eb2f85ad588cf60a2`.
+Build tooling rechecks every file before parsing; any mismatch fails closed and
+does not disable the bootstrap dictionary.
 
 ## Parser boundary
 
-The v0.2.0 importer reads the documented synset offset, synset type, hexadecimal word count, word/lexical ID pairs, and gloss. It does not interpret pointers or verb frames. Unsupported or malformed records are rejected with line evidence rather than silently guessed.
+Importer `halo-wordnet-data-importer@1.1.0` reads documented synset records,
+maps WordNet synset types to Halo simplified POS, strips documented adjective
+markers while recording the transformation, and imports `*.exc` morphology as
+source-traceable evidence. Pointers, frames, and contextual word-sense
+disambiguation are not asserted in this release.
+
+The dataset is lexical evidence, not production-grade POS/parser accuracy.

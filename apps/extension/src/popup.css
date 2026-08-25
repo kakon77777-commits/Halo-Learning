@@ -12,6 +12,9 @@ h1 { margin: 5px 0 2px; font-size: 22px; line-height: 1.1; }
 h1 span { font-size: 13px; font-weight: 600; opacity: .55; }
 header p { margin: 0; font-size: 12px; opacity: .65; }
 .group { padding: 11px 0; border-bottom: 1px solid #e2e2dc; }
+.advanced summary { cursor: pointer; font-size: 12px; font-weight: 750; padding: 3px 1px 6px; }
+.advanced:not([open]) { padding-bottom: 8px; }
+.unavailable { opacity: .48; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 5px 1px; }
 .row span, .stack { display: grid; gap: 2px; }
 strong { font-size: 13px; font-weight: 700; }

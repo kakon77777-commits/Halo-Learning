@@ -15,7 +15,7 @@
     const marked = (Array.isArray(renderPlan) ? renderPlan : [])
       .filter((item) => item && item.marked && Number.isInteger(item.start) && Number.isInteger(item.end))
       .filter((item) => item.start >= 0 && item.end <= source.length && item.end > item.start)
-      .sort((a, b) => a.start - b.start || a.end - b.end);
+      .sort((left, right) => left.start - right.start || left.end - right.end);
 
     const out = [];
     let cursor = 0;
@@ -30,7 +30,9 @@
         colorClass: item.colorClass,
         labelPosition: item.labelPosition,
         confidence: item.confidence,
-        source: item.source
+        metaLabel: item.metaLabel,
+        glossHint: item.glossHint,
+        chunkClass: item.chunkClass
       });
       cursor = item.end;
     }
@@ -48,12 +50,36 @@
     return false;
   }
 
+  function bootstrapAnnotationSets(texts, settings, Dictionary, Semantic, generatedAt) {
+    if (!Dictionary || typeof Dictionary.createBootstrapDictionaryProvider !== 'function') {
+      throw new TypeError('Dictionary bootstrap provider is unavailable');
+    }
+    if (!Semantic || typeof Semantic.createSemanticEngine !== 'function') {
+      throw new TypeError('Semantic engine is unavailable');
+    }
+    const provider = Dictionary.createBootstrapDictionaryProvider();
+    const engine = Semantic.createSemanticEngine({ provider });
+    return Object.freeze((Array.isArray(texts) ? texts : []).map((text) => engine.annotateText(text, {
+      languageMode: settings && settings.languageMode ? settings.languageMode : 'both',
+      generatedAt
+    })));
+  }
+
   function initBrowser() {
     if (!root.document || !root.chrome || !root.chrome.runtime) return;
     if (root.__HALO_CONTENT_INITIALIZED__) return;
     root.__HALO_CONTENT_INITIALIZED__ = true;
 
-    let lastStatus = Object.freeze({ active: false, textNodesVisited: 0, markedTokens: 0, lastError: null });
+    const emptyStatus = () => Object.freeze({
+      active: false,
+      textNodesVisited: 0,
+      semanticTokens: 0,
+      markedTokens: 0,
+      providerMode: null,
+      lastError: null
+    });
+    let lastStatus = emptyStatus();
+    let lastAnnotationSets = Object.freeze([]);
 
     function isVisible(element) {
       if (!element || !root.getComputedStyle) return true;
@@ -82,6 +108,17 @@
       return nodes;
     }
 
+    function isSensitivePage() {
+      const location = root.location;
+      if (!location || !['http:', 'https:'].includes(location.protocol)) return true;
+      if (/(?:^|\/)(?:login|signin|sign-in|auth|checkout|payment|banking)(?:\/|$)/i.test(location.pathname || '')) {
+        return true;
+      }
+      return Boolean(root.document.querySelector(
+        'input[type="password"], input[autocomplete="current-password"], input[autocomplete="new-password"], input[autocomplete="one-time-code"]'
+      ));
+    }
+
     function removeMarking() {
       const parents = new Set();
       const markedNodes = Array.from(root.document.querySelectorAll('[data-halo-token="1"]'));
@@ -92,7 +129,8 @@
         parent.replaceChild(root.document.createTextNode(span.dataset.haloOriginal || span.textContent || ''), span);
       }
       for (const parent of parents) if (typeof parent.normalize === 'function') parent.normalize();
-      lastStatus = Object.freeze({ active: false, textNodesVisited: 0, markedTokens: 0, lastError: null });
+      lastAnnotationSets = Object.freeze([]);
+      lastStatus = emptyStatus();
       return lastStatus;
     }
 
@@ -100,12 +138,18 @@
       const span = root.document.createElement('span');
       span.dataset.haloToken = '1';
       span.dataset.haloOriginal = segment.text;
-      if (segment.pos) span.dataset.haloSemanticPos = segment.pos;
       if (segment.label) span.dataset.haloPos = segment.label;
+      if (segment.metaLabel) span.dataset.haloMeta = segment.metaLabel;
+      if (segment.glossHint) {
+        span.dataset.haloGloss = segment.glossHint;
+        span.title = segment.glossHint;
+      }
       if (Number.isFinite(segment.confidence)) span.dataset.haloConfidence = String(segment.confidence);
       span.className = 'halo-token';
       if (segment.label) span.classList.add(`halo-label-${segment.labelPosition || 'top-right'}`);
+      if (segment.metaLabel) span.classList.add('halo-has-meta');
       if (segment.colorClass) span.classList.add(segment.colorClass);
+      if (segment.chunkClass) span.classList.add(segment.chunkClass);
       span.textContent = segment.text;
       return span;
     }
@@ -126,44 +170,104 @@
       return count;
     }
 
-    function applyMarking(rawSettings) {
+    function unmarkPlanItem(item) {
+      const decorations = {};
+      for (const name of Object.keys(item.decorations || {})) decorations[name] = null;
+      return Object.freeze({
+        ...item,
+        marked: false,
+        decorations: Object.freeze(decorations),
+        label: null,
+        colorClass: null,
+        metaLabel: null,
+        glossHint: null,
+        chunkClass: null
+      });
+    }
+
+    function capPlan(plan, remaining) {
+      let used = 0;
+      return plan.map((item) => {
+        if (!item.marked) return item;
+        if (used < remaining) {
+          used += 1;
+          return item;
+        }
+        return unmarkPlanItem(item);
+      });
+    }
+
+    async function requestAnnotations(texts, settings, Dictionary, Semantic) {
+      const generatedAt = new Date().toISOString();
+      try {
+        const response = await root.chrome.runtime.sendMessage({
+          type: 'HALO_ANNOTATE_BATCH',
+          texts,
+          options: {
+            languageMode: settings.languageMode,
+            generatedAt
+          }
+        });
+        if (!response || response.error || !Array.isArray(response.annotationSets) || response.annotationSets.length !== texts.length) {
+          throw new Error('Local semantic service returned an invalid response');
+        }
+        return Object.freeze({
+          annotationSets: Object.freeze(response.annotationSets),
+          providerMode: response.status && response.status.mode ? response.status.mode : 'ready'
+        });
+      } catch (_error) {
+        return Object.freeze({
+          annotationSets: bootstrapAnnotationSets(texts, settings, Dictionary, Semantic, generatedAt),
+          providerMode: 'content-bootstrap'
+        });
+      }
+    }
+
+    async function applyMarking(rawSettings) {
       try {
         const Settings = root.HaloSettings;
-        const Linguistics = root.HaloLinguistics;
+        const Dictionary = root.HaloDictionary;
+        const Semantic = root.HaloSemanticAnnotations;
         const Projection = root.HaloProjection;
-        if (!Settings || !Linguistics || !Projection) throw new Error('Halo shared modules are not loaded');
+        if (!Settings || !Dictionary || !Semantic || !Projection) throw new Error('Halo shared modules are not loaded');
         const settings = Settings.normalizeSettings(rawSettings);
         removeMarking();
         if (!settings.enabled) return lastStatus;
+        if (isSensitivePage()) {
+          lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'SENSITIVE_PAGE_BLOCKED' });
+          return lastStatus;
+        }
 
         const textNodes = collectTextNodes(settings.maxTextNodes);
+        const texts = textNodes.map((node) => node.nodeValue || '');
+        const result = await requestAnnotations(texts, settings, Dictionary, Semantic);
+        lastAnnotationSets = result.annotationSets;
         let markedTokens = 0;
-        for (const node of textNodes) {
+        let semanticTokens = 0;
+        for (let index = 0; index < textNodes.length; index += 1) {
           if (markedTokens >= settings.maxMarkedTokens) break;
-          const text = node.nodeValue || '';
-          const semanticTokens = Linguistics.tokenize(text, settings.languageMode);
-          if (!semanticTokens.length) continue;
-          let plan = Projection.createMarkingPlan(semanticTokens, settings);
+          const node = textNodes[index];
+          const text = texts[index];
+          const semanticSet = result.annotationSets[index];
+          const semanticValues = semanticSet && Array.isArray(semanticSet.tokens) ? semanticSet.tokens : [];
+          semanticTokens += semanticValues.length;
+          if (!semanticValues.length) continue;
+          let plan = Projection.createMarkingPlan(semanticValues, settings);
           const remaining = settings.maxMarkedTokens - markedTokens;
-          if (plan.filter((item) => item.marked).length > remaining) {
-            let used = 0;
-            plan = plan.map((item) => {
-              if (!item.marked) return item;
-              if (used < remaining) { used += 1; return item; }
-              return { ...item, marked: false, label: null, colorClass: null };
-            });
-          }
+          if (plan.filter((item) => item.marked).length > remaining) plan = capPlan(plan, remaining);
           markedTokens += replaceTextNode(node, buildSegments(text, plan));
         }
         lastStatus = Object.freeze({
           active: markedTokens > 0,
           textNodesVisited: textNodes.length,
+          semanticTokens,
           markedTokens,
+          providerMode: result.providerMode,
           lastError: null
         });
         return lastStatus;
-      } catch (error) {
-        lastStatus = Object.freeze({ active: false, textNodesVisited: 0, markedTokens: 0, lastError: String(error && error.message ? error.message : error) });
+      } catch (_error) {
+        lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
         return lastStatus;
       }
     }
@@ -171,8 +275,8 @@
     root.chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (!message || !message.type) return false;
       if (message.type === 'HALO_APPLY_MARKING') {
-        sendResponse(applyMarking(message.settings || {}));
-        return false;
+        applyMarking(message.settings || {}).then((status) => sendResponse(status));
+        return true;
       }
       if (message.type === 'HALO_REMOVE_MARKING') {
         sendResponse(removeMarking());
@@ -187,5 +291,5 @@
   }
 
   initBrowser();
-  return Object.freeze({ buildSegments, shouldSkipElement });
+  return Object.freeze({ bootstrapAnnotationSets, buildSegments, shouldSkipElement });
 });

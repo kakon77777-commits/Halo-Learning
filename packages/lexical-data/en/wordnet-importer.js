@@ -3,8 +3,14 @@
 const { normalizeLexicalEntry } = require('../../contracts/lexical-contracts');
 const { verifyInputFiles } = require('../shared/build-utils');
 
-const IMPORTER = Object.freeze({ id: 'halo-wordnet-data-importer', version: '1.0.0' });
+const IMPORTER = Object.freeze({ id: 'halo-wordnet-data-importer', version: '1.1.0' });
 const POS_BY_SYNSET_TYPE = Object.freeze({ n: 'n', v: 'v', a: 'adj', s: 'adj', r: 'adv' });
+const POS_BY_EXCEPTION_ROLE = Object.freeze({
+  'noun-exceptions': 'n',
+  'verb-exceptions': 'v',
+  'adjective-exceptions': 'adj',
+  'adverb-exceptions': 'adv'
+});
 
 function reject(path, lineNumber, code, offset) {
   return Object.freeze({
@@ -61,10 +67,12 @@ function parseCoreRecord(rawLine, path, lineNumber) {
 }
 
 function entryFromWord(word, wordIndex, record, context) {
-  const surface = word.replaceAll('_', ' ');
+  const withoutMarker = word.replace(/\((?:a|p|ip)\)$/i, '');
+  const surface = withoutMarker.replaceAll('_', ' ');
   const fieldRef = `source:${context.path}:${context.lineNumber}`;
   const transformations = ['wordnet-ss-type-map:v1'];
-  if (surface !== word) transformations.push('wordnet-underscores-to-spaces:v1');
+  if (withoutMarker !== word) transformations.push('wordnet-adjective-marker-strip:v1');
+  if (surface !== withoutMarker) transformations.push('wordnet-underscores-to-spaces:v1');
   return normalizeLexicalEntry({
     schemaVersion: 1,
     entryId: `${context.manifest.datasetId}:${context.manifest.version}:${context.path}:${record.offset}:${wordIndex}`,
@@ -99,6 +107,34 @@ function entryFromWord(word, wordIndex, record, context) {
   });
 }
 
+function parseExceptionFile(file, manifest, rejected) {
+  const pos = POS_BY_EXCEPTION_ROLE[file.role];
+  const records = [];
+  const lines = file.content.toString('utf8').split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const rawLine = lines[lineIndex].trim();
+    const lineNumber = lineIndex + 1;
+    if (!rawLine) continue;
+    const fields = rawLine.split(/\s+/).map((field) => field.replaceAll('_', ' '));
+    if (fields.length < 2 || fields.some((field) => !field)) {
+      rejected.push(reject(file.path, lineNumber, 'MALFORMED_EXCEPTION_RECORD'));
+      continue;
+    }
+    records.push(Object.freeze({
+      inflected: fields[0].toLocaleLowerCase('en-US'),
+      lemmas: Object.freeze(fields.slice(1).map((lemma) => lemma.toLocaleLowerCase('en-US'))),
+      pos,
+      source: Object.freeze({
+        datasetId: manifest.datasetId,
+        version: manifest.version,
+        recordRef: `${file.path}:${lineNumber}`,
+        lineNumber
+      })
+    }));
+  }
+  return records;
+}
+
 function compareEntries(left, right) {
   return left.normalizedSurface.localeCompare(right.normalizedSurface, 'en') ||
     left.pos.localeCompare(right.pos) || left.entryId.localeCompare(right.entryId);
@@ -109,8 +145,14 @@ function importWordNetFiles(files, manifestValue) {
   if (verified.manifest.locale !== 'en') throw new TypeError('manifest.locale: WordNet importer requires en');
   const entries = [];
   const rejected = [];
+  const morphologyExceptions = [];
 
   for (const file of verified.files) {
+    if (file.role === 'license') continue;
+    if (Object.hasOwn(POS_BY_EXCEPTION_ROLE, file.role)) {
+      morphologyExceptions.push(...parseExceptionFile(file, verified.manifest, rejected));
+      continue;
+    }
     const lines = file.content.toString('utf8').split(/\r?\n/);
     for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
       const rawLine = lines[lineIndex];
@@ -133,6 +175,8 @@ function importWordNetFiles(files, manifestValue) {
 
   entries.sort(compareEntries);
   rejected.sort((left, right) => left.path.localeCompare(right.path) || left.lineNumber - right.lineNumber);
+  morphologyExceptions.sort((left, right) => left.inflected.localeCompare(right.inflected, 'en') ||
+    left.pos.localeCompare(right.pos) || left.source.recordRef.localeCompare(right.source.recordRef));
   const receiptDraft = Object.freeze({
     datasetId: verified.manifest.datasetId,
     datasetVersion: verified.manifest.version,
@@ -145,6 +189,7 @@ function importWordNetFiles(files, manifestValue) {
   return Object.freeze({
     entries: Object.freeze(entries),
     rejected: Object.freeze(rejected),
+    morphologyExceptions: Object.freeze(morphologyExceptions),
     receiptDraft
   });
 }

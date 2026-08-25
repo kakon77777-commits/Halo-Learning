@@ -60,3 +60,20 @@ test('dictionary provider can supply future imported bilingual entries without c
   assert.equal(provider.lookup('量子', 'zh').gloss, 'quantum');
   assert.equal(provider.lookup('missing', 'en'), null);
 });
+
+test('packaged runtime failure retains a built-in English and Traditional-Chinese bootstrap provider', () => {
+  const { Dictionary } = loadModules();
+  const provider = Dictionary.createBootstrapDictionaryProvider();
+
+  assert.equal(provider.lookup('language', 'en').pos, 'n');
+  assert.equal(provider.lookup('is', 'en').lemma, 'be');
+  assert.equal(provider.lookup('has', 'en').lemma, 'have');
+  assert.equal(provider.lookup('學習', 'zh-Hant').pos, 'v');
+  assert.equal(provider.lookup('這個', 'zh-Hant').pos, 'det');
+  assert.equal(provider.lookup('本地', 'zh-Hant').pos, 'adj');
+  assert.equal(provider.lookup('分詞', 'zh-Hant').pos, 'n');
+  assert.equal(provider.lookup('新詞', 'zh-Hant').pos, 'n');
+  assert.equal(provider.lookup('單字', 'zh-Hant').pos, 'n');
+  assert.equal(provider.longestMatch('正在學習', 2, 'zh-Hant').surface, '學習');
+  assert.equal(provider.lookup('xqzvoria', 'en'), null);
+});

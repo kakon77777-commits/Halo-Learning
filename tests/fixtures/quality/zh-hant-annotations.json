@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "halo-v0.3.0-zh-hant-semantic-quality",
+  "fixtureVersion": "1.0.0",
+  "locale": "zh-Hant",
+  "license": "CC0-1.0",
+  "annotationGuideline": "Halo Learning simplified POS v1; authored Traditional-Chinese test sentences; ambiguous tokens are labelled by sentence use.",
+  "cases": [
+    {
+      "id": "zh-learning",
+      "text": "我正在學習中文。",
+      "tokens": [
+        { "surface": "我", "simplifiedPos": "pron" },
+        { "surface": "正在", "simplifiedPos": "adv" },
+        { "surface": "學習", "simplifiedPos": "v", "simplified": "学习" },
+        { "surface": "中文", "simplifiedPos": "n" }
+      ]
+    },
+    {
+      "id": "zh-reading",
+      "text": "我們需要閱讀英文。",
+      "tokens": [
+        { "surface": "我們", "simplifiedPos": "pron" },
+        { "surface": "需要", "simplifiedPos": "v" },
+        { "surface": "閱讀", "simplifiedPos": "v", "simplified": "阅读" },
+        { "surface": "英文", "simplifiedPos": "n" }
+      ]
+    },
+    {
+      "id": "zh-labels",
+      "text": "這個系統顯示詞性標籤。",
+      "tokens": [
+        { "surface": "這個", "simplifiedPos": "det" },
+        { "surface": "系統", "simplifiedPos": "n", "simplified": "系统" },
+        { "surface": "顯示", "simplifiedPos": "v", "simplified": "显示" },
+        { "surface": "詞性", "simplifiedPos": "n", "simplified": "词性" },
+        { "surface": "標籤", "simplifiedPos": "n", "simplified": "标签" }
+      ]
+    },
+    {
+      "id": "zh-complete",
+      "text": "他已經完成學習。",
+      "tokens": [
+        { "surface": "他", "simplifiedPos": "pron" },
+        { "surface": "已經", "simplifiedPos": "adv", "simplified": "已经" },
+        { "surface": "完成", "simplifiedPos": "v" },
+        { "surface": "學習", "simplifiedPos": "v" }
+      ]
+    },
+    {
+      "id": "zh-local-data",
+      "text": "本地字典包含語言資料。",
+      "tokens": [
+        { "surface": "本地", "simplifiedPos": "adj" },
+        { "surface": "字典", "simplifiedPos": "n" },
+        { "surface": "包含", "simplifiedPos": "v" },
+        { "surface": "語言", "simplifiedPos": "n", "simplified": "语言" },
+        { "surface": "資料", "simplifiedPos": "n", "simplified": "资料" }
+      ]
+    },
+    {
+      "id": "zh-ambiguous-mark",
+      "text": "你可以使用簡單標記。",
+      "tokens": [
+        { "surface": "你", "simplifiedPos": "pron" },
+        { "surface": "可以", "simplifiedPos": "modal" },
+        { "surface": "使用", "simplifiedPos": "v" },
+        { "surface": "簡單", "simplifiedPos": "adj", "simplified": "简单" },
+        { "surface": "標記", "simplifiedPos": "n", "simplified": "标记" }
+      ]
+    },
+    {
+      "id": "zh-segmentation",
+      "text": "中文句子需要清楚分詞。",
+      "tokens": [
+        { "surface": "中文", "simplifiedPos": "n" },
+        { "surface": "句子", "simplifiedPos": "n" },
+        { "surface": "需要", "simplifiedPos": "v" },
+        { "surface": "清楚", "simplifiedPos": "adj" },
+        { "surface": "分詞", "simplifiedPos": "n", "simplified": "分词" }
+      ]
+    },
+    {
+      "id": "zh-ambiguous-learning",
+      "text": "這是重要的學習模型。",
+      "tokens": [
+        { "surface": "這", "simplifiedPos": "pron" },
+        { "surface": "是", "simplifiedPos": "aux" },
+        { "surface": "重要", "simplifiedPos": "adj" },
+        { "surface": "的", "simplifiedPos": "det" },
+        { "surface": "學習", "simplifiedPos": "n" },
+        { "surface": "模型", "simplifiedPos": "n" }
+      ]
+    },
+    {
+      "id": "zh-story",
+      "text": "故事顯示新詞和顏色。",
+      "tokens": [
+        { "surface": "故事", "simplifiedPos": "n" },
+        { "surface": "顯示", "simplifiedPos": "v" },
+        { "surface": "新詞", "simplifiedPos": "n", "simplified": "新词" },
+        { "surface": "和", "simplifiedPos": "conj" },
+        { "surface": "顏色", "simplifiedPos": "n", "simplified": "颜色" }
+      ]
+    },
+    {
+      "id": "zh-word",
+      "text": "我理解這個英文單字。",
+      "tokens": [
+        { "surface": "我", "simplifiedPos": "pron" },
+        { "surface": "理解", "simplifiedPos": "v" },
+        { "surface": "這個", "simplifiedPos": "det" },
+        { "surface": "英文", "simplifiedPos": "n" },
+        { "surface": "單字", "simplifiedPos": "n", "simplified": "单字" }
+      ]
+    },
+    {
+      "id": "zh-unknown",
+      "text": "𠀀",
+      "tokens": [
+        { "surface": "𠀀", "simplifiedPos": "x", "unknown": true }
+      ]
+    }
+  ]
+}

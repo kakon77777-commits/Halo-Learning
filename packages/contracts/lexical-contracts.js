@@ -104,7 +104,12 @@ function normalizeDatasetManifest(value) {
   const raw = objectAt(value, 'manifest');
   const source = objectAt(raw.source, 'manifest.source');
   if (!Array.isArray(raw.files) || raw.files.length === 0) fail('manifest.files', 'must be a non-empty array');
-  return deepFreeze({
+  const retrievalMode = enumAt(
+    source.retrievalMode,
+    ['user-supplied', 'verified-release', 'synthetic-fixture'],
+    'manifest.source.retrievalMode'
+  );
+  const normalized = {
     schemaVersion: schemaVersionAt(raw.schemaVersion, 'manifest.schemaVersion'),
     datasetId: stringAt(raw.datasetId, 'manifest.datasetId'),
     name: stringAt(raw.name, 'manifest.name'),
@@ -114,11 +119,7 @@ function normalizeDatasetManifest(value) {
       publisher: stringAt(source.publisher, 'manifest.source.publisher'),
       canonicalUrl: stringAt(source.canonicalUrl, 'manifest.source.canonicalUrl'),
       acquiredAt: dateAt(source.acquiredAt, 'manifest.source.acquiredAt', false),
-      retrievalMode: enumAt(
-        source.retrievalMode,
-        ['user-supplied', 'verified-release', 'synthetic-fixture'],
-        'manifest.source.retrievalMode'
-      )
+      retrievalMode
     },
     license: normalizeLicenseRecord(raw.license),
     hash: hashAt(raw.hash, 'manifest.hash'),
@@ -133,7 +134,33 @@ function normalizeDatasetManifest(value) {
     }),
     bundled: booleanAt(raw.bundled, 'manifest.bundled'),
     redistributionNote: stringAt(raw.redistributionNote, 'manifest.redistributionNote')
-  });
+  };
+  if (retrievalMode === 'verified-release') {
+    normalized.releaseIdentity = stringAt(raw.releaseIdentity, 'manifest.releaseIdentity');
+    normalized.formatVersion = stringAt(raw.formatVersion, 'manifest.formatVersion');
+    normalized.attributionRequirements = stringsAt(
+      raw.attributionRequirements,
+      'manifest.attributionRequirements',
+      { nonEmpty: true }
+    );
+    normalized.redistributionRequirements = stringsAt(
+      raw.redistributionRequirements,
+      'manifest.redistributionRequirements',
+      { nonEmpty: true }
+    );
+    const transport = objectAt(source.transport, 'manifest.source.transport');
+    normalized.source.transport = {
+      kind: enumAt(
+        transport.kind,
+        ['direct-upstream', 'pinned-public-mirror'],
+        'manifest.source.transport.kind'
+      ),
+      url: stringAt(transport.url, 'manifest.source.transport.url'),
+      revision: stringAt(transport.revision, 'manifest.source.transport.revision'),
+      note: stringAt(transport.note, 'manifest.source.transport.note')
+    };
+  }
+  return deepFreeze(normalized);
 }
 
 function normalizeLexicalEntry(value) {

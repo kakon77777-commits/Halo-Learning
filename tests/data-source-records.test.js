@@ -26,7 +26,7 @@ test('source gate selects one commercially redistributable target for each scope
   assert.deepEqual(audit.selected.map((record) => record.locale), ['en', 'zh-Hant']);
   assert.ok(audit.selected.every((record) => record.commercialUseAllowed));
   assert.ok(audit.selected.every((record) => record.redistributionAllowed));
-  assert.ok(audit.selected.every((record) => record.bundled === false));
+  assert.ok(audit.selected.every((record) => record.bundled === true));
 });
 
 test('selected source records retain official source, license, format, and acquisition policy evidence', () => {
@@ -39,7 +39,26 @@ test('selected source records retain official source, license, format, and acqui
     assert.ok(record.redistributionRequirements.length >= 1);
     assert.ok(record.versionPolicy.length >= 1);
     assert.equal(record.verifiedAt, '2026-08-25');
+    assert.ok(record.upstreamVersion.length >= 1);
+    assert.ok(record.releaseIdentity.length >= 1);
+    assert.ok(record.formatVersion.length >= 1);
+    assert.match(record.acquisitionReceipt, /^data\/corpora\//);
+    assert.match(record.datasetManifest, /^data\/corpora\//);
+    assert.match(record.sha256, /^[a-f0-9]{64}$/);
   }
+});
+
+test('CC-CEDICT release identity is distinct from its pinned V1 syntax identity', () => {
+  const { SourceGate, records } = load();
+  const cedict = SourceGate.auditSourceRecords(records).selected
+    .find((record) => record.sourceId === 'cc-cedict-verified-release');
+
+  assert.equal(cedict.upstreamVersion, '2026-08-24T05:05:01Z');
+  assert.equal(cedict.releaseIdentity, 'MDBG-2026-08-24T05:05:01Z-124925');
+  assert.equal(cedict.formatVersion, 'CC-CEDICT-V1');
+  assert.notEqual(cedict.releaseIdentity, cedict.formatVersion);
+  assert.equal(cedict.transport.kind, 'pinned-public-mirror');
+  assert.equal(cedict.transport.revision, '6514f6822e8dc582fb924a00e1afdf5bbc66fe62');
 });
 
 test('source gate refuses a selected noncommercial or nonredistributable dataset', () => {

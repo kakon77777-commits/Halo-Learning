@@ -1,0 +1,317 @@
+release:
+  version: v0.3.0
+  name: Semantic Annotation Engine
+  status: complete
+baseline:
+  repository: kakon77777-commits/Halo-Learning
+  base_branch: main
+  base_head: cc844f37ac1da0ccfbdb85e0d8448245132c5e3b
+  working_branch: workbench/v0.3.0-semantic-annotation
+  working_tree_before: clean
+  tests_before: "node --test tests/*.test.js: 53/53 PASS; normal exit 0"
+  validation_before: "node scripts/validate-v0.2.0.js: 10/10 gates PASS; normal exit 0"
+datasets:
+  - name: Princeton WordNet 3.0
+    upstream_version: "3.0"
+    release_identity: Princeton-WordNet-3.0
+    format_version: WordNet-database-files-3.0
+    source: https://wordnetcode.princeton.edu/3.0/WordNet-3.0.tar.gz
+    license: WordNet-3.0
+    manifest_sha256: 9c082f9c9d193e0458e89bc5a290757d2d9fec54c8bed54eb2f85ad588cf60a2
+    upstream_archive_sha256: 640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52
+    importer_version: 1.1.0
+  - name: CC-CEDICT verified MDBG release
+    upstream_version: "2026-08-24T05:05:01Z"
+    release_identity: MDBG-2026-08-24T05:05:01Z-124925
+    format_version: CC-CEDICT-V1
+    source: https://www.mdbg.net/chinese/dictionary?page=cc-cedict
+    transport: "pinned mirror revision 6514f6822e8dc582fb924a00e1afdf5bbc66fe62; matched to official release"
+    license: CC-BY-SA-4.0
+    manifest_sha256: 205018c6e766de913f808a5a8471163ceca96ea8cca053883baba8bd55545541
+    dictionary_sha256: 27b881871e6ca5cacbc376e5b0fd0d60187e8940f9e6b2b7ac83d3c1f05bf5d4
+    importer_version: 1.1.0
+tasks:
+  - task_id: V030-01
+    status: complete
+    files_changed:
+      - packages/contracts/semantic-contracts.js
+      - packages/contracts/schemas/semantic-annotation.schema.json
+      - packages/contracts/schemas/semantic-token.schema.json
+      - packages/contracts/schemas/annotation-set.schema.json
+      - packages/contracts/schemas/marking-profile.schema.json
+      - tests/fixtures/semantic-contracts.js
+      - tests/semantic-contracts.test.js
+    contracts_changed:
+      - SemanticAnnotation/v1
+      - SemanticToken/v1
+      - AnnotationSet/v1
+      - MarkingProfile/v2
+    migrations_added:
+      - "Explicit legacy v0.1 token to SemanticToken/v1 adapter; no persistence migration."
+    tests_added:
+      - tests/semantic-contracts.test.js
+    tests_passed:
+      - "RED: missing semantic contract module produced the expected MODULE_NOT_FOUND failure."
+      - "GREEN: semantic-contracts.test.js 7/7 PASS."
+    acceptance_evidence:
+      - "Annotations retain type, value, confidence, source/provider, algorithm version, optional dataset reference, generatedAt, and provenance."
+      - "AnnotationSet validates deterministic non-overlapping offsets and recursively freezes canonical values."
+    known_limitations:
+      - "JSON Schemas are handoff artifacts; dependency-free runtime normalizers are the executable contract gate."
+    security_notes:
+      - "Contracts reject non-finite, circular, prototype-bearing, function, and unsafe-key values."
+    next_dependencies:
+      - V030-02
+      - V030-03
+      - V030-05
+
+  - task_id: V030-02
+    status: complete
+    files_changed:
+      - data/corpora/princeton-wordnet-3.0/
+      - packages/lexical-data/en/wordnet-importer.js
+      - packages/lexical-index/runtime-lexical-index.js
+      - apps/extension/src/shared/runtime-index-browser.js
+      - apps/extension/src/shared/runtime-dictionary-provider.js
+      - apps/extension/src/shared/semantic-annotations.js
+      - scripts/build-lexical-runtime.js
+      - tests/english-semantic-annotations.test.js
+      - tests/runtime-lexical-index.test.js
+      - tests/runtime-index-build.test.js
+      - tests/runtime-dictionary-provider.test.js
+    contracts_changed:
+      - "DictionaryProvider lookupAll/lookupMorphology evidence path; core remains provider-neutral."
+      - "Compact runtime lexical index v1 envelope."
+    migrations_added: []
+    tests_added:
+      - tests/english-semantic-annotations.test.js
+      - tests/runtime-lexical-index.test.js
+      - tests/runtime-index-build.test.js
+      - tests/runtime-dictionary-provider.test.js
+    tests_passed:
+      - "English semantic annotations 8/8 PASS."
+      - "Runtime loader/build/provider focused suites PASS."
+      - "Verified WordNet corpus tests PASS."
+    acceptance_evidence:
+      - "English output retains token offsets, lemma, simplified POS, morphology, lexical/gloss refs, confidence, provider, algorithm, dataset, and provenance."
+      - "Closed-class, plural/object, auxiliary/participle, adjective/noun, and unknown ambiguity fixtures are deterministic."
+      - "Unknown suffix-shaped words stay x with no fabricated lemma or lexical reference."
+      - "Distinct same-surface/same-POS WordNet senses retain separate lexical and gloss references."
+      - "The browser loader validates packaged bytes without sorting runtime row arrays, enforces the complete Node-equivalent dataset/license/verified-release evidence boundary, and deep-freezes verified provenance."
+    known_limitations:
+      - "Context selection and grammar are bounded deterministic baselines, not broad-domain parsing claims."
+    security_notes:
+      - "Runtime index integrity is checked before lookup; provider failures expose sanitized codes only."
+    next_dependencies:
+      - V030-04
+      - V030-07
+
+  - task_id: V030-03
+    status: complete
+    files_changed:
+      - data/corpora/cc-cedict-v1-2026-08-24/
+      - packages/lexical-data/zh/cc-cedict-importer.js
+      - apps/extension/src/shared/dictionary-provider.js
+      - apps/extension/src/shared/runtime-dictionary-provider.js
+      - apps/extension/src/shared/semantic-annotations.js
+      - tests/chinese-semantic-annotations.test.js
+      - tests/cc-cedict-importer.test.js
+      - tests/verified-corpus.test.js
+    contracts_changed:
+      - "CC-CEDICT release identity is distinct from pinned CC-CEDICT-V1 format identity."
+      - "Traditional/Simplified, pinyin, lexical/gloss, and conservative POS evidence remain separate annotations."
+    migrations_added: []
+    tests_added:
+      - tests/chinese-semantic-annotations.test.js
+      - tests/verified-corpus.test.js
+    tests_passed:
+      - "Traditional-Chinese semantic annotations 6/6 PASS."
+      - "CC-CEDICT importer and verified-corpus suites PASS."
+    acceptance_evidence:
+      - "Deterministic longest-match returns exact UTF-16 offsets and source-traceable lexical evidence."
+      - "Curated POS supplementation does not replace CC-CEDICT lexical truth; uncertain lexical POS remains visible as a candidate."
+      - "Unknown Han text falls back one code point at a time without invented lexical evidence."
+      - "Mixed-script CC-CEDICT entries own their longest-match span once in bilingual mode, preventing overlapping English sub-tokens."
+    known_limitations:
+      - "CC-CEDICT is not a comprehensive POS corpus; ambiguous context remains conservatively incomplete."
+    security_notes:
+      - "V2 syntax is rejected because this release claims only a verified V1 parser."
+    next_dependencies:
+      - V030-04
+      - V030-07
+
+  - task_id: V030-04
+    status: complete
+    files_changed:
+      - apps/extension/src/shared/grammar-annotations.js
+      - tests/grammar-annotations.test.js
+    contracts_changed:
+      - "Optional grammarRole, tenseAspect, and chunk annotations use the canonical evidence contract."
+    migrations_added: []
+    tests_added:
+      - tests/grammar-annotations.test.js
+    tests_passed:
+      - "Grammar annotations 7/7 PASS."
+    acceptance_evidence:
+      - "Supported English subject/predicate/object, auxiliary, chunk, simple-present, progressive, and perfect patterns retain rule provenance."
+      - "Insufficient patterns and all Chinese grammar claims are omitted rather than fabricated."
+      - "Sentence punctuation and non-English tokens form hard grammar/chunk boundaries."
+    known_limitations:
+      - "The grammar layer covers only explicit fixture-backed English patterns."
+    security_notes:
+      - "Grammar annotation returns a new immutable set and never overwrites lexical semantics."
+    next_dependencies:
+      - V030-05
+
+  - task_id: V030-05
+    status: complete
+    files_changed:
+      - apps/extension/src/shared/projection.js
+      - apps/extension/src/shared/settings.js
+      - apps/extension/src/shared/profile-controls.js
+      - apps/extension/src/content.js
+      - apps/extension/src/content.css
+      - apps/extension/src/popup.html
+      - apps/extension/src/popup.js
+      - tests/projection.test.js
+      - tests/source-contract.test.js
+    contracts_changed:
+      - "MarkingProfile/v2 has nine explicit independent channel switches."
+      - "RenderPlan decorations are typed projections and are never canonical semantic evidence."
+    migrations_added: []
+    tests_added:
+      - "Projection channel selection, semantic immutability, and all-off zero-decoration cases."
+      - "Sensitive-page privacy source gate."
+    tests_passed:
+      - "Projection suite 11/11 PASS."
+      - "Extension source contract suite 9/9 PASS."
+    acceptance_evidence:
+      - "All channels off produces zero DOM decoration while the AnnotationSet remains in memory."
+      - "Changing position, color, density, and channel selection leaves canonical tokens byte-identical."
+      - "POS color is disabled when it would be the only POS carrier."
+      - "Per-channel confidence gating prevents conservative POS evidence from inheriting higher lexical confidence."
+      - "Canonical projection requires both annotation type and value to match each derived semantic field."
+      - "Content-service failure uses the conservative Semantic Annotation Engine/bootstrap provider rather than legacy suffix POS guessing."
+    known_limitations:
+      - "Learning-state is explicitly unavailable until learner evidence exists."
+    security_notes:
+      - "Renderer uses safe text APIs, reads no form values, and fails closed on sensitive attributes."
+    next_dependencies:
+      - V030-06
+      - V030-08
+
+  - task_id: V030-06
+    status: complete
+    files_changed:
+      - apps/extension/src/shared/settings.js
+      - apps/extension/src/shared/profile-controls.js
+      - packages/contracts/schemas/marking-profile.schema.json
+      - tests/profile-migration.test.js
+    contracts_changed:
+      - "One-way legacy settings migration to MarkingProfile/v2."
+    migrations_added:
+      - "Pure idempotent v0.1/v0.2 settings to MarkingProfile/v2 migration; zh becomes zh-Hant."
+    tests_added:
+      - tests/profile-migration.test.js
+    tests_passed:
+      - "Profile migration 4/4 PASS."
+    acceptance_evidence:
+      - "Existing language, density, confidence, position, POS label, and POS color choices are retained."
+      - "New channels receive explicit defaults and unavailable learning-state cannot be enabled."
+      - "Popup-visible edits preserve hidden profile identity, enabled state, confidence threshold, and processing budgets."
+    known_limitations:
+      - "No database migration exists because v0.3.0 has no learner database."
+    security_notes:
+      - "Migration is local, pure, bounded, and idempotent."
+    next_dependencies:
+      - V030-08
+
+  - task_id: V030-07
+    status: complete
+    files_changed:
+      - tests/fixtures/quality/en-annotations.json
+      - tests/fixtures/quality/zh-hant-annotations.json
+      - packages/quality/semantic-quality.js
+      - scripts/run-semantic-quality.js
+      - tests/semantic-quality-metrics.test.js
+      - tests/semantic-quality-runner.test.js
+      - docs/validation/v0.3.0-semantic-quality.json
+    contracts_changed:
+      - "Quality report v1 records per-label counts, macro-F1, exact token spans, semantic expectation counts, fixture scale, and limitations."
+    migrations_added: []
+    tests_added:
+      - tests/semantic-quality-metrics.test.js
+      - tests/semantic-quality-runner.test.js
+    tests_passed:
+      - "Quality metric/runner unit tests 6/6 PASS."
+      - "Fresh full-index quality write and independent verify both normal exit 0."
+    acceptance_evidence:
+      - "English POS macro-F1: 1.0 over 11 cases / 48 tokens."
+      - "Traditional-Chinese POS macro-F1: 0.986111111111111 over 11 cases / 49 tokens."
+      - "Traditional-Chinese token-span segmentation F1: 1.0."
+      - "Expected lemma 47/47, morphology 10/10, Simplified form 15/15, and unknown 2/2 checks pass."
+    known_limitations:
+      - "The 22-case/97-token authored fixture is not a statistically representative benchmark."
+      - "Two context-sensitive Chinese POS uses remain errors and are recorded rather than relabelled."
+    security_notes:
+      - "The quality harness uses only committed local fixtures and the packaged local index."
+    next_dependencies:
+      - V030-08
+
+  - task_id: V030-08
+    status: complete
+    files_changed:
+      - scripts/audit-source-tree.js
+      - scripts/validate-v0.3.0.js
+      - scripts/package-v0.3.0.js
+      - tests/source-tree-audit.test.js
+      - tests/release-validator-v0.3.0.test.js
+      - tests/release-packaging-v0.3.0.test.js
+      - package.json
+      - THIRD_PARTY_NOTICES.md
+      - README.md
+      - apps/extension/README.md
+      - docs/VALIDATION_REPORT.md
+      - docs/VALIDATION_REPORT_v0.3.0.md
+      - docs/workbench/Halo_Learning_v0.1.0_to_v1.0_Workflow.md
+      - docs/workbench/Halo_Learning_v0.1.0_to_v1.0_Workbench.xlsx
+      - dist/halo-learning-magic-hand-v0.3.0.zip
+      - releases/Halo_Learning_v0.3.0_Semantic_Annotation_Engine_Release.zip
+    contracts_changed:
+      - "Development validation requires Git worktree hygiene; standalone validation requires no Git worktree and runs a source audit."
+      - "Extension ZIP and standalone source ZIP content boundaries are explicit."
+    migrations_added: []
+    tests_added:
+      - tests/source-tree-audit.test.js
+      - tests/release-validator-v0.3.0.test.js
+      - tests/release-packaging-v0.3.0.test.js
+    tests_passed:
+      - "Fresh full suite: 142/142 PASS; normal exit 0."
+      - "Release packaging/validator/source-audit focused suites PASS."
+      - "Runtime build and semantic quality verify normal exit 0."
+      - "Development and extracted standalone validators normal exit 0 at release boundary."
+    acceptance_evidence:
+      - "Extension and source-package inventories exactly match their canonical mappings; every packaged file is byte-identical to source."
+      - "The independently distributable extension ZIP carries third-party attribution and the complete WordNet license."
+      - "Corrupt/missing index activates safe bootstrap English/Traditional-Chinese semantics."
+      - "Standalone package validation does not invoke Git and rejects conflict markers, trailing whitespace, remote executable URLs, and missing artifacts."
+      - "Workbench v0.3.0 and all V030 tasks are Complete; v0.4.0 remains Not Started."
+    known_limitations:
+      - "Complete cross-site browser E2E remains unclaimed."
+      - "Development validator intentionally cannot pass until the release-boundary commit leaves a clean worktree."
+    security_notes:
+      - "No remote code, host permission, form-value access, cookie/token/history access, analytics, login, billing, or learner database was added."
+    next_dependencies:
+      - "STOP at v0.3.0 release gate; v0.4.0 remains Not Started."
+release_evidence:
+  tests: "node --test tests/*.test.js: 142/142 PASS"
+  runtime_build: "331903 entries; 0 rejected; 206978 English rows; 124925 Traditional-Chinese rows; runtime payload hash f2a63b7b5af3673a7faea6acaed53776cb94bcf4146949d965a37b76003fca21"
+  browser_index_cold_load: "Node 22/WebCrypto engineering measurement: 48,544,255 on-disk bytes loaded and validated in approximately 3.57 seconds"
+  quality: "EN macro-F1 1.0; ZH macro-F1 0.986111111111111; ZH segmentation F1 1.0; 22 cases / 97 tokens"
+  development_validator: "node scripts/validate-v0.3.0.js --development: 12 gates PASS at clean release boundary"
+  standalone_validator: "extracted no-Git source release: 12 gates PASS"
+known_release_limitations:
+  - "Full cross-site browser E2E is not complete."
+  - "Quality fixtures are small and authored; no production-grade NLP accuracy claim is made."
+  - "Dynamic DOM/SPA lifecycle and browser runtime performance work remain v0.4.0 scope."
+  - "The runtime index is 48,544,254 payload bytes uncompressed and is not yet sharded."

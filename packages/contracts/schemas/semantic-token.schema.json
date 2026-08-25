@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://halo-learning.local/schemas/semantic-token.schema.json",
+  "title": "SemanticToken/v1",
+  "type": "object",
+  "required": [
+    "schemaVersion", "tokenId", "surface", "normalizedSurface", "language",
+    "start", "end", "glossRefs", "lexicalRefs", "confidence", "provenance",
+    "priority", "annotations"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "tokenId": { "type": "string", "minLength": 1 },
+    "surface": { "type": "string", "minLength": 1 },
+    "normalizedSurface": { "type": "string", "minLength": 1 },
+    "language": { "enum": ["en", "zh-Hant"] },
+    "start": { "type": "integer", "minimum": 0 },
+    "end": { "type": "integer", "minimum": 1 },
+    "lemma": { "type": "string", "minLength": 1 },
+    "simplifiedPos": { "enum": ["n", "v", "adj", "adv", "prep", "conj", "det", "pron", "aux", "modal", "x"] },
+    "morphology": { "type": "object" },
+    "grammarRole": { "type": "string", "minLength": 1 },
+    "tenseAspect": { "type": "string", "minLength": 1 },
+    "glossRefs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "lexicalRefs": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "provenance": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "priority": { "type": "number", "minimum": 0, "maximum": 1 },
+    "annotations": {
+      "type": "array",
+      "items": { "$ref": "semantic-annotation.schema.json" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["lemma"] },
+      "then": { "properties": { "annotations": { "contains": { "properties": { "type": { "const": "lemma" } }, "required": ["type"] } } } }
+    },
+    {
+      "if": { "required": ["simplifiedPos"] },
+      "then": { "properties": { "annotations": { "contains": { "properties": { "type": { "const": "simplified-pos" } }, "required": ["type"] } } } }
+    },
+    {
+      "if": { "required": ["morphology"] },
+      "then": { "properties": { "annotations": { "contains": { "properties": { "type": { "const": "morphology" } }, "required": ["type"] } } } }
+    },
+    {
+      "if": { "required": ["grammarRole"] },
+      "then": { "properties": { "annotations": { "contains": { "properties": { "type": { "const": "grammar-role" } }, "required": ["type"] } } } }
+    },
+    {
+      "if": { "required": ["tenseAspect"] },
+      "then": { "properties": { "annotations": { "contains": { "properties": { "type": { "const": "tense-aspect" } }, "required": ["type"] } } } }
+    }
+  ],
+  "additionalProperties": false
+}

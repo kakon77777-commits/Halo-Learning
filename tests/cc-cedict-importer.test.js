@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const {
   deriveCcCedictPos,
+  validateCcCedictV1Header,
   importCcCedict
 } = require('../packages/lexical-data/zh/cc-cedict-importer');
 
@@ -110,6 +111,35 @@ test('CC-CEDICT POS derivation stays conservative for ambiguous or uncued glosse
     confidence: 0,
     derivationId: 'derived:cc-cedict-gloss-cues-v1'
   });
+});
+
+test('verified CC-CEDICT input is pinned to Version 1 edition syntax independently of release date', () => {
+  const header = [
+    '#! version=1',
+    '#! subversion=0',
+    '#! format=ts',
+    '#! charset=UTF-8',
+    '#! entries=124925',
+    '#! date=2026-08-24T05:05:01Z',
+    ''
+  ].join('\n');
+
+  assert.deepEqual(validateCcCedictV1Header(header), {
+    version: '1',
+    subversion: '0',
+    format: 'ts',
+    charset: 'UTF-8',
+    entries: 124925,
+    date: '2026-08-24T05:05:01Z'
+  });
+  assert.throws(
+    () => validateCcCedictV1Header('#! version=2\n#! subversion=0\n#! format=ts\n'),
+    /Version 1|version/i
+  );
+  assert.throws(
+    () => validateCcCedictV1Header('#! version=1\n#! subversion=0\n#! format=ts\n傳統 简体 [[pin1 yin1]] /V2/'),
+    /V2|double/i
+  );
 });
 
 test('CC-CEDICT duplicate and malformed records are visible and deterministic', () => {

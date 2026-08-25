@@ -1,46 +1,47 @@
-# Halo Learning — Magic Hand Basic v0.2.0
+# Halo Learning — Magic Hand v0.3.0
 
-A local-first Chrome/Chromium extension that adds configurable semantic POS annotations to English and Traditional-Chinese text already visible on the current page.
+This Chrome/Chromium Manifest V3 extension performs English and Traditional-Chinese semantic annotation locally, then renders only the visual channels selected in `MarkingProfile/v2`.
 
-## Current browser slice
+## Runtime flow
 
-- English + Traditional Chinese token analysis.
-- Compact POS labels, default position: top-right.
-- Optional POS colors; color is never the only semantic carrier.
-- Configurable density, language mode, and label position.
-- Conservative confidence threshold: unknown words are not forced into a POS class.
-- Click-scoped `activeTab` injection only; no host permissions.
-- No server, account, analytics, cookies, browsing-history access, hidden API, or remote code.
-- Remove restores the wrapped text nodes.
+`visible page text → packaged verified lexical index → DictionaryProvider → AnnotationSet → MarkingProfile → reversible spans`
 
-## Install locally
+The background service worker loads `data/lexical-runtime-index.json` from the extension installation. If that file is missing, corrupt, or cannot be loaded, the provider degrades safely to the authored bootstrap lexicon. No WordNet or CC-CEDICT source format reaches the renderer.
 
-1. Extract the bundle.
-2. Open `chrome://extensions` or `edge://extensions`.
-3. Enable **Developer mode**.
-4. Choose **Load unpacked**.
-5. Select `apps/extension/` — the folder containing `manifest.json`.
-6. Open a normal web page, click the extension, choose settings, then **Apply · 套用**.
+## Controls
 
-Browser-internal pages such as `chrome://...` cannot be injected by extensions.
+- language: English, Traditional Chinese, both, or auto;
+- density and minimum confidence;
+- label position;
+- POS label and secondary POS color;
+- lemma, morphology, gloss hint, grammar role, tense/aspect, and chunk channels;
+- learning-state channel shown as unavailable and disabled in v0.3.0;
+- Apply and Remove.
 
-## v0.2.0 lexical boundary
+POS color cannot operate as the only POS carrier. With every visual channel off, semantic analysis remains available in memory while the page receives zero semantic decoration.
 
-The source release now includes verified lexical contracts, offline WordNet/CC-CEDICT importers, a deterministic index, and a fail-soft registry. The extension package itself continues to ship only the small transparent bootstrap lexicon, so it starts without a corpus and preserves the validated v0.1 browser behavior. It does **not** bundle a third-party dictionary corpus.
+## Privacy and permissions
 
-Example entry:
+- permissions: `activeTab`, `scripting`, `storage`;
+- no host permissions;
+- no remote code, remote NLP, analytics, account, advertising, or page upload;
+- no cookie, token, password, browsing-history, or form-value access;
+- sensitive forms fail closed based on URL and attribute names;
+- generated display text is assigned through safe DOM text APIs;
+- Remove unwraps Halo spans and normalizes the original text nodes.
 
-```json
-{"surface":"orbit","lang":"en","pos":"n","gloss":"軌道"}
-```
+## Install unpacked
 
-The v0.2.0 core index can add lemma, senses, gloss references, source-record evidence, and provenance without changing the page renderer. Wiring the full semantic annotation engine into browser marking belongs to v0.3.0; this release does not jump that boundary.
+1. Open `chrome://extensions` or `edge://extensions`.
+2. Enable Developer mode.
+3. Choose **Load unpacked**.
+4. Select this `apps/extension/` directory.
+5. Open a normal web page and use the Halo Learning popup.
 
-## Known limits
+Browser-internal pages such as `chrome://...` cannot be injected.
 
-- English POS is a conservative local rule baseline, not a full parser.
-- Chinese segmentation is longest-match over the bootstrap lexicon; unknown Han characters remain low-confidence.
-- Dynamic pages need **Apply** again after large content changes in this Basic slice.
-- Complex DOMs can still have site-specific rendering quirks; node and token budgets limit page impact.
-- The browser package does not yet consume a full imported lexical index; v0.2.0 validates the provider boundary and fail-soft core path.
-- Full IndexedDB event sourcing, learner mastery, Halo Story, remote high-precision NLP and AI explanation are deliberately deferred.
+## Verified scope and limits
+
+The package contains the compact projection of verified Princeton WordNet 3.0 and CC-CEDICT V1-edition data. `THIRD_PARTY_NOTICES.md` and the complete WordNet license under `LICENSES/` travel with the packaged extension; full source/provenance/build evidence remains in the repository source release.
+
+The semantic engine is a deterministic baseline, not a production parser. English grammar coverage is intentionally bounded. CC-CEDICT is not a full POS corpus, so Traditional-Chinese POS supplementation is conservative and explicitly sourced. Dynamic-page lifecycle handling and broad cross-site browser E2E are v0.4.0 scope and are not claimed complete here.

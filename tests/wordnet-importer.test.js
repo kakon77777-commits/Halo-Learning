@@ -151,6 +151,86 @@ test('WordNet importer normalizes adjective satellite and rejects unsupported sy
   }]);
 });
 
+test('WordNet importer normalizes adjective markers but preserves the transformation evidence', () => {
+  const files = [{
+    role: 'adjective',
+    path: 'data.adj',
+    content: '00000003 00 a 01 afraid(p) 0 000 | filled with fear\n'
+  }];
+  const result = importWordNetFiles(files, manifestFor(files));
+
+  assert.equal(result.entries[0].surface, 'afraid');
+  assert.equal(result.entries[0].lemma, 'afraid');
+  assert.ok(result.entries[0].provenance.transformations.includes('wordnet-adjective-marker-strip:v1'));
+});
+
+test('WordNet morphology exception files are imported as deterministic, source-traceable evidence', () => {
+  const files = [
+    ...inputFiles(),
+    {
+      role: 'noun-exceptions',
+      path: 'noun.exc',
+      content: 'children child\nindices index indice\n'
+    },
+    {
+      role: 'verb-exceptions',
+      path: 'verb.exc',
+      content: 'went go\nread read\n'
+    }
+  ];
+  const result = importWordNetFiles(files, manifestFor(files));
+
+  assert.deepEqual(result.morphologyExceptions, [
+    {
+      inflected: 'children',
+      lemmas: ['child'],
+      pos: 'n',
+      source: {
+        datasetId: 'princeton-wordnet-3.0-synthetic',
+        version: '3.0-synthetic.1',
+        recordRef: 'noun.exc:1',
+        lineNumber: 1
+      }
+    },
+    {
+      inflected: 'indices',
+      lemmas: ['index', 'indice'],
+      pos: 'n',
+      source: {
+        datasetId: 'princeton-wordnet-3.0-synthetic',
+        version: '3.0-synthetic.1',
+        recordRef: 'noun.exc:2',
+        lineNumber: 2
+      }
+    },
+    {
+      inflected: 'read',
+      lemmas: ['read'],
+      pos: 'v',
+      source: {
+        datasetId: 'princeton-wordnet-3.0-synthetic',
+        version: '3.0-synthetic.1',
+        recordRef: 'verb.exc:2',
+        lineNumber: 2
+      }
+    },
+    {
+      inflected: 'went',
+      lemmas: ['go'],
+      pos: 'v',
+      source: {
+        datasetId: 'princeton-wordnet-3.0-synthetic',
+        version: '3.0-synthetic.1',
+        recordRef: 'verb.exc:1',
+        lineNumber: 1
+      }
+    }
+  ]);
+  assert.equal(result.rejected.some((item) => item.path.endsWith('.exc')), false);
+  assert.equal(Object.isFrozen(result.morphologyExceptions), true);
+});
+
+
 test('WordNet importer fails closed before parsing when an input hash is wrong', () => {
   const files = inputFiles();
   const manifest = manifestFor(files);

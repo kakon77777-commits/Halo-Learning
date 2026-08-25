@@ -1,14 +1,21 @@
 {
   "name": "halo-learning",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Local-first, provider-agnostic Halo Learning reference implementation",
   "scripts": {
     "test": "node --test tests/*.test.js",
     "test:baseline": "node --test tests/linguistics.test.js tests/projection.test.js tests/source-contract.test.js",
     "build:data": "node scripts/build-lexical-data.js",
+    "build:runtime": "node --max-old-space-size=2048 scripts/build-lexical-runtime.js --write",
+    "verify:runtime": "node --max-old-space-size=2048 scripts/build-lexical-runtime.js --verify",
+    "quality": "node --max-old-space-size=1024 scripts/run-semantic-quality.js --write",
+    "quality:verify": "node --max-old-space-size=1024 scripts/run-semantic-quality.js --verify",
     "benchmark:index": "node --expose-gc scripts/benchmark-lexical-index.js",
-    "validate": "node scripts/validate-v0.2.0.js"
+    "validate:v0.2": "node scripts/validate-v0.2.0.js",
+    "validate": "node scripts/validate-v0.3.0.js --development",
+    "validate:standalone": "node scripts/validate-v0.3.0.js --standalone",
+    "package:release": "node scripts/package-v0.3.0.js"
   },
   "engines": {
     "node": ">=22"

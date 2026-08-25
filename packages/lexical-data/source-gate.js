@@ -43,7 +43,42 @@ function validateRecord(record, index) {
   });
   if (!/^\d{4}-\d{2}-\d{2}$/.test(record.verifiedAt)) fail(`${path}.verifiedAt`, 'must be an ISO date');
   if (!record.selected) stringField(record, 'rejectionReason', path);
-  return Object.freeze({ ...record, redistributionRequirements: Object.freeze([...record.redistributionRequirements]) });
+  const normalized = { ...record, redistributionRequirements: Object.freeze([...record.redistributionRequirements]) };
+  if (record.transport && typeof record.transport === 'object' && !Array.isArray(record.transport)) {
+    normalized.transport = Object.freeze({ ...record.transport });
+  }
+  return Object.freeze(normalized);
+}
+
+function validateSelectedReleaseEvidence(record) {
+  const path = record.sourceId;
+  for (const field of [
+    'upstreamVersion',
+    'releaseIdentity',
+    'formatVersion',
+    'acquisitionReceipt',
+    'datasetManifest',
+    'sha256'
+  ]) {
+    stringField(record, field, path);
+  }
+  if (!/^[a-f0-9]{64}$/.test(record.sha256)) {
+    fail(`${path}.sha256`, 'must be 64 lowercase hexadecimal characters');
+  }
+  for (const field of ['acquisitionReceipt', 'datasetManifest']) {
+    if (!/^data\/corpora\/[A-Za-z0-9._/-]+$/.test(record[field]) || record[field].includes('..')) {
+      fail(`${path}.${field}`, 'must be a repository-relative corpus evidence path');
+    }
+  }
+  if (!record.transport || typeof record.transport !== 'object' || Array.isArray(record.transport)) {
+    fail(`${path}.transport`, 'must be an object');
+  }
+  if (!['direct-upstream', 'pinned-public-mirror'].includes(record.transport.kind)) {
+    fail(`${path}.transport.kind`, 'must describe a verified transport');
+  }
+  httpsField(record.transport, 'url', `${path}.transport`);
+  stringField(record.transport, 'revision', `${path}.transport`);
+  stringField(record.transport, 'note', `${path}.transport`);
 }
 
 function auditSourceRecords(value) {
@@ -59,7 +94,8 @@ function auditSourceRecords(value) {
     const record = matches[0];
     if (!record.commercialUseAllowed) fail(`${record.sourceId}.commercialUseAllowed`, 'must be true for a selected source');
     if (!record.redistributionAllowed) fail(`${record.sourceId}.redistributionAllowed`, 'must be true for a selected source');
-    if (record.bundled) fail(`${record.sourceId}.bundled`, 'must be false until exact upstream bytes are verified');
+    if (!record.bundled) fail(`${record.sourceId}.bundled`, 'must be true after exact upstream bytes are verified');
+    validateSelectedReleaseEvidence(record);
     selected.push(record);
   }
 
