@@ -103,10 +103,19 @@
     const cancelTimeout = typeof settings.clearTimeout === 'function'
       ? settings.clearTimeout
       : root.clearTimeout.bind(root);
+    const deferMicrotask = typeof settings.queueMicrotask === 'function'
+      ? settings.queueMicrotask
+      : (typeof root.queueMicrotask === 'function'
+          ? root.queueMicrotask.bind(root)
+          : (callback) => Promise.resolve().then(callback));
     const isHaloOwned = typeof settings.isHaloOwned === 'function' ? settings.isHaloOwned : defaultIsHaloOwned;
+    const onRootsInvalidated = typeof settings.onRootsInvalidated === 'function'
+      ? settings.onRootsInvalidated
+      : () => {};
     const onRootsChanged = typeof settings.onRootsChanged === 'function' ? settings.onRootsChanged : () => {};
     const onRouteCleanup = typeof settings.onRouteCleanup === 'function' ? settings.onRouteCleanup : () => {};
     const onRouteStart = typeof settings.onRouteStart === 'function' ? settings.onRouteStart : () => {};
+    const onError = typeof settings.onError === 'function' ? settings.onError : null;
     const history = settings.history || root.history || null;
     const location = settings.location || root.location || null;
     const eventTarget = settings.eventTarget || root;
@@ -125,6 +134,39 @@
     let originalReplaceState = null;
     let pushStateWrapper = null;
     let replaceStateWrapper = null;
+    let transitioning = false;
+    let queuedTransition = null;
+    let routeStartToken = 0;
+    let pendingRouteStart = null;
+
+    function reportError(error, phase, metadata) {
+      const details = Object.freeze({ phase, ...(metadata || {}) });
+      if (onError) {
+        try {
+          onError(error, details);
+          return;
+        } catch (_hookError) {
+          // Error hooks must never escape into native history or cleanup.
+        }
+      }
+      try {
+        if (typeof root.reportError === 'function') root.reportError(error);
+        else if (root.console && typeof root.console.error === 'function') root.console.error(error);
+      } catch (_reportError) {
+        // Lifecycle remains usable even when the host's reporter fails.
+      }
+    }
+
+    function invokeLifecycle(callback, metadata, phase) {
+      try {
+        const result = callback(metadata);
+        if (result && typeof result.then === 'function') {
+          result.catch((error) => reportError(error, phase, metadata));
+        }
+      } catch (error) {
+        reportError(error, phase, metadata);
+      }
+    }
 
     function clearPending() {
       if (debounceHandle !== null) cancelTimeout(debounceHandle);
@@ -151,12 +193,39 @@
       }
     }
 
-    function mutationObserved(records) {
-      if (cleaned || suppressionDepth) return;
-      pendingRecords.push(...Array.from(records || []));
+    function isHaloRendererRecord(record) {
+      if (!record) return false;
+      if (isHaloOwned(record.target)) return true;
+      return [...Array.from(record.addedNodes || []), ...Array.from(record.removedNodes || [])]
+        .some((node) => isHaloOwned(node));
+    }
+
+    function queueMutationRecords(records, filterRendererRecords) {
+      if (cleaned) return;
+      const retained = Array.from(records || []).filter((record) =>
+        !filterRendererRecords || !isHaloRendererRecord(record)
+      );
+      if (!retained.length) return;
+      const invalidated = coalesceMutations(retained, isHaloOwned);
+      if (invalidated.roots.length || invalidated.removedRoots.length) {
+        try {
+          onRootsInvalidated(invalidated.roots, Object.freeze({
+            epoch,
+            removedRoots: invalidated.removedRoots
+          }));
+        } catch (error) {
+          reportError(error, 'root-invalidation', { epoch });
+        }
+      }
+      if (pendingRouteStart) return;
+      pendingRecords.push(...retained);
       if (debounceHandle !== null) cancelTimeout(debounceHandle);
       debounceHandle = scheduleTimeout(flushMutations, debounceMs);
       if (maxWaitHandle === null) maxWaitHandle = scheduleTimeout(flushMutations, maxWaitMs);
+    }
+
+    function mutationObserved(records) {
+      queueMutationRecords(records, suppressionDepth > 0);
     }
 
     const observer = new MutationObserverClass(mutationObserved);
@@ -228,9 +297,15 @@
 
     function stopObservation() {
       if (!observing) return;
-      observer.disconnect();
-      observer.takeRecords();
-      observing = false;
+      try {
+        observer.disconnect();
+      } finally {
+        try {
+          observer.takeRecords();
+        } finally {
+          observing = false;
+        }
+      }
     }
 
     function observe(document) {
@@ -243,30 +318,94 @@
       return true;
     }
 
+    function cancelPendingRouteStart() {
+      routeStartToken += 1;
+      pendingRouteStart = null;
+    }
+
+    function deferRouteStart(metadata) {
+      const token = ++routeStartToken;
+      pendingRouteStart = metadata;
+      const firstTurn = () => {
+        if (cleaned || token !== routeStartToken) return;
+        const mutationTurn = () => {
+          if (cleaned || token !== routeStartToken) return;
+          pendingRouteStart = null;
+          invokeLifecycle(onRouteStart, metadata, 'route-start');
+        };
+        try {
+          deferMicrotask(mutationTurn);
+        } catch (error) {
+          pendingRouteStart = null;
+          reportError(error, 'route-start-schedule', metadata);
+        }
+      };
+      try {
+        deferMicrotask(firstTurn);
+      } catch (error) {
+        pendingRouteStart = null;
+        reportError(error, 'route-start-schedule', metadata);
+      }
+    }
+
+    function performRouteTransition(previous, next) {
+      cancelPendingRouteStart();
+      clearPending();
+      const oldEpoch = epoch;
+      epoch += 1;
+      observedUrl = next;
+      const cleanupMetadata = Object.freeze({ epoch: oldEpoch, previousUrl: previous, nextUrl: next });
+      const startMetadata = Object.freeze({ epoch, previousUrl: previous, nextUrl: next });
+      transitioning = true;
+      try {
+        invokeLifecycle(onRouteCleanup, cleanupMetadata, 'route-cleanup');
+      } finally {
+        clearPending();
+        try {
+          stopObservation();
+        } catch (error) {
+          reportError(error, 'route-observer-stop', cleanupMetadata);
+        }
+        try {
+          startObservation();
+        } catch (error) {
+          reportError(error, 'route-observer-start', startMetadata);
+        }
+        transitioning = false;
+      }
+      if (queuedTransition) {
+        const queued = queuedTransition;
+        queuedTransition = null;
+        if (queued.nextUrl !== observedUrl) performRouteTransition(observedUrl, queued.nextUrl);
+      } else {
+        deferRouteStart(startMetadata);
+      }
+    }
+
     function routeChanged(previousUrl, nextUrl) {
       if (cleaned) return epoch;
       const previous = previousUrl === undefined || previousUrl === null ? observedUrl : String(previousUrl);
       const next = nextUrl === undefined || nextUrl === null ? currentUrl() : String(nextUrl);
-      if (previous === next || observedUrl === next) return epoch;
-      const oldEpoch = epoch;
-      clearPending();
-      onRouteCleanup(Object.freeze({ epoch: oldEpoch, previousUrl: previous, nextUrl: next }));
-      stopObservation();
-      epoch += 1;
-      observedUrl = next;
-      onRouteStart(Object.freeze({ epoch, previousUrl: previous, nextUrl: next }));
-      startObservation();
+      if (previous === next || observedUrl === next || (queuedTransition && queuedTransition.nextUrl === next)) {
+        return epoch;
+      }
+      if (transitioning) {
+        queuedTransition = { previousUrl: observedUrl, nextUrl: next };
+        return epoch;
+      }
+      performRouteTransition(previous, next);
       return epoch;
     }
 
     function suppressRendererMutations(callback) {
       if (typeof callback !== 'function') throw new TypeError('callback: must be a function');
+      queueMutationRecords(observer.takeRecords(), true);
       suppressionDepth += 1;
       try {
         return callback();
       } finally {
-        observer.takeRecords();
         suppressionDepth -= 1;
+        queueMutationRecords(observer.takeRecords(), true);
       }
     }
 
@@ -276,12 +415,27 @@
 
     function cleanup() {
       if (cleaned) return;
-      clearPending();
-      onRouteCleanup(Object.freeze({ epoch, previousUrl: observedUrl, nextUrl: null, reason: 'cleanup' }));
-      stopObservation();
-      restoreHooks();
-      documentRef = null;
       cleaned = true;
+      cancelPendingRouteStart();
+      queuedTransition = null;
+      clearPending();
+      const metadata = Object.freeze({ epoch, previousUrl: observedUrl, nextUrl: null, reason: 'cleanup' });
+      try {
+        invokeLifecycle(onRouteCleanup, metadata, 'cleanup');
+      } finally {
+        try {
+          stopObservation();
+        } catch (error) {
+          reportError(error, 'cleanup-observer', metadata);
+        }
+        try {
+          restoreHooks();
+        } catch (error) {
+          reportError(error, 'cleanup-hooks', metadata);
+        }
+        documentRef = null;
+        transitioning = false;
+      }
     }
 
     return Object.freeze({

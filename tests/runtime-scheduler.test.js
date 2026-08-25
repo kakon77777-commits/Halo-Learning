@@ -447,7 +447,10 @@ test('dynamic root refresh cancels stale work and enqueues one incremented visib
   });
   discovery.start();
 
-  discovery.refreshRoots([paragraph, paragraph]);
+  assert.equal(discovery.isRootRevisionCurrent(paragraph, 1), true);
+  discovery.invalidateRoots([paragraph, paragraph]);
+  assert.equal(discovery.isRootRevisionCurrent(paragraph, 1), false);
+  discovery.refreshRoots([paragraph, paragraph], { alreadyInvalidated: true });
   observer.callback([{ target: paragraph, isIntersecting: true }]);
 
   assert.deepEqual(cancelled, ['lesson']);
@@ -601,4 +604,67 @@ test('root work is sentence-batched from runtime budgets and ignores legacy caps
   assert.deepEqual(chunks.map((chunk) => chunk.textNodes), [2, 1]);
   assert.deepEqual(chunks.map((chunk) => chunk.characters), [8, 6]);
   assert.ok(chunks.every((chunk) => chunk.epoch === 3 && chunk.rootId === 'lesson'));
+});
+
+test('same-element replacement invalidates pending root work before projection', () => {
+  const root = candidate('pending-root');
+  root.text = 'Original sentence.';
+  const pipeline = {
+    buildSentenceRecords: (element, options) => Object.freeze([
+      Object.freeze({
+        id: `${options.rootRevision}:0:${element.text.length}`,
+        text: element.text,
+        language: 'en',
+        start: 0,
+        end: element.text.length,
+        rootRevision: options.rootRevision,
+        fragments: Object.freeze([{ nodeId: 'text-1', start: 0, end: element.text.length }])
+      })
+    ])
+  };
+  const enqueued = [];
+  class FixtureIntersectionObserver {
+    observe() {}
+    disconnect() {}
+  }
+  const discovery = Content.createViewportDiscovery({
+    document: {
+      body: candidate('body'),
+      documentElement: candidate('html'),
+      elementsFromPoint: () => [root],
+      createTreeWalker: () => ({ nextNode: () => null })
+    },
+    NodeFilter: { SHOW_ELEMENT: 1 },
+    IntersectionObserver: FixtureIntersectionObserver,
+    scheduler: {
+      enqueue: (value) => {
+        enqueued.push(...(Array.isArray(value) ? value : [value]));
+        return true;
+      },
+      cancelRoot: () => 1,
+      flush: () => Promise.resolve()
+    },
+    budgets: { timeSliceMs: 8, viewportBufferPx: 1200 },
+    makeWork: (element, visible, metadata) => Content.buildRootWork(element, {
+      rootId: metadata.rootId,
+      rootRevision: metadata.rootRevision,
+      epoch: 1,
+      priority: metadata.priority,
+      visible,
+      settings: { languageMode: 'en', runtimeBudgets: generousBudgets },
+      pipeline
+    }),
+    innerWidth: 1000,
+    innerHeight: 800,
+    requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
+    cancelIdleCallback: () => {},
+    clock: { now: () => 0 }
+  });
+  discovery.start();
+  const work = enqueued[0];
+
+  assert.equal(Content.rootWorkIsCurrent(work, discovery), true);
+  root.text = 'Replacement sentence.';
+  discovery.invalidateRoots([root]);
+  assert.equal(Content.rootWorkIsCurrent(work, discovery), false);
 });

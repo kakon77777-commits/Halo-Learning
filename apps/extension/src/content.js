@@ -101,6 +101,17 @@
     return count;
   }
 
+  function rootWorkIsCurrent(work, revisionSource) {
+    const payload = work && work.payload;
+    if (!payload || !payload.element || payload.element.isConnected === false ||
+        !revisionSource || typeof revisionSource.isRootRevisionCurrent !== 'function') return false;
+    try {
+      return revisionSource.isRootRevisionCurrent(payload.element, payload.rootRevision);
+    } catch (_error) {
+      return false;
+    }
+  }
+
   function buildRootWork(element, options) {
     const settings = options || {};
     const pipeline = settings.pipeline;
@@ -112,9 +123,10 @@
     const rootRevision = Number.isSafeInteger(settings.rootRevision) && settings.rootRevision > 0
       ? settings.rootRevision
       : 1;
+    const locale = runtimeSettings.languageMode === 'en' ? 'en' : 'zh-Hant';
     const records = pipeline.buildSentenceRecords(element, {
       rootRevision,
-      locale: runtimeSettings.languageMode === 'en' ? 'en' : 'zh-Hant'
+      locale
     });
     const chunks = [];
     let current = null;
@@ -140,6 +152,7 @@
         payload: Object.freeze({
           element,
           rootRevision,
+          locale,
           records: Object.freeze([...current.records])
         })
       }));
@@ -385,8 +398,7 @@
       return roots;
     }
 
-    function refreshRoots(values) {
-      if (disconnected) return 0;
+    function changedContentRoots(values) {
       const changed = [];
       const seen = new Set();
       for (const value of Array.from(values || [])) {
@@ -396,15 +408,40 @@
           changed.push(contentRoot);
         }
       }
+      return changed;
+    }
+
+    function invalidateRoots(values) {
+      if (disconnected) return 0;
+      const changed = changedContentRoots(values);
       for (const contentRoot of changed) {
         const rootId = rootIdFor(contentRoot);
         const wasObserved = observed.has(contentRoot);
-        const wasIntersecting = intersecting.has(contentRoot);
         scheduler.cancelRoot(rootId);
         if (wasObserved || rootRevisions.has(rootId)) {
           rootRevisions.set(rootId, rootRevisionFor(contentRoot) + 1);
         } else {
           rootRevisions.set(rootId, 1);
+        }
+      }
+      return changed.length;
+    }
+
+    function refreshRoots(values, options) {
+      if (disconnected) return 0;
+      const settings = options || {};
+      const changed = changedContentRoots(values);
+      for (const contentRoot of changed) {
+        const rootId = rootIdFor(contentRoot);
+        const wasObserved = observed.has(contentRoot);
+        const wasIntersecting = intersecting.has(contentRoot);
+        if (!settings.alreadyInvalidated) {
+          scheduler.cancelRoot(rootId);
+          if (wasObserved || rootRevisions.has(rootId)) {
+            rootRevisions.set(rootId, rootRevisionFor(contentRoot) + 1);
+          } else {
+            rootRevisions.set(rootId, 1);
+          }
         }
         if (wasObserved && typeof observer.unobserve === 'function') observer.unobserve(contentRoot);
         if (!wasObserved) {
@@ -419,6 +456,11 @@
         }
       }
       return changed.length;
+    }
+
+    function isRootRevisionCurrent(element, revision) {
+      return Boolean(element && element.isConnected !== false &&
+        Number.isSafeInteger(revision) && rootRevisionFor(element) === revision);
     }
 
     function releaseRoots(values) {
@@ -452,7 +494,15 @@
       return Object.freeze({ candidatesVisited, observedRoots, done, disconnected });
     }
 
-    return Object.freeze({ start, refreshRoots, releaseRoots, disconnect, status });
+    return Object.freeze({
+      start,
+      invalidateRoots,
+      refreshRoots,
+      releaseRoots,
+      isRootRevisionCurrent,
+      disconnect,
+      status
+    });
   }
 
   function buildSegments(text, renderPlan) {
@@ -663,7 +713,7 @@
       let semanticTokens = 0;
       for (const work of batch.items) {
         const payload = work.payload;
-        if (!payload.element || payload.element.isConnected === false) continue;
+        if (!rootWorkIsCurrent(work, activeRuntime && activeRuntime.discovery)) continue;
         const runs = modules.Pipeline.createTextRuns(payload.element, { rootRevision: payload.rootRevision });
         for (let index = 0; index < payload.records.length; index += 1) {
           const record = payload.records[index];
@@ -802,10 +852,14 @@
           history: root.history,
           location: root.location,
           eventTarget: root,
-          onRootsChanged: (roots, metadata) => {
+          onRootsInvalidated: (roots, metadata) => {
             if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
             activeRuntime.discovery.releaseRoots(metadata.removedRoots);
-            activeRuntime.discovery.refreshRoots(roots);
+            activeRuntime.discovery.invalidateRoots(roots);
+          },
+          onRootsChanged: (roots, metadata) => {
+            if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
+            activeRuntime.discovery.refreshRoots(roots, { alreadyInvalidated: true });
           },
           onRouteCleanup: ({ epoch }) => {
             if (activeRuntime && activeRuntime.epoch === epoch) {
@@ -822,6 +876,9 @@
             startRuntime(settings, epoch).catch(() => {
               lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
             });
+          },
+          onError: () => {
+            lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
           }
         });
         activeController = controller;
@@ -859,6 +916,7 @@
     viewportRootMargin,
     buildEnrichmentItems,
     validateEnrichmentResponse,
+    rootWorkIsCurrent,
     buildRootWork,
     createViewportDiscovery
   });

@@ -67,6 +67,21 @@ function fakeClock() {
   };
 }
 
+function fakeMicrotasks() {
+  const tasks = [];
+  return {
+    queueMicrotask(callback) {
+      tasks.push(callback);
+    },
+    flush() {
+      while (tasks.length) tasks.shift()();
+    },
+    pending() {
+      return tasks.length;
+    }
+  };
+}
+
 function eventTarget() {
   const listeners = new Map();
   return {
@@ -195,7 +210,31 @@ test('mutation bursts debounce for 80ms but flush by the 250ms maximum wait', ()
   assert.equal(changed[0].epoch, 1);
 });
 
-test('renderer suppression discards observer records and resets after an exception', () => {
+test('non-Halo mutation invalidates its root synchronously before debounced discovery', () => {
+  const clock = fakeClock();
+  const invalidated = [];
+  const changed = [];
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onRootsInvalidated: (roots) => invalidated.push(roots),
+    onRootsChanged: (roots) => changed.push(roots)
+  });
+  controller.observe({ body: element('body') });
+  const paragraph = element('paragraph');
+
+  MutationObserver.instances[0].emit([mutation({ addedNodes: [paragraph] })]);
+
+  assert.deepEqual(invalidated, [[paragraph]]);
+  assert.deepEqual(changed, []);
+  clock.tick(80);
+  assert.deepEqual(changed, [[paragraph]]);
+});
+
+test('renderer suppression preserves non-Halo records before and during a throwing callback', () => {
   const clock = fakeClock();
   const changed = [];
   const calls = [];
@@ -209,25 +248,38 @@ test('renderer suppression discards observer records and resets after an excepti
   controller.observe({ body: element('body') });
   const observer = MutationObserver.instances[0];
   const owned = element('halo', { owned: true });
+  const prequeued = element('prequeued');
+  const queuedDuring = element('queued-during');
+  const deliveredDuring = element('delivered-during');
+
+  observer.records.push(
+    mutation({ addedNodes: [prequeued] }),
+    mutation({ addedNodes: [owned] })
+  );
 
   assert.throws(() => controller.suppressRendererMutations(() => {
-    observer.records.push(mutation({ addedNodes: [owned] }));
-    observer.emit([mutation({ addedNodes: [element('renderer-text')] })]);
+    observer.records.push(
+      mutation({ addedNodes: [queuedDuring] }),
+      mutation({ addedNodes: [owned] })
+    );
+    observer.emit([
+      mutation({ addedNodes: [deliveredDuring] }),
+      mutation({ addedNodes: [owned] })
+    ]);
     throw new Error('renderer failed');
   }), /renderer failed/);
-  clock.tick(300);
-  assert.deepEqual(changed, []);
-
-  observer.emit([mutation({ addedNodes: [element('article-change')] })]);
   clock.tick(80);
-  assert.equal(changed.length, 1);
+
+  assert.deepEqual(changed, [[prequeued, deliveredDuring, queuedDuring]]);
 });
 
 test('one route change cancels old work, removes old DOM, disconnects, and starts one new epoch', () => {
   const calls = [];
+  const microtasks = fakeMicrotasks();
   const MutationObserver = observerFixture(calls);
   const controller = Dynamic.createDynamicDomController({
     MutationObserver,
+    queueMicrotask: microtasks.queueMicrotask,
     onRouteCleanup: ({ epoch }) => calls.push(`cancel:${epoch}`, `remove:${epoch}`),
     onRouteStart: ({ epoch }) => calls.push(`start:${epoch}`)
   });
@@ -237,12 +289,208 @@ test('one route change cancels old work, removes old DOM, disconnects, and start
   controller.routeChanged('/article/a', '/article/b');
   controller.routeChanged('/article/b', '/article/b');
 
-  assert.deepEqual(calls, ['cancel:1', 'remove:1', 'disconnect', 'start:2', 'observe']);
+  assert.deepEqual(calls, ['cancel:1', 'remove:1', 'disconnect', 'observe']);
   assert.equal(controller.routeEpoch(), 2);
+  microtasks.flush();
+  assert.deepEqual(calls, ['cancel:1', 'remove:1', 'disconnect', 'observe', 'start:2']);
+});
+
+test('history-first navigation defers route discovery until the new view is rendered', () => {
+  const calls = [];
+  const microtasks = fakeMicrotasks();
+  const MutationObserver = observerFixture(calls);
+  const location = { href: 'https://example.test/a' };
+  const document = { body: element('body') };
+  document.body.view = 'old-view';
+  const history = {
+    pushState(_state, _unused, url) {
+      location.href = new URL(url, location.href).href;
+      return 'native-result';
+    },
+    replaceState() {}
+  };
+  const startedViews = [];
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    history,
+    location,
+    queueMicrotask: microtasks.queueMicrotask,
+    onRouteStart: () => startedViews.push(document.body.view)
+  });
+  controller.observe(document);
+
+  assert.equal(history.pushState({}, '', '/b'), 'native-result');
+  document.body.view = 'new-view';
+  MutationObserver.instances[0].emit([
+    mutation({ target: document.body, addedNodes: [element('new-paragraph', { parent: document.body })] })
+  ]);
+
+  assert.deepEqual(startedViews, []);
+  microtasks.flush();
+  assert.deepEqual(startedViews, ['new-view']);
+  assert.equal(controller.routeEpoch(), 2);
+});
+
+test('a superseding route cancels the deferred start and activates only the latest epoch', () => {
+  const calls = [];
+  const microtasks = fakeMicrotasks();
+  const MutationObserver = observerFixture(calls);
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    queueMicrotask: microtasks.queueMicrotask,
+    onRouteCleanup: ({ epoch }) => calls.push(`cleanup:${epoch}`),
+    onRouteStart: ({ epoch }) => calls.push(`start:${epoch}`)
+  });
+  controller.observe({ body: element('body') });
+  calls.length = 0;
+
+  controller.routeChanged('/article/a', '/article/b');
+  controller.routeChanged('/article/b', '/article/c');
+  microtasks.flush();
+
+  assert.deepEqual(calls, [
+    'cleanup:1', 'disconnect', 'observe',
+    'cleanup:2', 'disconnect', 'observe',
+    'start:3'
+  ]);
+  assert.equal(controller.routeEpoch(), 3);
+});
+
+test('throwing route start is reported safely and cannot break native history or observation', () => {
+  const calls = [];
+  const errors = [];
+  const microtasks = fakeMicrotasks();
+  const MutationObserver = observerFixture(calls);
+  const events = eventTarget();
+  const location = { href: 'https://example.test/a' };
+  const history = {
+    pushState(_state, _unused, url) {
+      location.href = new URL(url, location.href).href;
+      return 'push-result';
+    },
+    replaceState(_state, _unused, url) {
+      location.href = new URL(url, location.href).href;
+      return 'replace-result';
+    }
+  };
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    history,
+    location,
+    eventTarget: events,
+    queueMicrotask: microtasks.queueMicrotask,
+    onRouteStart: () => { throw new Error('start failed'); },
+    onError: (error, metadata) => errors.push([error.message, metadata.phase])
+  });
+  controller.observe({ body: element('body') });
+
+  assert.equal(history.pushState({}, '', '/b'), 'push-result');
+  assert.doesNotThrow(() => microtasks.flush());
+  assert.equal(history.replaceState({}, '', '/c'), 'replace-result');
+  assert.doesNotThrow(() => microtasks.flush());
+
+  assert.deepEqual(errors, [['start failed', 'route-start'], ['start failed', 'route-start']]);
+  assert.equal(controller.routeEpoch(), 3);
+  assert.ok(MutationObserver.instances[0].document, 'observation resumes after a failed route start');
+});
+
+test('throwing final cleanup still restores hooks, observation, and timers exactly once', () => {
+  const calls = [];
+  const errors = [];
+  const clock = fakeClock();
+  const MutationObserver = observerFixture(calls);
+  const events = eventTarget();
+  const location = { href: 'https://example.test/a' };
+  const originalPushState = function () {};
+  const originalReplaceState = function () {};
+  const history = { pushState: originalPushState, replaceState: originalReplaceState };
+  let cleanupAttempts = 0;
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    history,
+    location,
+    eventTarget: events,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onRouteCleanup: (metadata) => {
+      if (metadata.reason === 'cleanup') {
+        cleanupAttempts += 1;
+        throw new Error('cleanup failed');
+      }
+    },
+    onError: (error, metadata) => errors.push([error.message, metadata.phase])
+  });
+  controller.observe({ body: element('body') });
+  MutationObserver.instances[0].emit([mutation({ addedNodes: [element('pending')] })]);
+
+  assert.doesNotThrow(() => controller.cleanup());
+  assert.doesNotThrow(() => controller.cleanup());
+
+  assert.equal(cleanupAttempts, 1);
+  assert.deepEqual(errors, [['cleanup failed', 'cleanup']]);
+  assert.equal(history.pushState, originalPushState);
+  assert.equal(history.replaceState, originalReplaceState);
+  assert.equal(events.count('popstate'), 0);
+  assert.equal(events.count('hashchange'), 0);
+  assert.equal(clock.pending(), 0);
+  assert.equal(calls.filter((call) => call === 'disconnect').length, 1);
+});
+
+test('reentrant duplicate route callbacks coalesce into one ordered transition', () => {
+  const calls = [];
+  const microtasks = fakeMicrotasks();
+  const MutationObserver = observerFixture(calls);
+  let controller;
+  controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    queueMicrotask: microtasks.queueMicrotask,
+    onRouteCleanup: ({ epoch }) => {
+      calls.push(`cleanup:${epoch}`);
+      controller.routeChanged('/article/a', '/article/b');
+    },
+    onRouteStart: ({ epoch }) => calls.push(`start:${epoch}`)
+  });
+  controller.observe({ body: element('body') });
+  calls.length = 0;
+
+  controller.routeChanged('/article/a', '/article/b');
+  microtasks.flush();
+
+  assert.deepEqual(calls, ['cleanup:1', 'disconnect', 'observe', 'start:2']);
+  assert.equal(controller.routeEpoch(), 2);
+});
+
+test('reentrant distinct route callbacks serialize cleanup and activate only the final epoch', () => {
+  const calls = [];
+  const microtasks = fakeMicrotasks();
+  const MutationObserver = observerFixture(calls);
+  let controller;
+  controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    queueMicrotask: microtasks.queueMicrotask,
+    onRouteCleanup: ({ epoch }) => {
+      calls.push(`cleanup:${epoch}`);
+      if (epoch === 1) controller.routeChanged('/article/b', '/article/c');
+    },
+    onRouteStart: ({ epoch }) => calls.push(`start:${epoch}`)
+  });
+  controller.observe({ body: element('body') });
+  calls.length = 0;
+
+  controller.routeChanged('/article/a', '/article/b');
+  microtasks.flush();
+
+  assert.deepEqual(calls, [
+    'cleanup:1', 'disconnect', 'observe',
+    'cleanup:2', 'disconnect', 'observe',
+    'start:3'
+  ]);
+  assert.equal(controller.routeEpoch(), 3);
 });
 
 test('history and browser navigation signals are deduplicated and cleanup restores every hook', () => {
   const calls = [];
+  const microtasks = fakeMicrotasks();
   const MutationObserver = observerFixture(calls);
   const events = eventTarget();
   const location = { href: 'https://example.test/a' };
@@ -260,6 +508,7 @@ test('history and browser navigation signals are deduplicated and cleanup restor
     history,
     location,
     eventTarget: events,
+    queueMicrotask: microtasks.queueMicrotask,
     onRouteCleanup: ({ epoch }) => calls.push(`cleanup:${epoch}`),
     onRouteStart: ({ epoch }) => calls.push(`start:${epoch}`)
   });
@@ -267,10 +516,13 @@ test('history and browser navigation signals are deduplicated and cleanup restor
   calls.length = 0;
 
   assert.equal(history.pushState({}, '', '/b'), 'push-result');
+  microtasks.flush();
   assert.equal(history.replaceState({}, '', '/c'), 'replace-result');
+  microtasks.flush();
   events.dispatch('popstate');
   location.href = 'https://example.test/c#lesson';
   events.dispatch('hashchange');
+  microtasks.flush();
 
   assert.deepEqual(calls.filter((call) => call.startsWith('start:')), ['start:2', 'start:3', 'start:4']);
   assert.equal(controller.routeEpoch(), 4);

@@ -51,6 +51,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         const listeners = [];
         const semanticRequests = [];
         const cancelRequests = [];
+        const pendingResponses = new Map();
         const originalPushState = history.pushState;
         const originalReplaceState = history.replaceState;
         let popMarkup = null;
@@ -98,6 +99,9 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
                 }
                 if (message.type !== 'HALO_ENRICH_BATCH') return null;
                 semanticRequests.push(message);
+                if (message.items.some((item) => item.text === 'Pending semantic response.')) {
+                  return new Promise((resolve) => pendingResponses.set(message.requestId, { resolve, message }));
+                }
                 return responseFor(message);
               }
             }
@@ -109,6 +113,12 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           cancelRequests,
           originalPushState,
           originalReplaceState,
+          resolvePending() {
+            for (const [requestId, pending] of pendingResponses) {
+              pendingResponses.delete(requestId);
+              pending.resolve(responseFor(pending.message));
+            }
+          },
           setPopMarkup(value) { popMarkup = value; }
         };
       });
@@ -149,6 +159,26 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         main.appendChild(feed);
       });
       await page.waitForSelector('#inserted [data-halo-token="1"]');
+
+      await page.evaluate(() => {
+        const race = document.createElement('p');
+        race.id = 'race';
+        race.textContent = 'Pending semantic response.';
+        document.getElementById('content').appendChild(race);
+      });
+      await page.waitForFunction(() =>
+        __haloDynamic.semanticRequests.some((request) =>
+          request.items.some((item) => item.text === 'Pending semantic response.')
+        )
+      );
+      const staleProjection = await page.evaluate(async () => {
+        document.getElementById('race').textContent = 'Replacement wins before response.';
+        __haloDynamic.resolvePending();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return document.querySelectorAll('#race [data-halo-token="1"]').length;
+      });
+      assert.equal(staleProjection, 0, 'pending result cannot project onto replaced text');
+      await page.waitForSelector('#race [data-halo-token="1"]');
       await page.waitForSelector('#lazy [data-halo-token="1"]');
       await page.waitForFunction(() =>
         document.querySelectorAll('#feed > p [data-halo-token="1"]').length >= 3
@@ -172,8 +202,8 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       await page.waitForSelector('#inserted [data-halo-token="1"]');
 
       await page.evaluate(() => {
-        document.getElementById('content').innerHTML = '<p id="spa-push">The pushed route starts.</p>';
         history.pushState({ route: 'push' }, '', '/route-push');
+        document.getElementById('content').innerHTML = '<p id="spa-push">The history-first route starts.</p>';
       });
       await page.waitForSelector('#spa-push [data-halo-token="1"]');
 
@@ -201,6 +231,9 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           request.items.map((item) => item.text)
         );
         const epochs = [...new Set(__haloDynamic.semanticRequests.map((request) => request.pageEpoch))];
+        const epochTwoTexts = __haloDynamic.semanticRequests
+          .filter((request) => request.pageEpoch === 2)
+          .flatMap((request) => request.items.map((item) => item.text));
         const nestedWrappers = document.querySelectorAll(
           '[data-halo-token="1"] [data-halo-token="1"]'
         ).length;
@@ -209,6 +242,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         return {
           itemTexts,
           epochs,
+          epochTwoTexts,
           nestedWrappers,
           wrappersAfterCleanup: document.querySelectorAll('[data-halo-token="1"]').length,
           historyRestored: history.pushState === __haloDynamic.originalPushState &&
@@ -225,7 +259,9 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         'Infinite item gamma arrives.',
         'The replacement content renders.',
         'The framework redraw stays singular.',
-        'The pushed route starts.',
+        'Pending semantic response.',
+        'Replacement wins before response.',
+        'The history-first route starts.',
         'The replaced route starts.',
         'The popped route starts.',
         'The hash route starts.'
@@ -233,6 +269,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         assert.equal(result.itemTexts.filter((value) => value === text).length, 1, text);
       }
       assert.deepEqual(result.epochs, [1, 2, 3, 4, 5]);
+      assert.deepEqual(result.epochTwoTexts, ['The history-first route starts.']);
       assert.equal(result.nestedWrappers, 0);
       assert.equal(result.wrappersAfterCleanup, 0);
       assert.equal(result.historyRestored, true);
