@@ -668,3 +668,51 @@ test('same-element replacement invalidates pending root work before projection',
   discovery.invalidateRoots([root]);
   assert.equal(Content.rootWorkIsCurrent(work, discovery), false);
 });
+
+test('runtime teardown detaches first and attempts every cleanup stage after independent failures', () => {
+  for (const failingStage of ['cancel-epoch', 'renderer-cleanup', 'discovery-disconnect']) {
+    const calls = [];
+    const errors = [];
+    const runtime = {
+      epoch: 7,
+      scheduler: {
+        cancelEpoch(epoch) {
+          calls.push(`cancel:${epoch}`);
+          if (failingStage === 'cancel-epoch') throw new Error('cancel failed');
+        }
+      },
+      discovery: {
+        disconnect() {
+          calls.push('disconnect');
+          if (failingStage === 'discovery-disconnect') throw new Error('disconnect failed');
+        }
+      }
+    };
+    let activeRuntime = runtime;
+
+    const result = Content.cleanupRuntime(runtime, {
+      epoch: 7,
+      detach: () => {
+        calls.push('detach');
+        activeRuntime = null;
+      },
+      suppressRendererMutations: (callback) => {
+        calls.push('suppress');
+        return callback();
+      },
+      rendererCleanup: () => {
+        calls.push('renderer');
+        if (failingStage === 'renderer-cleanup') throw new Error('renderer failed');
+      },
+      onError: (error, metadata) => errors.push([error.message, metadata.phase])
+    });
+
+    assert.equal(result, null, failingStage);
+    assert.equal(activeRuntime, null, failingStage);
+    assert.deepEqual(calls.filter((call) => !call.startsWith('error:')), [
+      'detach', 'cancel:7', 'suppress', 'renderer', 'disconnect'
+    ], failingStage);
+    assert.equal(errors.length, 1, failingStage);
+    assert.equal(errors[0][1], failingStage, failingStage);
+  }
+});

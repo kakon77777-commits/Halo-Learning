@@ -193,18 +193,25 @@
       }
     }
 
-    function isHaloRendererRecord(record) {
-      if (!record) return false;
-      if (isHaloOwned(record.target)) return true;
-      return [...Array.from(record.addedNodes || []), ...Array.from(record.removedNodes || [])]
-        .some((node) => isHaloOwned(node));
+    function sanitizeRendererRecord(record) {
+      if (!record || isHaloOwned(record.target)) return null;
+      if (record.type !== 'childList') return record;
+      const addedNodes = Array.from(record.addedNodes || []).filter((node) => !isHaloOwned(node));
+      const removedNodes = Array.from(record.removedNodes || []).filter((node) => !isHaloOwned(node));
+      if (!addedNodes.length && !removedNodes.length) return null;
+      return {
+        type: record.type,
+        target: record.target,
+        addedNodes,
+        removedNodes
+      };
     }
 
     function queueMutationRecords(records, filterRendererRecords) {
       if (cleaned) return;
-      const retained = Array.from(records || []).filter((record) =>
-        !filterRendererRecords || !isHaloRendererRecord(record)
-      );
+      const retained = Array.from(records || []).map((record) =>
+        filterRendererRecords ? sanitizeRendererRecord(record) : record
+      ).filter(Boolean);
       if (!retained.length) return;
       const invalidated = coalesceMutations(retained, isHaloOwned);
       if (invalidated.roots.length || invalidated.removedRoots.length) {
@@ -324,6 +331,7 @@
     }
 
     function deferRouteStart(metadata) {
+      if (cleaned) return;
       const token = ++routeStartToken;
       pendingRouteStart = metadata;
       const firstTurn = () => {
@@ -372,6 +380,11 @@
           reportError(error, 'route-observer-start', startMetadata);
         }
         transitioning = false;
+      }
+      if (cleaned) {
+        queuedTransition = null;
+        cancelPendingRouteStart();
+        return;
       }
       if (queuedTransition) {
         const queued = queuedTransition;

@@ -560,6 +560,46 @@
     })));
   }
 
+  function cleanupRuntime(runtime, options) {
+    const settings = options || {};
+    const epoch = settings.epoch === undefined ? runtime && runtime.epoch : settings.epoch;
+    const report = (error, phase) => {
+      if (typeof settings.onError !== 'function') return;
+      try {
+        settings.onError(error, Object.freeze({ phase, epoch }));
+      } catch (_hookError) {
+        // Cleanup must remain best effort even when its reporter fails.
+      }
+    };
+    const attempt = (phase, callback) => {
+      if (typeof callback !== 'function') return;
+      try {
+        callback();
+      } catch (error) {
+        report(error, phase);
+      }
+    };
+
+    attempt('runtime-detach', settings.detach);
+    attempt('cancel-epoch', runtime && runtime.scheduler &&
+      typeof runtime.scheduler.cancelEpoch === 'function'
+      ? () => runtime.scheduler.cancelEpoch(epoch)
+      : null);
+    attempt('renderer-cleanup', () => {
+      const cleanup = typeof settings.rendererCleanup === 'function' ? settings.rendererCleanup : () => {};
+      if (typeof settings.suppressRendererMutations === 'function') {
+        settings.suppressRendererMutations(cleanup);
+      } else {
+        cleanup();
+      }
+    });
+    attempt('discovery-disconnect', runtime && runtime.discovery &&
+      typeof runtime.discovery.disconnect === 'function'
+      ? () => runtime.discovery.disconnect()
+      : null);
+    return null;
+  }
+
   function initBrowser() {
     if (!root.document || !root.chrome || !root.chrome.runtime) return;
     if (root.__HALO_CONTENT_INITIALIZED__) return;
@@ -578,6 +618,32 @@
     let activeRuntime = null;
     let activeController = null;
     let requestSequence = 0;
+    let rendererOwnedNodes = null;
+
+    function trackRendererNode(node) {
+      if (node && rendererOwnedNodes) rendererOwnedNodes.add(node);
+      return node;
+    }
+
+    function runRendererMutation(controller, callback) {
+      const previousOwnedNodes = rendererOwnedNodes;
+      rendererOwnedNodes = new Set();
+      try {
+        return controller ? controller.suppressRendererMutations(callback) : callback();
+      } finally {
+        rendererOwnedNodes = previousOwnedNodes;
+      }
+    }
+
+    function isRendererOwned(node) {
+      if (rendererOwnedNodes && rendererOwnedNodes.has(node)) return true;
+      const element = node && node.nodeType === 1 ? node : node && (node.parentElement || node.parentNode);
+      if (!element) return false;
+      if (rendererOwnedNodes && rendererOwnedNodes.has(element)) return true;
+      if (element.dataset && (element.dataset.haloToken === '1' || element.dataset.haloOwned === '1')) return true;
+      return typeof element.closest === 'function' &&
+        Boolean(element.closest('[data-halo-token="1"], [data-halo-owned="1"]'));
+    }
 
     function isVisible(element) {
       if (!element || !root.getComputedStyle) return true;
@@ -612,9 +678,17 @@
         const parent = span.parentNode;
         if (!parent) continue;
         parents.add(parent);
-        parent.replaceChild(root.document.createTextNode(span.dataset.haloOriginal || span.textContent || ''), span);
+        trackRendererNode(span);
+        parent.replaceChild(
+          trackRendererNode(root.document.createTextNode(span.dataset.haloOriginal || span.textContent || '')),
+          span
+        );
       }
-      for (const parent of parents) if (typeof parent.normalize === 'function') parent.normalize();
+      for (const parent of parents) {
+        if (typeof parent.normalize !== 'function') continue;
+        for (const child of Array.from(parent.childNodes || [])) trackRendererNode(child);
+        parent.normalize();
+      }
     }
 
     function removeMarking() {
@@ -636,6 +710,7 @@
 
     function spanFor(segment) {
       const span = root.document.createElement('span');
+      trackRendererNode(span);
       span.dataset.haloToken = '1';
       span.dataset.haloOriginal = segment.text;
       if (segment.label) span.dataset.haloPos = segment.label;
@@ -663,9 +738,10 @@
           fragment.appendChild(spanFor(segment));
           count += 1;
         } else if (segment.text) {
-          fragment.appendChild(root.document.createTextNode(segment.text));
+          fragment.appendChild(trackRendererNode(root.document.createTextNode(segment.text)));
         }
       }
+      trackRendererNode(node);
       node.parentNode.replaceChild(fragment, node);
       return count;
     }
@@ -748,7 +824,7 @@
           markedTokens += replaceTextNode(node, buildSegments(node.nodeValue || '', plan));
         }
       };
-      if (activeController) activeController.suppressRendererMutations(render);
+      if (activeController) runRendererMutation(activeController, render);
       else render();
       return Object.freeze({
         semanticTokens,
@@ -852,6 +928,7 @@
           history: root.history,
           location: root.location,
           eventTarget: root,
+          isHaloOwned: isRendererOwned,
           onRootsInvalidated: (roots, metadata) => {
             if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
             activeRuntime.discovery.releaseRoots(metadata.removedRoots);
@@ -862,15 +939,21 @@
             activeRuntime.discovery.refreshRoots(roots, { alreadyInvalidated: true });
           },
           onRouteCleanup: ({ epoch }) => {
-            if (activeRuntime && activeRuntime.epoch === epoch) {
-              activeRuntime.scheduler.cancelEpoch(epoch);
-              controller.suppressRendererMutations(removeRenderedDom);
-              activeRuntime.discovery.disconnect();
-              activeRuntime = null;
-            } else {
-              controller.suppressRendererMutations(removeRenderedDom);
-            }
-            lastStatus = emptyStatus();
+            const runtime = activeRuntime && activeRuntime.epoch === epoch ? activeRuntime : null;
+            let cleanupFailed = false;
+            cleanupRuntime(runtime, {
+              epoch,
+              detach: () => {
+                if (activeRuntime === runtime) activeRuntime = null;
+              },
+              suppressRendererMutations: (callback) => runRendererMutation(controller, callback),
+              rendererCleanup: removeRenderedDom,
+              onError: () => {
+                cleanupFailed = true;
+                lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
+              }
+            });
+            if (!cleanupFailed) lastStatus = emptyStatus();
           },
           onRouteStart: ({ epoch }) => {
             startRuntime(settings, epoch).catch(() => {
@@ -917,6 +1000,7 @@
     buildEnrichmentItems,
     validateEnrichmentResponse,
     rootWorkIsCurrent,
+    cleanupRuntime,
     buildRootWork,
     createViewportDiscovery
   });

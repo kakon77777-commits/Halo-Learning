@@ -11,6 +11,13 @@ function element(name, options) {
     parentElement: settings.parent || null,
     isConnected: settings.isConnected !== false,
     owned: Boolean(settings.owned),
+    closest(selector) {
+      if (!selector.includes('data-halo')) return null;
+      for (let current = node; current; current = current.parentElement) {
+        if (current.owned) return current;
+      }
+      return null;
+    },
     contains(candidate) {
       for (let current = candidate; current; current = current.parentElement) {
         if (current === node) return true;
@@ -273,6 +280,84 @@ test('renderer suppression preserves non-Halo records before and during a throwi
   assert.deepEqual(changed, [[prequeued, deliveredDuring, queuedDuring]]);
 });
 
+test('renderer suppression filters Halo nodes but preserves a legitimate sibling in one added list', () => {
+  const clock = fakeClock();
+  const changed = [];
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onRootsChanged: (roots) => changed.push(roots)
+  });
+  controller.observe({ body: element('body') });
+  const legitimate = element('legitimate');
+  const halo = element('halo', { owned: true });
+
+  controller.suppressRendererMutations(() => {
+    MutationObserver.instances[0].records.push(mutation({ addedNodes: [legitimate, halo] }));
+  });
+  clock.tick(80);
+
+  assert.deepEqual(changed, [[legitimate]]);
+});
+
+test('renderer suppression preserves target context and detached roots from a mixed removed list', () => {
+  const clock = fakeClock();
+  const changed = [];
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onRootsChanged: (roots, metadata) => changed.push({ roots, removedRoots: metadata.removedRoots })
+  });
+  controller.observe({ body: element('body') });
+  const target = element('article');
+  const legitimate = element('detached', { parent: target, isConnected: false });
+  const halo = element('halo', { parent: target, owned: true, isConnected: false });
+
+  controller.suppressRendererMutations(() => {
+    MutationObserver.instances[0].records.push(mutation({
+      target,
+      removedNodes: [legitimate, halo]
+    }));
+  });
+  clock.tick(80);
+
+  assert.deepEqual(changed, [{ roots: [target], removedRoots: [legitimate] }]);
+});
+
+test('renderer suppression ignores Halo-only and nested target-owned mutations', () => {
+  const clock = fakeClock();
+  const changed = [];
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onRootsChanged: (roots) => changed.push(roots)
+  });
+  controller.observe({ body: element('body') });
+  const article = element('article');
+  const halo = element('halo', { parent: article, owned: true });
+  const nested = element('nested', { parent: halo });
+
+  controller.suppressRendererMutations(() => {
+    MutationObserver.instances[0].records.push(
+      mutation({ target: article, addedNodes: [halo] }),
+      mutation({ target: halo, addedNodes: [nested] })
+    );
+  });
+  clock.tick(300);
+
+  assert.deepEqual(changed, []);
+  assert.equal(clock.pending(), 0);
+});
+
 test('one route change cancels old work, removes old DOM, disconnects, and starts one new epoch', () => {
   const calls = [];
   const microtasks = fakeMicrotasks();
@@ -434,6 +519,53 @@ test('throwing final cleanup still restores hooks, observation, and timers exact
   assert.equal(events.count('hashchange'), 0);
   assert.equal(clock.pending(), 0);
   assert.equal(calls.filter((call) => call === 'disconnect').length, 1);
+});
+
+test('reentrant final cleanup during route cleanup cannot schedule or resurrect route start', () => {
+  const calls = [];
+  const clock = fakeClock();
+  const microtasks = fakeMicrotasks();
+  const MutationObserver = observerFixture(calls);
+  const events = eventTarget();
+  const location = { href: 'https://example.test/a' };
+  const originalPushState = function (_state, _unused, url) {
+    location.href = new URL(url, location.href).href;
+    return 'push-result';
+  };
+  const originalReplaceState = function () {};
+  const history = { pushState: originalPushState, replaceState: originalReplaceState };
+  let controller;
+  controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    history,
+    location,
+    eventTarget: events,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    queueMicrotask: microtasks.queueMicrotask,
+    onRouteCleanup: (metadata) => {
+      calls.push(metadata.reason === 'cleanup' ? 'cleanup:final' : `cleanup:route:${metadata.epoch}`);
+      if (!metadata.reason) controller.cleanup();
+    },
+    onRouteStart: ({ epoch }) => calls.push(`start:${epoch}`)
+  });
+  controller.observe({ body: element('body') });
+  calls.length = 0;
+
+  assert.equal(history.pushState({}, '', '/b'), 'push-result');
+  assert.equal(microtasks.pending(), 0);
+  controller.cleanup();
+  microtasks.flush();
+  clock.tick(300);
+
+  assert.deepEqual(calls, ['cleanup:route:1', 'cleanup:final', 'disconnect']);
+  assert.equal(microtasks.pending(), 0);
+  assert.equal(clock.pending(), 0);
+  assert.equal(history.pushState, originalPushState);
+  assert.equal(history.replaceState, originalReplaceState);
+  assert.equal(events.count('popstate'), 0);
+  assert.equal(events.count('hashchange'), 0);
+  assert.equal(MutationObserver.instances[0].document, null);
 });
 
 test('reentrant duplicate route callbacks coalesce into one ordered transition', () => {
