@@ -12,6 +12,7 @@
     'src/shared/settings.js',
     'src/shared/sentence-pipeline.js',
     'src/shared/runtime-scheduler.js',
+    'src/shared/dynamic-dom-controller.js',
     'src/content.js'
   ];
   const CHANNEL_CONTROLS = Object.freeze({

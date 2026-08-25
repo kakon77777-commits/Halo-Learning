@@ -207,6 +207,7 @@
     const observed = new WeakSet();
     const intersecting = new WeakSet();
     const rootIds = new WeakMap();
+    const rootRevisions = new Map();
     const walker = document.createTreeWalker(
       document.body || document.documentElement,
       NodeFilter.SHOW_ELEMENT
@@ -238,10 +239,20 @@
       return rootIds.get(element);
     }
 
+    function rootRevisionFor(element) {
+      const rootId = rootIdFor(element);
+      if (!rootRevisions.has(rootId)) rootRevisions.set(rootId, 1);
+      return rootRevisions.get(rootId);
+    }
+
     function enqueueVisible(element, priority) {
       if (!element || element.isConnected === false) return false;
       const rootId = rootIdFor(element);
-      const workValue = settings.makeWork(element, true, { rootId, priority });
+      const workValue = settings.makeWork(element, true, {
+        rootId,
+        priority,
+        rootRevision: rootRevisionFor(element)
+      });
       if (!workValue) return false;
       if (Array.isArray(workValue)) {
         const accepted = scheduler.enqueue(workValue.map((item) => ({ ...item, rootId, priority, visible: true })));
@@ -258,6 +269,7 @@
       if (!contentRoot || observed.has(contentRoot)) return null;
       observed.add(contentRoot);
       rootIdFor(contentRoot);
+      rootRevisionFor(contentRoot);
       observer.observe(contentRoot);
       observedRoots += 1;
       return contentRoot;
@@ -356,6 +368,74 @@
       return status();
     }
 
+    function contentRootsWithin(value) {
+      const element = value && value.nodeType === 1 ? value : value && value.parentElement;
+      if (!element) return [];
+      const direct = candidateRoot(element);
+      if (direct) return [direct];
+      if (typeof element.querySelectorAll !== 'function') return [];
+      const roots = [];
+      const seen = new Set();
+      for (const descendant of element.querySelectorAll(CONTENT_ROOT_SELECTOR)) {
+        const contentRoot = candidateRoot(descendant);
+        if (!contentRoot || seen.has(contentRoot)) continue;
+        seen.add(contentRoot);
+        roots.push(contentRoot);
+      }
+      return roots;
+    }
+
+    function refreshRoots(values) {
+      if (disconnected) return 0;
+      const changed = [];
+      const seen = new Set();
+      for (const value of Array.from(values || [])) {
+        for (const contentRoot of contentRootsWithin(value)) {
+          if (seen.has(contentRoot) || contentRoot.isConnected === false) continue;
+          seen.add(contentRoot);
+          changed.push(contentRoot);
+        }
+      }
+      for (const contentRoot of changed) {
+        const rootId = rootIdFor(contentRoot);
+        const wasObserved = observed.has(contentRoot);
+        const wasIntersecting = intersecting.has(contentRoot);
+        scheduler.cancelRoot(rootId);
+        if (wasObserved || rootRevisions.has(rootId)) {
+          rootRevisions.set(rootId, rootRevisionFor(contentRoot) + 1);
+        } else {
+          rootRevisions.set(rootId, 1);
+        }
+        if (wasObserved && typeof observer.unobserve === 'function') observer.unobserve(contentRoot);
+        if (!wasObserved) {
+          observed.add(contentRoot);
+          observedRoots += 1;
+        }
+        intersecting.delete(contentRoot);
+        observer.observe(contentRoot);
+        if (wasIntersecting) {
+          intersecting.add(contentRoot);
+          enqueueVisible(contentRoot, 'inferred');
+        }
+      }
+      return changed.length;
+    }
+
+    function releaseRoots(values) {
+      if (disconnected) return 0;
+      const released = new Set();
+      for (const value of Array.from(values || [])) {
+        for (const contentRoot of contentRootsWithin(value)) {
+          if (released.has(contentRoot)) continue;
+          released.add(contentRoot);
+          scheduler.cancelRoot(rootIdFor(contentRoot));
+          intersecting.delete(contentRoot);
+          if (typeof observer.unobserve === 'function') observer.unobserve(contentRoot);
+        }
+      }
+      return released.size;
+    }
+
     function disconnect() {
       disconnected = true;
       observer.disconnect();
@@ -365,13 +445,14 @@
       }
       scheduledHandle = null;
       scheduledKind = null;
+      rootRevisions.clear();
     }
 
     function status() {
       return Object.freeze({ candidatesVisited, observedRoots, done, disconnected });
     }
 
-    return Object.freeze({ start, disconnect, status });
+    return Object.freeze({ start, refreshRoots, releaseRoots, disconnect, status });
   }
 
   function buildSegments(text, renderPlan) {
@@ -445,7 +526,7 @@
     });
     let lastStatus = emptyStatus();
     let activeRuntime = null;
-    let pageEpoch = 0;
+    let activeController = null;
     let requestSequence = 0;
 
     function isVisible(element) {
@@ -474,12 +555,7 @@
       ));
     }
 
-    function removeMarking() {
-      if (activeRuntime) {
-        activeRuntime.discovery.disconnect();
-        activeRuntime.scheduler.cancelAll();
-        activeRuntime = null;
-      }
+    function removeRenderedDom() {
       const parents = new Set();
       const markedNodes = Array.from(root.document.querySelectorAll('[data-halo-token="1"]'));
       for (const span of markedNodes) {
@@ -489,6 +565,21 @@
         parent.replaceChild(root.document.createTextNode(span.dataset.haloOriginal || span.textContent || ''), span);
       }
       for (const parent of parents) if (typeof parent.normalize === 'function') parent.normalize();
+    }
+
+    function removeMarking() {
+      if (activeController) {
+        const controller = activeController;
+        controller.cleanup();
+        if (activeController === controller) activeController = null;
+      } else {
+        if (activeRuntime) {
+          activeRuntime.discovery.disconnect();
+          activeRuntime.scheduler.cancelAll();
+          activeRuntime = null;
+        }
+        removeRenderedDom();
+      }
       lastStatus = emptyStatus();
       return lastStatus;
     }
@@ -601,14 +692,90 @@
         }
       }
       let markedTokens = 0;
-      for (const [node, plan] of plansByNode) {
-        if (!node.parentNode) continue;
-        markedTokens += replaceTextNode(node, buildSegments(node.nodeValue || '', plan));
-      }
+      const render = () => {
+        for (const [node, plan] of plansByNode) {
+          if (!node.parentNode) continue;
+          markedTokens += replaceTextNode(node, buildSegments(node.nodeValue || '', plan));
+        }
+      };
+      if (activeController) activeController.suppressRendererMutations(render);
+      else render();
       return Object.freeze({
         semanticTokens,
         markedTokens
       });
+    }
+
+    async function startRuntime(settings, epoch) {
+      const Dictionary = root.HaloDictionary;
+      const Semantic = root.HaloSemanticAnnotations;
+      const Grammar = root.HaloGrammarAnnotations;
+      const Projection = root.HaloProjection;
+      const Pipeline = root.HaloSentencePipeline;
+      const Progressive = root.HaloProgressiveRuntime;
+      const RuntimeScheduler = root.HaloRuntimeScheduler;
+      const Contracts = root.HaloSemanticContracts;
+      if (isSensitivePage()) {
+        lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'SENSITIVE_PAGE_BLOCKED' });
+        return lastStatus;
+      }
+      const provider = Dictionary.createBootstrapDictionaryProvider();
+      const lexicalVersion = `${provider.id}@${provider.version}`;
+      const modules = { Semantic, Grammar, Projection, Pipeline, Progressive, Contracts };
+      const scheduler = RuntimeScheduler.createRuntimeScheduler({
+        budgets: settings.runtimeBudgets,
+        processBatch: async (batch, context) => {
+          const result = await requestEnrichment(batch, context, modules, settings, epoch, lexicalVersion);
+          if (!result || context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return;
+          const rendered = renderBatch(batch, result, modules, settings);
+          lastStatus = Object.freeze({
+            active: lastStatus.active || rendered.markedTokens > 0,
+            textNodesVisited: lastStatus.textNodesVisited + batch.textNodes,
+            semanticTokens: lastStatus.semanticTokens + rendered.semanticTokens,
+            markedTokens: lastStatus.markedTokens + rendered.markedTokens,
+            providerMode: result.providerMode,
+            queuedRoots: scheduler.status().queuedRoots,
+            oversizedWork: scheduler.status().oversizedWork,
+            lastError: null
+          });
+        },
+        onQuarantine: (outcome) => {
+          const retained = [...lastStatus.oversizedWork, outcome].slice(-settings.runtimeBudgets.maxQueuedRoots);
+          lastStatus = Object.freeze({ ...lastStatus, oversizedWork: Object.freeze(retained) });
+        },
+        onError: () => {
+          lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_MARKING_ERROR' });
+        }
+      });
+      const discovery = createViewportDiscovery({
+        document: root.document,
+        NodeFilter: root.NodeFilter,
+        IntersectionObserver: root.IntersectionObserver,
+        scheduler,
+        budgets: settings.runtimeBudgets,
+        innerWidth: root.innerWidth,
+        innerHeight: root.innerHeight,
+        makeWork: (element, visible, metadata) => buildRootWork(element, {
+          rootId: metadata.rootId,
+          rootRevision: metadata.rootRevision,
+          epoch,
+          priority: metadata.priority,
+          visible,
+          settings,
+          pipeline: Pipeline
+        })
+      });
+      activeRuntime = { scheduler, discovery, epoch };
+      lastStatus = Object.freeze({ ...emptyStatus(), queuedRoots: 0 });
+      discovery.start();
+      await scheduler.flush();
+      if (!activeRuntime || activeRuntime.epoch !== epoch) return lastStatus;
+      lastStatus = Object.freeze({
+        ...lastStatus,
+        queuedRoots: scheduler.status().queuedRoots,
+        oversizedWork: scheduler.status().oversizedWork
+      });
+      return lastStatus;
     }
 
     async function applyMarking(rawSettings) {
@@ -622,73 +789,44 @@
         const Progressive = root.HaloProgressiveRuntime;
         const RuntimeScheduler = root.HaloRuntimeScheduler;
         const Contracts = root.HaloSemanticContracts;
+        const DynamicDom = root.HaloDynamicDomController;
         if (!Settings || !Dictionary || !Semantic || !Grammar || !Projection || !Pipeline ||
-            !Progressive || !RuntimeScheduler || !Contracts) throw new Error('Halo shared modules are not loaded');
+            !Progressive || !RuntimeScheduler || !Contracts || !DynamicDom) {
+          throw new Error('Halo shared modules are not loaded');
+        }
         const settings = Settings.normalizeSettings(rawSettings);
         removeMarking();
         if (!settings.enabled) return lastStatus;
-        if (isSensitivePage()) {
-          lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'SENSITIVE_PAGE_BLOCKED' });
-          return lastStatus;
-        }
-        pageEpoch += 1;
-        const epoch = pageEpoch;
-        const provider = Dictionary.createBootstrapDictionaryProvider();
-        const lexicalVersion = `${provider.id}@${provider.version}`;
-        const modules = { Semantic, Grammar, Projection, Pipeline, Progressive, Contracts };
-        const scheduler = RuntimeScheduler.createRuntimeScheduler({
-          budgets: settings.runtimeBudgets,
-          processBatch: async (batch, context) => {
-            const result = await requestEnrichment(batch, context, modules, settings, epoch, lexicalVersion);
-            if (!result || context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return;
-            const rendered = renderBatch(batch, result, modules, settings);
-            lastStatus = Object.freeze({
-              active: lastStatus.active || rendered.markedTokens > 0,
-              textNodesVisited: lastStatus.textNodesVisited + batch.textNodes,
-              semanticTokens: lastStatus.semanticTokens + rendered.semanticTokens,
-              markedTokens: lastStatus.markedTokens + rendered.markedTokens,
-              providerMode: result.providerMode,
-              queuedRoots: scheduler.status().queuedRoots,
-              oversizedWork: scheduler.status().oversizedWork,
-              lastError: null
+        const controller = DynamicDom.createDynamicDomController({
+          MutationObserver: root.MutationObserver,
+          history: root.history,
+          location: root.location,
+          eventTarget: root,
+          onRootsChanged: (roots, metadata) => {
+            if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
+            activeRuntime.discovery.releaseRoots(metadata.removedRoots);
+            activeRuntime.discovery.refreshRoots(roots);
+          },
+          onRouteCleanup: ({ epoch }) => {
+            if (activeRuntime && activeRuntime.epoch === epoch) {
+              activeRuntime.scheduler.cancelEpoch(epoch);
+              controller.suppressRendererMutations(removeRenderedDom);
+              activeRuntime.discovery.disconnect();
+              activeRuntime = null;
+            } else {
+              controller.suppressRendererMutations(removeRenderedDom);
+            }
+            lastStatus = emptyStatus();
+          },
+          onRouteStart: ({ epoch }) => {
+            startRuntime(settings, epoch).catch(() => {
+              lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
             });
-          },
-          onQuarantine: (outcome) => {
-            const retained = [...lastStatus.oversizedWork, outcome].slice(-settings.runtimeBudgets.maxQueuedRoots);
-            lastStatus = Object.freeze({ ...lastStatus, oversizedWork: Object.freeze(retained) });
-          },
-          onError: () => {
-            lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_MARKING_ERROR' });
           }
         });
-        const discovery = createViewportDiscovery({
-          document: root.document,
-          NodeFilter: root.NodeFilter,
-          IntersectionObserver: root.IntersectionObserver,
-          scheduler,
-          budgets: settings.runtimeBudgets,
-          innerWidth: root.innerWidth,
-          innerHeight: root.innerHeight,
-          makeWork: (element, visible, metadata) => buildRootWork(element, {
-            rootId: metadata.rootId,
-            rootRevision: 1,
-            epoch,
-            priority: metadata.priority,
-            visible,
-            settings,
-            pipeline: Pipeline
-          })
-        });
-        activeRuntime = { scheduler, discovery, epoch };
-        lastStatus = Object.freeze({ ...emptyStatus(), queuedRoots: 0 });
-        discovery.start();
-        await scheduler.flush();
-        lastStatus = Object.freeze({
-          ...lastStatus,
-          queuedRoots: scheduler.status().queuedRoots,
-          oversizedWork: scheduler.status().oversizedWork
-        });
-        return lastStatus;
+        activeController = controller;
+        controller.observe(root.document);
+        return await startRuntime(settings, controller.routeEpoch());
       } catch (_error) {
         lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
         return lastStatus;

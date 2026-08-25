@@ -399,6 +399,69 @@ test('viewport discovery samples visible roots first and only enqueues intersect
   discovery.disconnect();
 });
 
+test('dynamic root refresh cancels stale work and enqueues one incremented visible revision', () => {
+  const paragraph = candidate('lesson');
+  const enqueued = [];
+  const cancelled = [];
+  let observer;
+  class FixtureIntersectionObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.observed = [];
+      this.unobserved = [];
+      observer = this;
+    }
+    observe(value) { this.observed.push(value); }
+    unobserve(value) { this.unobserved.push(value); }
+    disconnect() {}
+  }
+  const document = {
+    body: candidate('body'),
+    documentElement: candidate('html'),
+    elementsFromPoint: () => [paragraph],
+    createTreeWalker: () => ({ nextNode: () => null })
+  };
+  const discovery = Content.createViewportDiscovery({
+    document,
+    NodeFilter: { SHOW_ELEMENT: 1 },
+    IntersectionObserver: FixtureIntersectionObserver,
+    scheduler: {
+      enqueue: (value) => { enqueued.push(value); return true; },
+      cancelRoot: (rootId) => { cancelled.push(rootId); return 1; },
+      flush: () => Promise.resolve()
+    },
+    budgets: { timeSliceMs: 8, viewportBufferPx: 1200 },
+    makeWork: (element, visible, metadata) => ({
+      id: `${element.id}:r${metadata.rootRevision}`,
+      rootId: element.id,
+      rootRevision: metadata.rootRevision,
+      epoch: 1,
+      priority: metadata.priority,
+      visible
+    }),
+    innerWidth: 1000,
+    innerHeight: 800,
+    requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
+    cancelIdleCallback: () => {},
+    clock: { now: () => 0 }
+  });
+  discovery.start();
+
+  discovery.refreshRoots([paragraph, paragraph]);
+  observer.callback([{ target: paragraph, isIntersecting: true }]);
+
+  assert.deepEqual(cancelled, ['lesson']);
+  assert.deepEqual(observer.unobserved, [paragraph]);
+  assert.deepEqual(enqueued.map((item) => [item.rootId, item.rootRevision]), [
+    ['lesson', 1],
+    ['lesson', 2]
+  ]);
+
+  discovery.releaseRoots([paragraph]);
+  assert.deepEqual(cancelled, ['lesson', 'lesson']);
+  assert.deepEqual(observer.unobserved, [paragraph, paragraph]);
+});
+
 test('enrichment items recompute canonical keys from every semantic input', () => {
   const records = [
     { id: '1:0:17', text: 'The model learns.', language: 'en', rootRevision: 1 },
