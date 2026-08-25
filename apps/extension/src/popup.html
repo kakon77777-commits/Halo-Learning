@@ -81,9 +81,19 @@
           <option value="inline">Inline · 行內</option>
         </select>
       </label>
+
+      <label for="triggerMode" class="stack">
+        <span class="label-line"><strong>Interaction</strong><small>觸發方式</small></span>
+        <select id="triggerMode">
+          <option value="hybrid">Hybrid · 混合</option>
+          <option value="adaptive-hover">Adaptive hover · 自適應懸停</option>
+          <option value="explicit-only">Explicit only · 僅明確操作</option>
+        </select>
+      </label>
     </section>
 
     <section class="actions">
+      <button id="analyzeSelectionButton" class="primary analyze" type="button">Analyze selection · 解析選取</button>
       <button id="applyButton" class="primary" type="button">Apply · 套用</button>
       <button id="removeButton" class="secondary" type="button">Remove · 移除</button>
     </section>
@@ -95,6 +105,7 @@
   <script src="shared/settings.js"></script>
   <script src="shared/profile-controls.js"></script>
   <script src="shared/profile-persistence.js"></script>
+  <script src="shared/browser-entry.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

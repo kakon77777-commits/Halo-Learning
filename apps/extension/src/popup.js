@@ -2,20 +2,6 @@
   'use strict';
 
   const STORAGE_KEY = 'haloSettings';
-  const INJECT_FILES = [
-    'src/shared/progressive-runtime.js',
-    'src/shared/semantic-contracts.js',
-    'src/shared/dictionary-provider.js',
-    'src/shared/semantic-annotations.js',
-    'src/shared/grammar-annotations.js',
-    'src/shared/projection.js',
-    'src/shared/settings.js',
-    'src/shared/sentence-pipeline.js',
-    'src/shared/runtime-scheduler.js',
-    'src/shared/dynamic-dom-controller.js',
-    'src/shared/reversible-renderer.js',
-    'src/content.js'
-  ];
   const CHANNEL_CONTROLS = Object.freeze({
     posLabel: 'posLabels',
     posColor: 'posColors',
@@ -42,6 +28,8 @@
     densityValue: get('densityValue'),
     languageMode: get('languageMode'),
     labelPosition: get('labelPosition'),
+    triggerMode: get('triggerMode'),
+    analyzeSelectionButton: get('analyzeSelectionButton'),
     applyButton: get('applyButton'),
     removeButton: get('removeButton'),
     status: get('status')
@@ -62,6 +50,7 @@
     controls.densityValue.value = `${Math.round(settings.density * 100)}%`;
     controls.languageMode.value = settings.languageMode;
     controls.labelPosition.value = settings.labelPosition;
+    controls.triggerMode.value = settings.triggerMode;
   }
 
   function readUiPatch() {
@@ -77,6 +66,7 @@
     if (density !== baseline.density) patch.density = density;
     if (controls.languageMode.value !== baseline.languageMode) patch.languageMode = controls.languageMode.value;
     if (controls.labelPosition.value !== baseline.labelPosition) patch.labelPosition = controls.labelPosition.value;
+    if (controls.triggerMode.value !== baseline.triggerMode) patch.triggerMode = controls.triggerMode.value;
     return patch;
   }
 
@@ -93,8 +83,30 @@
   }
 
   async function inject(tabId) {
-    await chrome.scripting.insertCSS({ target: { tabId }, files: ['src/content.css'] });
-    await chrome.scripting.executeScript({ target: { tabId }, files: INJECT_FILES });
+    await HaloBrowserEntry.injectPackagedRuntime({ chrome, tabId });
+  }
+
+  async function analyzeSelection() {
+    controls.analyzeSelectionButton.disabled = true;
+    controls.applyButton.disabled = true;
+    controls.removeButton.disabled = true;
+    showStatus('Analyzing selection… · 正在解析選取', false);
+    try {
+      await persistSettings();
+      const tab = await currentTab();
+      const result = await HaloBrowserEntry.injectAndSendExplicitSelection({ chrome, tabId: tab.id });
+      if (!result || result.accepted !== true) {
+        showStatus('Select page text first · 請先選取頁面文字', false);
+        return;
+      }
+      showStatus('Selection opened locally · 已在本機開啟', false);
+    } catch (error) {
+      showStatus(`Cannot analyze this selection · ${error.message || error}`, true);
+    } finally {
+      controls.analyzeSelectionButton.disabled = false;
+      controls.applyButton.disabled = false;
+      controls.removeButton.disabled = false;
+    }
   }
 
   async function apply() {
@@ -161,6 +173,11 @@
     persistSettings({ labelPosition: controls.labelPosition.value })
       .catch((error) => showStatus(`Settings error · ${error.message || error}`, true));
   });
+  controls.triggerMode.addEventListener('change', () => {
+    persistSettings({ triggerMode: controls.triggerMode.value })
+      .catch((error) => showStatus(`Settings error · ${error.message || error}`, true));
+  });
+  controls.analyzeSelectionButton.addEventListener('click', analyzeSelection);
   controls.applyButton.addEventListener('click', apply);
   controls.removeButton.addEventListener('click', remove);
 

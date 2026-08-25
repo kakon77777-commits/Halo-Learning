@@ -13,6 +13,235 @@
     'article', 'main', 'section', 'p', 'li', 'blockquote', 'figure', 'figcaption',
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'td', 'th', 'dd', 'dt'
   ].join(',');
+  const EXPLICIT_SELECTION_KEYS = Object.freeze(['action', 'type']);
+
+  function validateExplicitSelectionMessage(message) {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+    if (message.type !== 'HALO_EXPLICIT_SELECTION' || message.action !== 'analyze-selection') return false;
+    return Object.keys(message).sort().join('\u0000') === EXPLICIT_SELECTION_KEYS.join('\u0000');
+  }
+
+  function readExplicitSelection(windowLike) {
+    if (!windowLike || typeof windowLike.getSelection !== 'function') return null;
+    try {
+      const selection = windowLike.getSelection();
+      if (!selection || selection.isCollapsed || !Number.isSafeInteger(selection.rangeCount) || selection.rangeCount < 1) {
+        return null;
+      }
+      const text = String(selection.toString()).trim();
+      if (!text || text.length > 4000) return null;
+      const range = selection.getRangeAt(0);
+      const rect = range && typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
+      const x = rect && Number.isFinite(Number(rect.left)) ? Number(rect.left) : 8;
+      const bottom = rect && Number.isFinite(Number(rect.bottom)) ? Number(rect.bottom) : 8;
+      return Object.freeze({
+        text,
+        anchor: Object.freeze({ x, y: bottom + 8 })
+      });
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function panelModelForToken(token, renderer) {
+    if (!token || !renderer || typeof renderer.ownsToken !== 'function' || !renderer.ownsToken(token)) return null;
+    const title = String(token.textContent || '').trim();
+    if (!title || title.length > 256 || typeof token.getAttribute !== 'function') return null;
+    const details = [
+      token.getAttribute('data-halo-pos'),
+      token.getAttribute('data-halo-meta'),
+      token.getAttribute('data-halo-gloss')
+    ].filter((value) => typeof value === 'string' && value.trim()).map((value) => value.trim());
+    const confidence = token.getAttribute('data-halo-confidence');
+    const rect = typeof token.getBoundingClientRect === 'function' ? token.getBoundingClientRect() : null;
+    const x = rect && Number.isFinite(Number(rect.left)) ? Number(rect.left) : 8;
+    const bottom = rect && Number.isFinite(Number(rect.bottom)) ? Number(rect.bottom) : 8;
+    return Object.freeze({
+      title,
+      body: details.join(' · '),
+      status: typeof confidence === 'string' && confidence.trim() ? `Confidence ${confidence.trim()}` : '',
+      anchor: Object.freeze({ x, y: bottom + 8 })
+    });
+  }
+
+  function createContentTriggerRuntime(options) {
+    const settings = options || {};
+    const eventTarget = settings.eventTarget;
+    const renderer = settings.renderer;
+    const Trigger = settings.triggerModule;
+    if (!eventTarget || typeof eventTarget.addEventListener !== 'function' ||
+        typeof eventTarget.removeEventListener !== 'function') {
+      throw new TypeError('eventTarget: must provide addEventListener and removeEventListener');
+    }
+    if (!renderer || typeof renderer.openPanel !== 'function' || typeof renderer.closePanel !== 'function' ||
+        typeof renderer.ownsToken !== 'function') {
+      throw new TypeError('renderer: panel and private token APIs are required');
+    }
+    if (!Trigger || typeof Trigger.createTriggerController !== 'function') {
+      throw new TypeError('triggerModule.createTriggerController: is required');
+    }
+    const clock = typeof settings.now === 'function' ? settings.now : () => Date.now();
+    const tokenIds = new WeakMap();
+    const tokenReferences = new Map();
+    const selectionModels = new Map();
+    const listeners = [];
+    const WeakRefClass = Object.prototype.hasOwnProperty.call(settings, 'WeakRef')
+      ? settings.WeakRef
+      : root.WeakRef;
+    let sequence = 0;
+    let cleaned = false;
+
+    function reference(value) {
+      return typeof WeakRefClass === 'function' ? new WeakRefClass(value) : { deref: () => value };
+    }
+
+    function targetIdFor(token) {
+      if (!tokenIds.has(token)) {
+        const targetId = `token-${++sequence}`;
+        tokenIds.set(token, targetId);
+        tokenReferences.set(targetId, reference(token));
+      }
+      return tokenIds.get(token);
+    }
+
+    function resolveModel(targetId) {
+      if (selectionModels.has(targetId)) return selectionModels.get(targetId);
+      const token = tokenReferences.get(targetId);
+      return panelModelForToken(token && token.deref(), renderer);
+    }
+
+    const controllerOptions = {
+      mode: settings.mode,
+      now: clock,
+      openPanel(value) {
+        const model = resolveModel(value.targetId);
+        if (!model) throw new Error('Trigger target is no longer available');
+        renderer.openPanel(model);
+        selectionModels.delete(value.targetId);
+      },
+      closePanel(reason) {
+        renderer.closePanel(reason);
+      }
+    };
+    for (const name of ['setTimeout', 'clearTimeout', 'primeThresholdMs', 'openThresholdMs', 'dismissDelayMs']) {
+      if (Object.prototype.hasOwnProperty.call(settings, name)) controllerOptions[name] = settings[name];
+    }
+    const controller = Trigger.createTriggerController(controllerOptions);
+
+    function add(type, listener) {
+      eventTarget.addEventListener(type, listener);
+      listeners.push([type, listener]);
+    }
+
+    function closestToken(node) {
+      for (let current = node && node.nodeType === 1 ? node : node && node.parentElement;
+        current;
+        current = current.parentElement) {
+        if (renderer.ownsToken(current)) return current;
+      }
+      return null;
+    }
+
+    function isPanelNode(node) {
+      if (!node) return false;
+      if (typeof node.getAttribute === 'function' && node.getAttribute('data-halo-owned') === 'panel') return true;
+      return typeof node.closest === 'function' && Boolean(node.closest('[data-halo-owned="panel"]'));
+    }
+
+    function eventPath(event) {
+      if (event && typeof event.composedPath === 'function') return event.composedPath();
+      return event && event.target ? [event.target] : [];
+    }
+
+    function isPanelEvent(event) {
+      return eventPath(event).some(isPanelNode);
+    }
+
+    function dispatch(event) {
+      if (cleaned) return controller.state();
+      try {
+        return controller.dispatch({ ...event, at: clock() });
+      } catch (error) {
+        if (typeof settings.onError === 'function') settings.onError(error);
+        return controller.state();
+      }
+    }
+
+    function activeTargetId() {
+      const value = controller.state();
+      return value && typeof value.targetId === 'string' ? value.targetId : null;
+    }
+
+    function enter(event) {
+      const token = closestToken(event && event.target);
+      if (token) {
+        const targetId = targetIdFor(token);
+        dispatch({
+          type: event.altKey || event.shiftKey ? 'MODIFIER_HOVER' : 'POINTER_ENTER',
+          targetId
+        });
+        return;
+      }
+      if (isPanelEvent(event)) {
+        const targetId = activeTargetId();
+        if (targetId) dispatch({ type: 'POINTER_ENTER', targetId });
+      }
+    }
+
+    function leave(event) {
+      const sourceToken = closestToken(event && event.target);
+      if (!sourceToken && !isPanelEvent(event)) return;
+      if (closestToken(event && event.relatedTarget) || isPanelNode(event && event.relatedTarget)) return;
+      const targetId = sourceToken ? targetIdFor(sourceToken) : activeTargetId();
+      if (targetId) dispatch({ type: 'POINTER_LEAVE', targetId });
+    }
+
+    add('pointerover', enter);
+    add('pointerout', leave);
+    add('focusin', enter);
+    add('focusout', leave);
+    add('click', (event) => {
+      const token = closestToken(event && event.target);
+      if (token) {
+        if (typeof event.preventDefault === 'function') event.preventDefault();
+        if (typeof event.stopPropagation === 'function') event.stopPropagation();
+        dispatch({ type: 'EXPLICIT_OPEN', targetId: targetIdFor(token) });
+        return;
+      }
+      if (!isPanelEvent(event)) dispatch({ type: 'OUTSIDE_CLICK' });
+    });
+    add('keydown', (event) => {
+      if (event && event.key === 'Escape') dispatch({ type: 'ESCAPE' });
+    });
+
+    function openSelection(request) {
+      if (cleaned || !request || typeof request.text !== 'string' || !request.text.trim() ||
+          request.text.length > 4000 || !request.anchor ||
+          !Number.isFinite(Number(request.anchor.x)) || !Number.isFinite(Number(request.anchor.y))) return false;
+      const targetId = `selection-${++sequence}`;
+      selectionModels.set(targetId, Object.freeze({
+        title: 'Halo selection',
+        body: request.text.trim(),
+        status: 'Local selection',
+        anchor: Object.freeze({ x: Number(request.anchor.x), y: Number(request.anchor.y) })
+      }));
+      dispatch({ type: 'EXPLICIT_OPEN', targetId });
+      return controller.state().name === 'core-open' && controller.state().targetId === targetId;
+    }
+
+    function cleanup(type) {
+      if (cleaned) return controller.state();
+      cleaned = true;
+      for (const [eventType, listener] of listeners.splice(0)) {
+        eventTarget.removeEventListener(eventType, listener);
+      }
+      tokenReferences.clear();
+      selectionModels.clear();
+      return controller.dispatch({ type: type === 'ROUTE_CLEANUP' ? 'ROUTE_CLEANUP' : 'CANCEL', at: clock() });
+    }
+
+    return Object.freeze({ openSelection, cleanup, state: controller.state });
+  }
 
   function canonicalContentRoot(element) {
     if (!element || element.nodeType !== 1) return null;
@@ -839,6 +1068,7 @@
     let activeRuntime = null;
     let activeController = null;
     let activeRenderer = null;
+    let activeTriggerRuntime = null;
     let requestSequence = 0;
     let rendererMutationScope = null;
 
@@ -896,7 +1126,34 @@
       return activeRenderer;
     }
 
+    function ensureTriggerRuntime(settings) {
+      if (activeTriggerRuntime) return activeTriggerRuntime;
+      const Trigger = root.HaloTriggerController;
+      const Renderer = root.HaloReversibleRenderer;
+      if (!Trigger || typeof Trigger.createTriggerController !== 'function' || !Renderer) {
+        throw new Error('Halo trigger modules are not loaded');
+      }
+      activeTriggerRuntime = createContentTriggerRuntime({
+        eventTarget: root.document,
+        renderer: ensureRenderer(Renderer),
+        triggerModule: Trigger,
+        mode: settings.triggerMode,
+        onError: () => {
+          lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_TRIGGER_ERROR' });
+        }
+      });
+      return activeTriggerRuntime;
+    }
+
+    function cleanupTriggerRuntime(type) {
+      if (!activeTriggerRuntime) return;
+      const triggerRuntime = activeTriggerRuntime;
+      activeTriggerRuntime = null;
+      triggerRuntime.cleanup(type);
+    }
+
     function removeMarking() {
+      cleanupTriggerRuntime('CANCEL');
       if (activeController) {
         const controller = activeController;
         controller.cleanup();
@@ -1046,6 +1303,7 @@
       const provider = Dictionary.createBootstrapDictionaryProvider();
       const lexicalVersion = `${provider.id}@${provider.version}`;
       const renderer = ensureRenderer(Renderer);
+      ensureTriggerRuntime(settings);
       const modules = {
         Semantic,
         Grammar,
@@ -1167,6 +1425,7 @@
             });
           },
           onRouteCleanup: ({ epoch }) => {
+            cleanupTriggerRuntime('ROUTE_CLEANUP');
             const runtime = activeRuntime && activeRuntime.epoch === epoch ? activeRuntime : null;
             let cleanupFailed = false;
             cleanupRuntime(runtime, {
@@ -1201,6 +1460,33 @@
       }
     }
 
+    async function explicitSelection(message) {
+      if (!validateExplicitSelectionMessage(message)) {
+        return Object.freeze({ accepted: false, code: 'INVALID_ACTION' });
+      }
+      const selection = readExplicitSelection(root);
+      if (!selection) return Object.freeze({ accepted: false, code: 'NO_SELECTION' });
+      try {
+        const Settings = root.HaloSettings;
+        const Renderer = root.HaloReversibleRenderer;
+        const Trigger = root.HaloTriggerController;
+        if (!Settings || !Renderer || !Trigger || !root.chrome.storage || !root.chrome.storage.local) {
+          throw new Error('Halo explicit trigger modules are not loaded');
+        }
+        const stored = await root.chrome.storage.local.get('haloSettings');
+        const settings = Settings.normalizeSettings(stored && stored.haloSettings);
+        ensureRenderer(Renderer);
+        const triggerRuntime = ensureTriggerRuntime(settings);
+        const accepted = triggerRuntime.openSelection(selection);
+        return Object.freeze({
+          accepted,
+          state: triggerRuntime.state().name
+        });
+      } catch (_error) {
+        return Object.freeze({ accepted: false, code: 'LOCAL_TRIGGER_UNAVAILABLE' });
+      }
+    }
+
     root.chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (!message || !message.type) return false;
       if (message.type === 'HALO_APPLY_MARKING') {
@@ -1215,12 +1501,20 @@
         sendResponse(lastStatus);
         return false;
       }
+      if (message.type === 'HALO_EXPLICIT_SELECTION') {
+        explicitSelection(message).then((result) => sendResponse(result));
+        return true;
+      }
       return false;
     });
   }
 
   initBrowser();
   return Object.freeze({
+    validateExplicitSelectionMessage,
+    readExplicitSelection,
+    panelModelForToken,
+    createContentTriggerRuntime,
     bootstrapAnnotationSets,
     buildSegments,
     shouldSkipElement,

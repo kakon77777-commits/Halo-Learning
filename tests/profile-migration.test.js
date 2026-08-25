@@ -25,7 +25,19 @@ test('legacy v0.1/v0.2 settings migrate to MarkingProfile/v2 without losing exis
   assert.equal(profile.channels.learningState, false);
   assert.equal(profile.density, 0.4);
   assert.equal(profile.labelPosition, 'bottom-right');
+  assert.equal(profile.triggerMode, 'hybrid');
   assert.doesNotThrow(() => Contracts.normalizeMarkingProfile(profile));
+});
+
+test('trigger mode normalization accepts exactly the three canonical serialized values', () => {
+  for (const triggerMode of ['adaptive-hover', 'explicit-only', 'hybrid']) {
+    const profile = Settings.normalizeSettings({ triggerMode });
+    assert.equal(profile.triggerMode, triggerMode);
+    assert.deepEqual(Settings.normalizeSettings(JSON.parse(JSON.stringify(profile))), profile);
+  }
+  for (const triggerMode of ['', 'hover', 'explicit', 'HYBRID', null, 1]) {
+    assert.equal(Settings.normalizeSettings({ triggerMode }).triggerMode, 'hybrid');
+  }
 });
 
 test('MarkingProfile/v2 normalization is idempotent and all channels remain explicit', () => {
@@ -71,14 +83,16 @@ test('popup UI edits preserve hidden profile controls and the existing profile i
     languageMode: 'en',
     labelPosition: 'top-left',
     maxTextNodes: 777,
-    maxMarkedTokens: 4321
+    maxMarkedTokens: 4321,
+    triggerMode: 'adaptive-hover'
   });
 
   const next = ProfileControls.mergeUiSettings(current, {
     channels: { ...current.channels, lemma: false, morphology: true },
     density: 0.75,
     languageMode: 'zh-Hant',
-    labelPosition: 'bottom-right'
+    labelPosition: 'bottom-right',
+    triggerMode: 'explicit-only'
   }, Settings.normalizeSettings);
 
   assert.equal(next.profileId, 'custom-study-profile');
@@ -91,6 +105,28 @@ test('popup UI edits preserve hidden profile controls and the existing profile i
   assert.equal(next.density, 0.75);
   assert.equal(next.languageMode, 'zh-Hant');
   assert.equal(next.labelPosition, 'bottom-right');
+  assert.equal(next.triggerMode, 'explicit-only');
+});
+
+test('trigger mode edits preserve compatibility fields and increment the locked profile revision once', () => {
+  const ProfileControls = require('../apps/extension/src/shared/profile-controls');
+  const current = Settings.normalizeSettings({
+    profileId: 'trigger-profile',
+    profileRevision: 8,
+    triggerMode: 'hybrid',
+    maxTextNodes: 913,
+    maxMarkedTokens: 7123,
+    runtimeBudgets: { maxTextNodes: 9, maxCharacters: 3000 }
+  });
+  const next = ProfileControls.mergeUiSettings(current, {
+    triggerMode: 'explicit-only'
+  }, Settings.normalizeSettings);
+
+  assert.equal(next.profileRevision, 9);
+  assert.equal(next.triggerMode, 'explicit-only');
+  assert.equal(next.maxTextNodes, 913);
+  assert.equal(next.maxMarkedTokens, 7123);
+  assert.deepEqual(next.runtimeBudgets, current.runtimeBudgets);
 });
 
 test('runtime budgets migrate from legacy caps and normalize every bounded dimension', () => {
@@ -250,6 +286,39 @@ test('overlapping popup saves serialize distinct edits into distinct revisions a
   assert.equal(sameA.profileRevision, 7);
   assert.equal(sameB.profileRevision, 7);
   assert.equal(stored.profileRevision, 7);
+});
+
+test('overlapping trigger-mode and visual saves remain serialized without losing either edit', async () => {
+  const Persistence = require('../apps/extension/src/shared/profile-persistence');
+  const ProfileControls = require('../apps/extension/src/shared/profile-controls');
+  const storageKey = 'haloSettings';
+  let stored = Settings.normalizeSettings({ profileRevision: 2, triggerMode: 'hybrid', density: 0.5 });
+  let tail = Promise.resolve();
+  const persistence = Persistence.createProfilePersistence({
+    storage: {
+      async get(key) { return { [key]: JSON.parse(JSON.stringify(stored)) }; },
+      async set(update) { stored = update[storageKey]; }
+    },
+    storageKey,
+    lockManager: {
+      request(_name, _options, callback) {
+        const run = tail.then(callback);
+        tail = run.catch(() => {});
+        return run;
+      }
+    },
+    normalizeSettings: Settings.normalizeSettings,
+    mergeUiSettings: ProfileControls.mergeUiSettings
+  });
+
+  const [triggerEdit, densityEdit] = await Promise.all([
+    persistence.saveEdit({ triggerMode: 'explicit-only' }),
+    persistence.saveEdit({ density: 0.75 })
+  ]);
+  assert.equal(triggerEdit.profileRevision, 3);
+  assert.equal(densityEdit.profileRevision, 4);
+  assert.equal(stored.triggerMode, 'explicit-only');
+  assert.equal(stored.density, 0.75);
 });
 
 test('popup profile persistence fails closed without a cross-context lock manager', async () => {

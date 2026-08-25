@@ -8,6 +8,7 @@ const LANGUAGES = Object.freeze(['en', 'zh-Hant']);
 const LANGUAGE_MODES = Object.freeze(['auto', 'both', 'en', 'zh-Hant']);
 const POS_TAGS = Object.freeze(['n', 'v', 'adj', 'adv', 'prep', 'conj', 'det', 'pron', 'aux', 'modal', 'x']);
 const LABEL_POSITIONS = Object.freeze(['top-right', 'top-left', 'bottom-right', 'inline']);
+const TRIGGER_MODES = Object.freeze(['adaptive-hover', 'explicit-only', 'hybrid']);
 const CHANNELS = Object.freeze([
   'posLabel',
   'posColor',
@@ -274,6 +275,7 @@ function normalizeMarkingProfile(value) {
       : integerAt(raw.profileRevision, 'profile.profileRevision', 0, Number.MAX_SAFE_INTEGER),
     enabled: booleanAt(raw.enabled, 'profile.enabled'),
     languageMode: enumAt(raw.languageMode, LANGUAGE_MODES, 'profile.languageMode'),
+    triggerMode: enumAt(raw.triggerMode, TRIGGER_MODES, 'profile.triggerMode'),
     channels: normalizedChannels,
     density: numberAt(raw.density, 'profile.density', 0, 1),
     minConfidence: numberAt(raw.minConfidence, 'profile.minConfidence', 0, 1),

@@ -104,6 +104,7 @@ function markingProfileFixture(overrides) {
     profileId: 'default-v0.3.0',
     enabled: true,
     languageMode: 'both',
+    triggerMode: 'hybrid',
     channels: {
       posLabel: true,
       posColor: true,

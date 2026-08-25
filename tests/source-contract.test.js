@@ -70,6 +70,11 @@ test('content delegates reversible DOM ownership to the versioned renderer bound
   assert.match(source, /HALO_APPLY_MARKING/);
   assert.match(source, /HALO_REMOVE_MARKING/);
   assert.match(source, /HALO_STATUS/);
+  assert.match(source, /HALO_EXPLICIT_SELECTION/);
+  assert.match(source, /validateExplicitSelectionMessage/);
+  assert.match(source, /readExplicitSelection/);
+  assert.match(source, /createContentTriggerRuntime/);
+  assert.match(source, /__HALO_CONTENT_INITIALIZED__/);
   assert.match(source, /HaloReversibleRenderer/);
   assert.match(source, /createReversibleRenderer/);
   assert.doesNotMatch(source, /function spanFor|function replaceTextNode|function removeRenderedDom/);
@@ -105,42 +110,43 @@ test('CSS uses POS pseudo labels and does not replace the visible word', () => {
   assert.match(css, /text-decoration-style:\s*dotted/);
 });
 
-test('Manifest V3 uses minimal click-scoped permissions and no host permissions', () => {
+test('Manifest V3 uses minimal click-scoped trigger permissions and no host permissions', () => {
   const manifestPath = path.join(extensionRoot, 'manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.action.default_popup, 'src/popup.html');
-  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'scripting', 'storage'].sort());
+  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'contextMenus', 'scripting', 'storage'].sort());
+  assert.deepEqual(manifest.commands, {
+    'halo-analyze-selection': {
+      suggested_key: { default: 'Alt+Shift+H' },
+      description: 'Analyze selected text with Halo Learning'
+    }
+  });
   assert.equal(Object.hasOwn(manifest, 'host_permissions'), false);
   assert.equal(Object.hasOwn(manifest, 'content_scripts'), false);
 });
 
-test('popup exposes bilingual basic controls and injects only packaged local files', () => {
+test('popup exposes trigger mode and explicit current-tab action through the canonical packaged entry', () => {
   const html = fs.readFileSync(path.join(extensionRoot, 'src', 'popup.html'), 'utf8');
   const js = fs.readFileSync(path.join(extensionRoot, 'src', 'popup.js'), 'utf8');
   for (const id of [
     'posLabels', 'posColors', 'lemma', 'morphology', 'glossHint', 'grammarRole',
     'tenseAspect', 'chunk', 'learningState', 'density', 'languageMode',
-    'labelPosition', 'applyButton', 'removeButton'
+    'labelPosition', 'triggerMode', 'analyzeSelectionButton', 'applyButton', 'removeButton'
   ]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
   assert.match(html, /詞性/);
   assert.match(html, /POS/);
   assert.match(js, /chrome\.storage\.local/);
-  assert.match(js, /chrome\.scripting\.executeScript/);
-  assert.match(js, /chrome\.scripting\.insertCSS/);
+  assert.match(js, /HaloBrowserEntry\.injectAndSendExplicitSelection/);
   assert.match(js, /settings\.channels/);
   assert.match(html, /id=["']learningState["'][^>]*disabled/);
   assert.match(html, /value=["']zh-Hant["']/);
   assert.doesNotMatch(js, /fetch\s*\(/);
   assert.doesNotMatch(js, /XMLHttpRequest/);
-  const injection = js.match(/const INJECT_FILES = \[([\s\S]*?)\];/)[1];
-  assert.ok(injection.includes("'src/shared/reversible-renderer.js'"));
-  assert.ok(
-    injection.indexOf("'src/shared/reversible-renderer.js'") < injection.indexOf("'src/content.js'"),
-    'renderer must load before the content orchestrator'
-  );
+  assert.doesNotMatch(js, /const INJECT_FILES/);
+  assert.match(html, /shared\/browser-entry\.js/);
 });
 
 test('executable extension source contains no remote script or API dependency', () => {
@@ -148,7 +154,8 @@ test('executable extension source contains no remote script or API dependency', 
     'src/popup.js', 'src/content.js', 'src/shared/linguistics.js',
     'src/shared/projection.js', 'src/shared/settings.js', 'src/shared/dictionary-provider.js',
     'src/shared/runtime-scheduler.js', 'src/shared/semantic-contracts.js',
-    'src/shared/reversible-renderer.js'
+    'src/shared/reversible-renderer.js', 'src/shared/trigger-controller.js',
+    'src/shared/browser-entry.js', 'src/service-worker.js'
   ];
   const combined = sourceFiles.map((rel) => fs.readFileSync(path.join(extensionRoot, rel), 'utf8')).join('\n');
   assert.doesNotMatch(combined, /https?:\/\//i);

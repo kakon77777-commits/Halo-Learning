@@ -27,6 +27,7 @@ output { margin-left: 6px; font-variant-numeric: tabular-nums; }
 input[type="range"] { width: 100%; accent-color: #222; }
 select { width: 100%; padding: 7px 9px; border: 1px solid #cfcfc8; border-radius: 8px; background: #fff; color: inherit; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-top: 13px; }
+.actions .analyze { grid-column: 1 / -1; }
 button { border-radius: 9px; padding: 9px 10px; font-weight: 700; cursor: pointer; }
 button.primary { border: 1px solid #181818; background: #181818; color: #fff; }
 button.secondary { border: 1px solid #c9c9c2; background: #fff; color: #222; }

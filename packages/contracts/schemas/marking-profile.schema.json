@@ -4,7 +4,7 @@
   "title": "MarkingProfile/v2",
   "type": "object",
   "required": [
-    "schemaVersion", "profileId", "enabled", "languageMode", "channels",
+    "schemaVersion", "profileId", "enabled", "languageMode", "triggerMode", "channels",
     "density", "minConfidence", "labelPosition", "maxTextNodes", "maxMarkedTokens"
   ],
   "properties": {
@@ -12,6 +12,7 @@
     "profileId": { "type": "string", "minLength": 1 },
     "enabled": { "type": "boolean" },
     "languageMode": { "enum": ["auto", "both", "en", "zh-Hant"] },
+    "triggerMode": { "enum": ["adaptive-hover", "explicit-only", "hybrid"] },
     "channels": {
       "type": "object",
       "required": [

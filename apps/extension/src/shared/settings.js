@@ -38,12 +38,14 @@
     maxQueuedRoots: 200,
     viewportBufferPx: 1200
   });
+  const TRIGGER_MODES = Object.freeze(['adaptive-hover', 'explicit-only', 'hybrid']);
   const DEFAULT_SETTINGS = Object.freeze({
     schemaVersion: 2,
     profileId: 'halo-default-v0.3.0',
     profileRevision: 0,
     enabled: true,
     languageMode: 'both',
+    triggerMode: 'hybrid',
     channels: DEFAULT_CHANNELS,
     density: 0.65,
     minConfidence: 0.6,
@@ -107,6 +109,7 @@
         : DEFAULT_SETTINGS.profileRevision,
       enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_SETTINGS.enabled,
       languageMode: LANGUAGE_MODES.has(rawLanguage) ? rawLanguage : DEFAULT_SETTINGS.languageMode,
+      triggerMode: TRIGGER_MODES.includes(raw.triggerMode) ? raw.triggerMode : DEFAULT_SETTINGS.triggerMode,
       channels: Object.freeze(channels),
       density: clampNumber(raw.density, 0, 1, DEFAULT_SETTINGS.density),
       minConfidence: clampNumber(raw.minConfidence, 0, 1, DEFAULT_SETTINGS.minConfidence),
@@ -127,6 +130,7 @@
     UNAVAILABLE_CHANNELS,
     DEFAULT_CHANNELS,
     DEFAULT_RUNTIME_BUDGETS,
+    TRIGGER_MODES,
     DEFAULT_SETTINGS,
     normalizeRuntimeBudgets,
     normalizeSettings,

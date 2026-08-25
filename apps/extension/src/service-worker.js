@@ -1,5 +1,6 @@
 if (typeof importScripts === 'function') {
   importScripts(
+    'shared/browser-entry.js',
     'shared/progressive-runtime.js',
     'shared/semantic-contracts.js',
     'shared/runtime-shard-browser.js',
@@ -17,11 +18,17 @@ if (typeof importScripts === 'function') {
   const contractsModule = typeof module === 'object' && module.exports
     ? require('./shared/semantic-contracts')
     : root.HaloSemanticContracts;
-  const api = factory(root, progressiveModule, contractsModule);
+  const browserEntryModule = typeof module === 'object' && module.exports
+    ? require('./shared/browser-entry')
+    : root.HaloBrowserEntry;
+  const api = factory(root, progressiveModule, contractsModule, browserEntryModule);
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.HaloSemanticService = api;
-  if (!(typeof module === 'object' && module.exports)) api.initializeBrowser();
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (root, Progressive, Contracts) {
+  if (!(typeof module === 'object' && module.exports)) {
+    api.initializeBrowser();
+    api.initializeBrowserTriggers();
+  }
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (root, Progressive, Contracts, BrowserEntry) {
   'use strict';
 
   if (!Contracts || !Number.isInteger(Contracts.SEMANTIC_SCHEMA_VERSION)) {
@@ -37,6 +44,8 @@ if (typeof importScripts === 'function') {
     distinctShards: 24
   });
   const LANGUAGE_MODES = new Set(['en', 'zh-Hant', 'both']);
+  const CONTEXT_MENU_ID = 'halo-analyze-selection';
+  const COMMAND_ID = 'halo-analyze-selection';
   if (!Progressive || typeof Progressive.createAnalysisKey !== 'function' ||
       typeof Progressive.isAnalysisKey !== 'function') {
     throw new Error('Canonical progressive analysis key module is unavailable');
@@ -407,6 +416,93 @@ if (typeof importScripts === 'function') {
     return Object.freeze({ enrichBatch, cancelRequest, handleMessage });
   }
 
+  function createBrowserTriggerService(options) {
+    const settings = options || {};
+    const chromeApi = settings.chrome;
+    const browserEntry = settings.browserEntry || BrowserEntry;
+    if (!chromeApi || !chromeApi.runtime || !chromeApi.contextMenus || !chromeApi.commands || !chromeApi.tabs) {
+      throw new TypeError('Chrome trigger APIs are unavailable');
+    }
+    if (!browserEntry || typeof browserEntry.injectAndSendExplicitSelection !== 'function') {
+      throw new TypeError('Canonical browser entry is unavailable');
+    }
+    let registered = false;
+
+    function runSafely(callback) {
+      return Promise.resolve()
+        .then(callback)
+        .then((value) => value === false ? false : true, () => false);
+    }
+
+    function callbackCall(method, args, ignoreLastError) {
+      return new Promise((resolve, reject) => {
+        method(...args, () => {
+          const lastError = chromeApi.runtime.lastError;
+          if (lastError && !ignoreLastError) {
+            reject(new Error('Chrome trigger API request failed'));
+            return;
+          }
+          resolve(!lastError);
+        });
+      });
+    }
+
+    async function installContextMenu() {
+      await callbackCall(
+        chromeApi.contextMenus.remove.bind(chromeApi.contextMenus),
+        [CONTEXT_MENU_ID],
+        true
+      );
+      return callbackCall(
+        chromeApi.contextMenus.create.bind(chromeApi.contextMenus),
+        [{
+          id: CONTEXT_MENU_ID,
+          title: 'Analyze selection with Halo Learning',
+          contexts: ['selection']
+        }],
+        false
+      );
+    }
+
+    function invoke(tabId) {
+      return browserEntry.injectAndSendExplicitSelection({ chrome: chromeApi, tabId });
+    }
+
+    function handleContextClick(info, tab) {
+      if (!info || info.menuItemId !== CONTEXT_MENU_ID ||
+          !tab || !Number.isSafeInteger(tab.id) || tab.id < 0) return Promise.resolve(false);
+      return runSafely(() => invoke(tab.id));
+    }
+
+    function handleCommand(command) {
+      if (command !== COMMAND_ID) return Promise.resolve(false);
+      return runSafely(async () => {
+        const tabs = await chromeApi.tabs.query({ active: true, currentWindow: true });
+        const tab = Array.isArray(tabs) ? tabs.find((value) => value && Number.isSafeInteger(value.id) && value.id >= 0) : null;
+        if (!tab) return false;
+        await invoke(tab.id);
+        return true;
+      });
+    }
+
+    function register() {
+      if (registered) return false;
+      registered = true;
+      chromeApi.runtime.onInstalled.addListener(() => { runSafely(installContextMenu); });
+      chromeApi.contextMenus.onClicked.addListener((info, tab) => { handleContextClick(info, tab); });
+      chromeApi.commands.onCommand.addListener((command) => { handleCommand(command); });
+      return true;
+    }
+
+    return Object.freeze({
+      installContextMenu,
+      handleContextClick,
+      handleCommand,
+      runSafely,
+      register
+    });
+  }
+
   function initializeBrowser() {
     if (!root.chrome || !root.chrome.runtime || !root.chrome.runtime.onMessage) return null;
     if (root.__HALO_SEMANTIC_SERVICE_INITIALIZED__) return root.__HALO_SEMANTIC_SERVICE_INITIALIZED__;
@@ -432,12 +528,24 @@ if (typeof importScripts === 'function') {
     return service;
   }
 
+  function initializeBrowserTriggers() {
+    if (!root.chrome || !root.chrome.runtime || !root.chrome.runtime.onInstalled ||
+        !root.chrome.contextMenus || !root.chrome.commands || !root.chrome.tabs) return null;
+    if (root.__HALO_BROWSER_TRIGGER_INITIALIZED__) return root.__HALO_BROWSER_TRIGGER_INITIALIZED__;
+    const service = createBrowserTriggerService({ chrome: root.chrome, browserEntry: BrowserEntry });
+    service.register();
+    root.__HALO_BROWSER_TRIGGER_INITIALIZED__ = service;
+    return service;
+  }
+
   return Object.freeze({
     SCHEMA_VERSION,
     BATCH_LIMITS,
     validateEnrichmentRequest,
     createBrowserShardLoader,
     createShardSemanticService,
-    initializeBrowser
+    createBrowserTriggerService,
+    initializeBrowser,
+    initializeBrowserTriggers
   });
 });

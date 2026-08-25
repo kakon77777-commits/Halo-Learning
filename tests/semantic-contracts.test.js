@@ -132,6 +132,7 @@ test('annotation set enforces deterministic token order, non-overlap, and text b
 
 test('MarkingProfile/v2 exposes every semantic channel as an independent switch', () => {
   const profile = Contracts.normalizeMarkingProfile(markingProfileFixture());
+  assert.equal(profile.triggerMode, 'hybrid');
   assert.deepEqual(Object.keys(profile.channels).sort(), [
     'chunk', 'glossHint', 'grammarRole', 'learningState', 'lemma',
     'morphology', 'posColor', 'posLabel', 'tenseAspect'
@@ -141,6 +142,13 @@ test('MarkingProfile/v2 exposes every semantic channel as an independent switch'
   const missingChannel = markingProfileFixture();
   delete missingChannel.channels.glossHint;
   assert.throws(() => Contracts.normalizeMarkingProfile(missingChannel), /channels\.glossHint/);
+  for (const triggerMode of ['adaptive-hover', 'explicit-only', 'hybrid']) {
+    assert.equal(Contracts.normalizeMarkingProfile(markingProfileFixture({ triggerMode })).triggerMode, triggerMode);
+  }
+  assert.throws(
+    () => Contracts.normalizeMarkingProfile(markingProfileFixture({ triggerMode: 'hover' })),
+    /triggerMode/
+  );
 });
 
 test('legacy v0.1 token migration is explicit and does not invent lexical evidence', () => {
