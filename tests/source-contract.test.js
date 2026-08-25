@@ -73,10 +73,11 @@ test('content renderer source defines reversible handlers, safety skips, and bud
   for (const tag of ['SCRIPT', 'STYLE', 'TEXTAREA', 'INPUT', 'CODE', 'PRE']) {
     assert.match(source, new RegExp(tag));
   }
-  assert.match(source, /maxTextNodes/);
-  assert.match(source, /maxMarkedTokens/);
-  assert.match(source, /HALO_ANNOTATE_BATCH/);
-  assert.match(source, /annotationSets/);
+  assert.match(source, /runtimeBudgets/);
+  assert.match(source, /HaloRuntimeScheduler/);
+  assert.match(source, /HALO_ENRICH_BATCH/);
+  assert.match(source, /annotationSet/);
+  assert.doesNotMatch(source, /settings\.maxTextNodes|settings\.maxMarkedTokens/);
   assert.match(source, /async function applyMarking/);
   assert.match(source, /return true/);
   assert.match(source, /textContent/);

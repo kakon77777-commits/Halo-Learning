@@ -92,3 +92,45 @@ test('popup UI edits preserve hidden profile controls and the existing profile i
   assert.equal(next.languageMode, 'zh-Hant');
   assert.equal(next.labelPosition, 'bottom-right');
 });
+
+test('runtime budgets migrate from legacy caps and normalize every bounded dimension', () => {
+  const migrated = Settings.migrateSettings({
+    maxTextNodes: 321,
+    maxMarkedTokens: 654
+  });
+  assert.deepEqual(migrated.runtimeBudgets, {
+    maxTextNodes: 24,
+    maxCharacters: 12000,
+    maxSentences: 24,
+    maxSemanticTokens: 600,
+    maxShardIds: 24,
+    timeSliceMs: 8,
+    maxQueuedRoots: 200,
+    viewportBufferPx: 1200
+  });
+
+  const normalized = Settings.normalizeSettings({
+    runtimeBudgets: {
+      maxTextNodes: 7,
+      maxCharacters: 4500,
+      maxSentences: 8,
+      maxSemanticTokens: 120,
+      maxShardIds: 5,
+      timeSliceMs: 4,
+      maxQueuedRoots: 30,
+      viewportBufferPx: 800
+    }
+  });
+  assert.deepEqual(normalized.runtimeBudgets, {
+    maxTextNodes: 7,
+    maxCharacters: 4500,
+    maxSentences: 8,
+    maxSemanticTokens: 120,
+    maxShardIds: 5,
+    timeSliceMs: 4,
+    maxQueuedRoots: 30,
+    viewportBufferPx: 800
+  });
+  assert.equal(Object.isFrozen(normalized.runtimeBudgets), true);
+  assert.deepEqual(Settings.normalizeSettings(normalized), normalized);
+});

@@ -11,6 +11,14 @@ const repositoryRoot = path.resolve(__dirname, '..', '..');
 const extensionRoot = path.join(repositoryRoot, 'apps', 'extension');
 const pipelinePath = path.join(extensionRoot, 'src', 'shared', 'sentence-pipeline.js');
 const linguisticsPath = path.join(extensionRoot, 'src', 'shared', 'linguistics.js');
+const schedulerPath = path.join(extensionRoot, 'src', 'shared', 'runtime-scheduler.js');
+const settingsPath = path.join(extensionRoot, 'src', 'shared', 'settings.js');
+const progressivePath = path.join(extensionRoot, 'src', 'shared', 'progressive-runtime.js');
+const dictionaryPath = path.join(extensionRoot, 'src', 'shared', 'dictionary-provider.js');
+const semanticPath = path.join(extensionRoot, 'src', 'shared', 'semantic-annotations.js');
+const grammarPath = path.join(extensionRoot, 'src', 'shared', 'grammar-annotations.js');
+const projectionPath = path.join(extensionRoot, 'src', 'shared', 'projection.js');
+const contentPath = path.join(extensionRoot, 'src', 'content.js');
 
 test('real Chromium preserves nested inline DOM while every sentence and token maps exactly', async () => {
   const executable = resolveChromiumExecutable({
@@ -124,6 +132,105 @@ test('real Chromium preserves nested inline DOM while every sentence and token m
         !sentence.text.includes('password')
       ));
       assert.ok(requests.every((url) => url.startsWith(origin)), 'fixture makes no remote requests');
+    });
+  } finally {
+    if (context) await context.close();
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('real Chromium keeps offscreen roots semantically idle until they enter the viewport buffer', async () => {
+  const executable = resolveChromiumExecutable({
+    environment: process.env,
+    exists: fs.existsSync,
+    playwrightExecutable: chromium.executablePath()
+  });
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-viewport-scheduler-'));
+  let context;
+  try {
+    context = await launchExtension({
+      extensionRoot,
+      userDataDir,
+      headless: true,
+      executablePath: executable.path
+    });
+    await withFixtureServer({
+      '/long-lesson.html': {
+        contentType: 'text/html',
+        body: '<!doctype html><html lang="zh-Hant"><body><main><p id="visible">The visible model learns.</p><div style="height:5000px"></div><p id="offscreen">離線字典讓中文學習更清楚。</p></main></body></html>'
+      }
+    }, async ({ origin }) => {
+      const page = await context.newPage();
+      await page.goto(origin + '/long-lesson.html');
+      await page.evaluate(() => {
+        const listeners = [];
+        const semanticRequests = [];
+        Object.defineProperty(globalThis, 'chrome', {
+          configurable: true,
+          value: {
+            runtime: {
+              onMessage: { addListener: (listener) => listeners.push(listener) },
+              sendMessage: async (message) => {
+                if (message.type === 'HALO_CANCEL_REQUEST') return { status: 'cancelled' };
+                if (message.type !== 'HALO_ENRICH_BATCH') return null;
+                semanticRequests.push(message.items.map((item) => item.text));
+                const provider = HaloDictionary.createBootstrapDictionaryProvider();
+                const engine = HaloSemanticAnnotations.createSemanticEngine({
+                  provider,
+                  grammarAnnotator: HaloGrammarAnnotations.annotateGrammar
+                });
+                const generatedAt = new Date().toISOString();
+                return {
+                  requestId: message.requestId,
+                  pageEpoch: message.pageEpoch,
+                  results: message.items.map((item) => ({
+                    rootId: item.rootId,
+                    annotationSet: engine.annotateText(item.text, {
+                      languageMode: item.languageMode,
+                      generatedAt
+                    })
+                  })),
+                  status: { mode: 'degraded', fallbackActivated: true, failures: [{ code: 'MANIFEST_UNAVAILABLE' }] }
+                };
+              }
+            }
+          }
+        });
+        globalThis.__haloFixture = { listeners, semanticRequests };
+      });
+      for (const scriptPath of [
+        progressivePath, dictionaryPath, semanticPath, grammarPath, projectionPath,
+        settingsPath, pipelinePath, schedulerPath, contentPath
+      ]) {
+        await page.addScriptTag({ path: scriptPath });
+      }
+
+      const initial = await page.evaluate(async () => {
+        const listener = __haloFixture.listeners[0];
+        const result = await new Promise((resolve) => {
+          listener({ type: 'HALO_APPLY_MARKING', settings: HaloSettings.DEFAULT_SETTINGS }, {}, resolve);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        return {
+          result,
+          requests: __haloFixture.semanticRequests.map((batch) => [...batch]),
+          offscreenWrapped: Boolean(document.querySelector('#offscreen [data-halo-token="1"]'))
+        };
+      });
+
+      assert.ok(initial.requests.flat().some((text) => text.includes('visible model')));
+      assert.equal(initial.requests.flat().some((text) => text.includes('離線字典')), false);
+      assert.equal(initial.offscreenWrapped, false);
+      for (const batch of initial.requests) {
+        assert.ok(batch.length <= 24);
+        assert.ok(batch.join('').length <= 12000);
+      }
+
+      await page.locator('#offscreen').scrollIntoViewIfNeeded();
+      await page.waitForFunction(() =>
+        __haloFixture.semanticRequests.flat().some((text) => text.includes('離線字典'))
+      );
+      assert.equal(await page.locator('#offscreen [data-halo-token="1"]').count() > 0, true);
     });
   } finally {
     if (context) await context.close();

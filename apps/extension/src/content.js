@@ -9,6 +9,326 @@
     'SCRIPT', 'STYLE', 'NOSCRIPT', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION',
     'CODE', 'PRE', 'KBD', 'SAMP', 'BUTTON', 'SVG', 'MATH'
   ]);
+  const CONTENT_ROOT_SELECTOR = [
+    'article', 'main', 'section', 'p', 'li', 'blockquote', 'figure', 'figcaption',
+    'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'td', 'th', 'dd', 'dt'
+  ].join(',');
+
+  function normalizedViewportBuffer(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 1200;
+    return Math.min(1200, Math.max(0, Math.round(number)));
+  }
+
+  function viewportRootMargin(value) {
+    const buffer = normalizedViewportBuffer(value);
+    return `${buffer}px 0px ${buffer}px 0px`;
+  }
+
+  function buildEnrichmentItems(records, options, Progressive) {
+    const settings = options || {};
+    if (!Progressive || typeof Progressive.createAnalysisKey !== 'function') {
+      throw new TypeError('Canonical progressive analysis key module is unavailable');
+    }
+    return Object.freeze((Array.isArray(records) ? records : []).map((record, index) => {
+      const languageMode = ['en', 'zh-Hant', 'both'].includes(settings.languageMode)
+        ? settings.languageMode
+        : (['en', 'zh-Hant', 'both'].includes(record.language) ? record.language : 'both');
+      const item = {
+        rootId: `${settings.rootId}:s${index}`,
+        rootRevision: record.rootRevision,
+        text: record.text,
+        languageMode,
+        semanticVersion: settings.semanticVersion,
+        grammarVersion: settings.grammarVersion,
+        profileRevision: settings.profileRevision,
+        lexicalVersion: settings.lexicalVersion
+      };
+      item.analysisKey = Progressive.createAnalysisKey(item);
+      return Object.freeze(item);
+    }));
+  }
+
+  function estimateSemanticTokens(text) {
+    let count = 0;
+    for (const _match of String(text || '').matchAll(/\p{Script=Han}|[\p{Script=Latin}\p{M}]+(?:['’][\p{Script=Latin}\p{M}]+)*/gu)) {
+      count += 1;
+    }
+    return count;
+  }
+
+  function buildRootWork(element, options) {
+    const settings = options || {};
+    const pipeline = settings.pipeline;
+    if (!pipeline || typeof pipeline.buildSentenceRecords !== 'function') {
+      throw new TypeError('pipeline.buildSentenceRecords: must be a function');
+    }
+    const runtimeSettings = settings.settings || {};
+    const budgets = runtimeSettings.runtimeBudgets || {};
+    const rootRevision = Number.isSafeInteger(settings.rootRevision) && settings.rootRevision > 0
+      ? settings.rootRevision
+      : 1;
+    const records = pipeline.buildSentenceRecords(element, {
+      rootRevision,
+      locale: runtimeSettings.languageMode === 'en' ? 'en' : 'zh-Hant'
+    });
+    const chunks = [];
+    let current = null;
+
+    function blankChunk() {
+      return { records: [], nodeIds: new Set(), characters: 0, semanticTokens: 0 };
+    }
+
+    function appendChunk() {
+      if (!current || !current.records.length) return;
+      const index = chunks.length;
+      chunks.push(Object.freeze({
+        id: `${settings.rootId}:w${index}`,
+        rootId: settings.rootId,
+        epoch: settings.epoch,
+        priority: settings.priority,
+        visible: Boolean(settings.visible),
+        textNodes: current.nodeIds.size,
+        characters: current.characters,
+        sentences: current.records.length,
+        semanticTokens: current.semanticTokens,
+        shardIds: Object.freeze([]),
+        payload: Object.freeze({
+          element,
+          rootRevision,
+          records: Object.freeze([...current.records])
+        })
+      }));
+      current = blankChunk();
+    }
+
+    current = blankChunk();
+    for (const record of records) {
+      const nextNodeIds = new Set(current.nodeIds);
+      for (const fragment of record.fragments || []) nextNodeIds.add(fragment.nodeId);
+      const nextCharacters = current.characters + record.text.length;
+      const nextSemanticTokens = current.semanticTokens + estimateSemanticTokens(record.text);
+      const exceeds = current.records.length > 0 && (
+        nextNodeIds.size > budgets.maxTextNodes ||
+        nextCharacters > budgets.maxCharacters ||
+        current.records.length + 1 > budgets.maxSentences ||
+        nextSemanticTokens > budgets.maxSemanticTokens
+      );
+      if (exceeds) {
+        appendChunk();
+        nextNodeIds.clear();
+        for (const fragment of record.fragments || []) nextNodeIds.add(fragment.nodeId);
+      }
+      current.records.push(record);
+      current.nodeIds = nextNodeIds;
+      current.characters += record.text.length;
+      current.semanticTokens += estimateSemanticTokens(record.text);
+    }
+    appendChunk();
+    return Object.freeze(chunks);
+  }
+
+  function createViewportDiscovery(options) {
+    const settings = options || {};
+    const document = settings.document;
+    const NodeFilter = settings.NodeFilter;
+    const IntersectionObserverClass = settings.IntersectionObserver;
+    const scheduler = settings.scheduler;
+    if (!document || typeof document.createTreeWalker !== 'function') {
+      throw new TypeError('document.createTreeWalker: must be a function');
+    }
+    if (!NodeFilter || NodeFilter.SHOW_ELEMENT === undefined) throw new TypeError('NodeFilter.SHOW_ELEMENT: is required');
+    if (typeof IntersectionObserverClass !== 'function') throw new TypeError('IntersectionObserver: is required');
+    if (!scheduler || typeof scheduler.enqueue !== 'function' || typeof scheduler.cancelRoot !== 'function') {
+      throw new TypeError('scheduler enqueue/cancelRoot: are required');
+    }
+    if (typeof settings.makeWork !== 'function') throw new TypeError('makeWork: must be a function');
+    const budgets = settings.budgets || {};
+    const timeSliceMs = Math.min(8, Math.max(1, Number(budgets.timeSliceMs) || 8));
+    const now = settings.clock && typeof settings.clock.now === 'function'
+      ? () => settings.clock.now()
+      : () => root.performance && typeof root.performance.now === 'function' ? root.performance.now() : Date.now();
+    const requestIdle = typeof settings.requestIdleCallback === 'function'
+      ? settings.requestIdleCallback
+      : (typeof root.requestIdleCallback === 'function' ? root.requestIdleCallback.bind(root) : null);
+    const cancelIdle = typeof settings.cancelIdleCallback === 'function'
+      ? settings.cancelIdleCallback
+      : (typeof root.cancelIdleCallback === 'function' ? root.cancelIdleCallback.bind(root) : null);
+    const scheduleTimeout = typeof settings.setTimeout === 'function'
+      ? settings.setTimeout
+      : root.setTimeout.bind(root);
+    const cancelTimeout = typeof settings.clearTimeout === 'function'
+      ? settings.clearTimeout
+      : root.clearTimeout.bind(root);
+    const observed = new WeakSet();
+    const intersecting = new WeakSet();
+    const rootIds = new WeakMap();
+    const walker = document.createTreeWalker(
+      document.body || document.documentElement,
+      NodeFilter.SHOW_ELEMENT
+    );
+    let rootSequence = 0;
+    let candidatesVisited = 0;
+    let observedRoots = 0;
+    let scheduledHandle = null;
+    let scheduledKind = null;
+    let done = false;
+    let disconnected = false;
+
+    function candidateRoot(element) {
+      if (!element || element.nodeType !== 1) return null;
+      const contentRoot = typeof element.matches === 'function' && element.matches(CONTENT_ROOT_SELECTOR)
+        ? element
+        : (typeof element.closest === 'function' ? element.closest(CONTENT_ROOT_SELECTOR) : null);
+      if (contentRoot && typeof contentRoot.querySelector === 'function' &&
+          contentRoot.querySelector(CONTENT_ROOT_SELECTOR)) return null;
+      return contentRoot;
+    }
+
+    function rootIdFor(element) {
+      if (!rootIds.has(element)) {
+        const hint = typeof element.id === 'string' && element.id.length <= 96 &&
+          /^[A-Za-z0-9._:-]+$/.test(element.id) ? element.id : null;
+        rootIds.set(element, hint || `halo-root-${++rootSequence}`);
+      }
+      return rootIds.get(element);
+    }
+
+    function enqueueVisible(element, priority) {
+      if (!element || element.isConnected === false) return false;
+      const rootId = rootIdFor(element);
+      const workValue = settings.makeWork(element, true, { rootId, priority });
+      if (!workValue) return false;
+      if (Array.isArray(workValue)) {
+        const accepted = scheduler.enqueue(workValue.map((item) => ({ ...item, rootId, priority, visible: true })));
+        if (typeof scheduler.flush === 'function') scheduler.flush();
+        return accepted;
+      }
+      const accepted = scheduler.enqueue({ ...workValue, rootId, priority, visible: true });
+      if (typeof scheduler.flush === 'function') scheduler.flush();
+      return accepted;
+    }
+
+    function observe(element) {
+      const contentRoot = candidateRoot(element);
+      if (!contentRoot || observed.has(contentRoot)) return null;
+      observed.add(contentRoot);
+      rootIdFor(contentRoot);
+      observer.observe(contentRoot);
+      observedRoots += 1;
+      return contentRoot;
+    }
+
+    const observer = new IntersectionObserverClass((entries) => {
+      for (const entry of entries || []) {
+        const contentRoot = candidateRoot(entry.target);
+        if (!contentRoot) continue;
+        if (entry.isIntersecting) {
+          if (intersecting.has(contentRoot)) continue;
+          intersecting.add(contentRoot);
+          enqueueVisible(contentRoot, 'inferred');
+        } else {
+          intersecting.delete(contentRoot);
+          scheduler.cancelRoot(rootIdFor(contentRoot));
+        }
+      }
+    }, {
+      root: null,
+      rootMargin: viewportRootMargin(budgets.viewportBufferPx),
+      threshold: 0
+    });
+
+    function initialRoots() {
+      if (typeof document.elementsFromPoint !== 'function') return [];
+      const width = Math.max(1, Number(settings.innerWidth) || Number(root.innerWidth) || 1);
+      const height = Math.max(1, Number(settings.innerHeight) || Number(root.innerHeight) || 1);
+      const roots = [];
+      const seen = new Set();
+      for (const ratio of [0, 0.25, 0.5, 0.75, 1]) {
+        const y = Math.min(height - 1, Math.max(0, Math.round((height - 1) * ratio)));
+        for (const element of document.elementsFromPoint(Math.round(width / 2), y) || []) {
+          const contentRoot = candidateRoot(element);
+          if (!contentRoot || seen.has(contentRoot)) continue;
+          seen.add(contentRoot);
+          roots.push(contentRoot);
+        }
+      }
+      return roots.slice(0, 32);
+    }
+
+    function discoverSlice() {
+      scheduledHandle = null;
+      scheduledKind = null;
+      if (disconnected || done) return;
+      const startedAt = now();
+      let visitedThisSlice = 0;
+      while (visitedThisSlice < 32) {
+        if (visitedThisSlice && now() - startedAt >= timeSliceMs) break;
+        const candidate = walker.nextNode();
+        if (!candidate) {
+          done = true;
+          break;
+        }
+        candidatesVisited += 1;
+        visitedThisSlice += 1;
+        observe(candidate);
+      }
+      if (!done) scheduleDiscovery();
+    }
+
+    function scheduleDiscovery() {
+      if (disconnected || done || scheduledHandle !== null) return;
+      if (requestIdle) {
+        scheduledKind = 'idle';
+        let invoked = false;
+        scheduledHandle = true;
+        const handle = requestIdle(() => {
+          invoked = true;
+          scheduledHandle = null;
+          discoverSlice();
+        }, { timeout: Math.max(32, timeSliceMs * 4) });
+        if (!invoked) scheduledHandle = handle;
+      } else {
+        scheduledKind = 'timeout';
+        let invoked = false;
+        scheduledHandle = true;
+        const handle = scheduleTimeout(() => {
+          invoked = true;
+          scheduledHandle = null;
+          discoverSlice();
+        }, 0);
+        if (!invoked) scheduledHandle = handle;
+      }
+    }
+
+    function start() {
+      if (disconnected) return status();
+      for (const contentRoot of initialRoots()) {
+        observe(contentRoot);
+        intersecting.add(contentRoot);
+        enqueueVisible(contentRoot, 'explicit');
+      }
+      scheduleDiscovery();
+      return status();
+    }
+
+    function disconnect() {
+      disconnected = true;
+      observer.disconnect();
+      if (scheduledHandle !== null) {
+        if (scheduledKind === 'idle' && cancelIdle) cancelIdle(scheduledHandle);
+        if (scheduledKind === 'timeout') cancelTimeout(scheduledHandle);
+      }
+      scheduledHandle = null;
+      scheduledKind = null;
+    }
+
+    function status() {
+      return Object.freeze({ candidatesVisited, observedRoots, done, disconnected });
+    }
+
+    return Object.freeze({ start, disconnect, status });
+  }
 
   function buildSegments(text, renderPlan) {
     const source = String(text || '');
@@ -80,6 +400,9 @@
     });
     let lastStatus = emptyStatus();
     let lastAnnotationSets = Object.freeze([]);
+    let activeRuntime = null;
+    let pageEpoch = 0;
+    let requestSequence = 0;
 
     function isVisible(element) {
       if (!element || !root.getComputedStyle) return true;
@@ -96,18 +419,6 @@
       return isVisible(node.parentElement);
     }
 
-    function collectTextNodes(maxTextNodes) {
-      const nodes = [];
-      const walker = root.document.createTreeWalker(
-        root.document.body || root.document.documentElement,
-        root.NodeFilter.SHOW_TEXT,
-        { acceptNode: (node) => eligibleTextNode(node) ? root.NodeFilter.FILTER_ACCEPT : root.NodeFilter.FILTER_REJECT }
-      );
-      let node;
-      while ((node = walker.nextNode()) && nodes.length < maxTextNodes) nodes.push(node);
-      return nodes;
-    }
-
     function isSensitivePage() {
       const location = root.location;
       if (!location || !['http:', 'https:'].includes(location.protocol)) return true;
@@ -120,6 +431,11 @@
     }
 
     function removeMarking() {
+      if (activeRuntime) {
+        activeRuntime.discovery.disconnect();
+        activeRuntime.scheduler.cancelAll();
+        activeRuntime = null;
+      }
       const parents = new Set();
       const markedNodes = Array.from(root.document.querySelectorAll('[data-halo-token="1"]'));
       for (const span of markedNodes) {
@@ -170,57 +486,109 @@
       return count;
     }
 
-    function unmarkPlanItem(item) {
-      const decorations = {};
-      for (const name of Object.keys(item.decorations || {})) decorations[name] = null;
-      return Object.freeze({
-        ...item,
-        marked: false,
-        decorations: Object.freeze(decorations),
-        label: null,
-        colorClass: null,
-        metaLabel: null,
-        glossHint: null,
-        chunkClass: null
-      });
-    }
-
-    function capPlan(plan, remaining) {
-      let used = 0;
-      return plan.map((item) => {
-        if (!item.marked) return item;
-        if (used < remaining) {
-          used += 1;
-          return item;
-        }
-        return unmarkPlanItem(item);
-      });
-    }
-
-    async function requestAnnotations(texts, settings, Dictionary, Semantic) {
-      const generatedAt = new Date().toISOString();
-      try {
-        const response = await root.chrome.runtime.sendMessage({
-          type: 'HALO_ANNOTATE_BATCH',
-          texts,
-          options: {
-            languageMode: settings.languageMode,
-            generatedAt
-          }
-        });
-        if (!response || response.error || !Array.isArray(response.annotationSets) || response.annotationSets.length !== texts.length) {
-          throw new Error('Local semantic service returned an invalid response');
-        }
+    function annotationResults(response, request, records, settings, Dictionary, Semantic) {
+      if (response && !response.error && response.requestId === request.requestId &&
+          response.pageEpoch === request.pageEpoch && Array.isArray(response.results) &&
+          response.results.length === records.length) {
         return Object.freeze({
-          annotationSets: Object.freeze(response.annotationSets),
-          providerMode: response.status && response.status.mode ? response.status.mode : 'ready'
-        });
-      } catch (_error) {
-        return Object.freeze({
-          annotationSets: bootstrapAnnotationSets(texts, settings, Dictionary, Semantic, generatedAt),
-          providerMode: 'content-bootstrap'
+          results: Object.freeze(response.results),
+          providerMode: response.status && response.status.mode ? response.status.mode : 'degraded'
         });
       }
+      const generatedAt = new Date().toISOString();
+      const sets = bootstrapAnnotationSets(records.map((record) => record.text), settings, Dictionary, Semantic, generatedAt);
+      return Object.freeze({
+        results: Object.freeze(records.map((record, index) => Object.freeze({
+          rootId: request.items[index].rootId,
+          annotationSet: sets[index]
+        }))),
+        providerMode: 'content-bootstrap'
+      });
+    }
+
+    async function requestEnrichment(batch, context, modules, settings, epoch, lexicalVersion) {
+      const records = [];
+      const items = [];
+      for (const work of batch.items) {
+        const workRecords = work.payload.records;
+        records.push(...workRecords);
+        items.push(...buildEnrichmentItems(workRecords, {
+          rootId: work.id,
+          languageMode: settings.languageMode,
+          semanticVersion: modules.Semantic.ENGINE.version,
+          grammarVersion: modules.Grammar.ALGORITHM.version,
+          profileRevision: settings.profileId,
+          lexicalVersion
+        }, modules.Progressive));
+      }
+      const request = {
+        type: 'HALO_ENRICH_BATCH',
+        requestId: `req-${epoch}-${++requestSequence}`,
+        pageEpoch: epoch,
+        items
+      };
+      const cancel = () => {
+        root.chrome.runtime.sendMessage({ type: 'HALO_CANCEL_REQUEST', requestId: request.requestId }).catch(() => {});
+      };
+      context.signal.addEventListener('abort', cancel, { once: true });
+      try {
+        const response = await root.chrome.runtime.sendMessage(request);
+        if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;
+        return annotationResults(response, request, records, settings, modules.Dictionary, modules.Semantic);
+      } catch (_error) {
+        if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;
+        return annotationResults(null, request, records, settings, modules.Dictionary, modules.Semantic);
+      } finally {
+        context.signal.removeEventListener('abort', cancel);
+      }
+    }
+
+    function renderBatch(batch, results, modules, settings) {
+      const byItemId = new Map(results.results.map((result) => [result.rootId, result.annotationSet]));
+      const plansByNode = new Map();
+      const allSets = [];
+      let semanticTokens = 0;
+      for (const work of batch.items) {
+        const payload = work.payload;
+        if (!payload.element || payload.element.isConnected === false) continue;
+        const runs = modules.Pipeline.createTextRuns(payload.element, { rootRevision: payload.rootRevision });
+        for (let index = 0; index < payload.records.length; index += 1) {
+          const record = payload.records[index];
+          const annotationSet = byItemId.get(`${work.id}:s${index}`);
+          if (!annotationSet || !Array.isArray(annotationSet.tokens)) continue;
+          allSets.push(annotationSet);
+          semanticTokens += annotationSet.tokens.length;
+          const plan = modules.Projection.createMarkingPlan(annotationSet.tokens, settings);
+          for (const item of plan) {
+            if (!item.marked) continue;
+            const fragments = modules.Pipeline.mapAggregateSpanToFragments(
+              runs,
+              record.start + item.start,
+              record.start + item.end
+            );
+            for (const fragment of fragments) {
+              if (!fragment.node || !eligibleTextNode(fragment.node)) continue;
+              if (!plansByNode.has(fragment.node)) plansByNode.set(fragment.node, []);
+              plansByNode.get(fragment.node).push({
+                ...item,
+                text: fragment.node.nodeValue.slice(fragment.start, fragment.end),
+                start: fragment.start,
+                end: fragment.end
+              });
+            }
+          }
+        }
+      }
+      let markedTokens = 0;
+      for (const [node, plan] of plansByNode) {
+        if (!node.parentNode) continue;
+        markedTokens += replaceTextNode(node, buildSegments(node.nodeValue || '', plan));
+      }
+      return Object.freeze({
+        annotationSets: Object.freeze(allSets),
+        semanticTokens,
+        markedTokens
+      });
     }
 
     async function applyMarking(rawSettings) {
@@ -228,8 +596,13 @@
         const Settings = root.HaloSettings;
         const Dictionary = root.HaloDictionary;
         const Semantic = root.HaloSemanticAnnotations;
+        const Grammar = root.HaloGrammarAnnotations;
         const Projection = root.HaloProjection;
-        if (!Settings || !Dictionary || !Semantic || !Projection) throw new Error('Halo shared modules are not loaded');
+        const Pipeline = root.HaloSentencePipeline;
+        const Progressive = root.HaloProgressiveRuntime;
+        const RuntimeScheduler = root.HaloRuntimeScheduler;
+        if (!Settings || !Dictionary || !Semantic || !Grammar || !Projection || !Pipeline ||
+            !Progressive || !RuntimeScheduler) throw new Error('Halo shared modules are not loaded');
         const settings = Settings.normalizeSettings(rawSettings);
         removeMarking();
         if (!settings.enabled) return lastStatus;
@@ -237,34 +610,55 @@
           lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'SENSITIVE_PAGE_BLOCKED' });
           return lastStatus;
         }
-
-        const textNodes = collectTextNodes(settings.maxTextNodes);
-        const texts = textNodes.map((node) => node.nodeValue || '');
-        const result = await requestAnnotations(texts, settings, Dictionary, Semantic);
-        lastAnnotationSets = result.annotationSets;
-        let markedTokens = 0;
-        let semanticTokens = 0;
-        for (let index = 0; index < textNodes.length; index += 1) {
-          if (markedTokens >= settings.maxMarkedTokens) break;
-          const node = textNodes[index];
-          const text = texts[index];
-          const semanticSet = result.annotationSets[index];
-          const semanticValues = semanticSet && Array.isArray(semanticSet.tokens) ? semanticSet.tokens : [];
-          semanticTokens += semanticValues.length;
-          if (!semanticValues.length) continue;
-          let plan = Projection.createMarkingPlan(semanticValues, settings);
-          const remaining = settings.maxMarkedTokens - markedTokens;
-          if (plan.filter((item) => item.marked).length > remaining) plan = capPlan(plan, remaining);
-          markedTokens += replaceTextNode(node, buildSegments(text, plan));
-        }
-        lastStatus = Object.freeze({
-          active: markedTokens > 0,
-          textNodesVisited: textNodes.length,
-          semanticTokens,
-          markedTokens,
-          providerMode: result.providerMode,
-          lastError: null
+        pageEpoch += 1;
+        const epoch = pageEpoch;
+        const provider = Dictionary.createBootstrapDictionaryProvider();
+        const lexicalVersion = `${provider.id}@${provider.version}`;
+        const modules = { Dictionary, Semantic, Grammar, Projection, Pipeline, Progressive };
+        const scheduler = RuntimeScheduler.createRuntimeScheduler({
+          budgets: settings.runtimeBudgets,
+          processBatch: async (batch, context) => {
+            const result = await requestEnrichment(batch, context, modules, settings, epoch, lexicalVersion);
+            if (!result || context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return;
+            const rendered = renderBatch(batch, result, modules, settings);
+            lastAnnotationSets = Object.freeze([...lastAnnotationSets, ...rendered.annotationSets]);
+            lastStatus = Object.freeze({
+              active: lastStatus.active || rendered.markedTokens > 0,
+              textNodesVisited: lastStatus.textNodesVisited + batch.textNodes,
+              semanticTokens: lastStatus.semanticTokens + rendered.semanticTokens,
+              markedTokens: lastStatus.markedTokens + rendered.markedTokens,
+              providerMode: result.providerMode,
+              queuedRoots: scheduler.status().queuedRoots,
+              lastError: null
+            });
+          },
+          onError: () => {
+            lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_MARKING_ERROR' });
+          }
         });
+        const discovery = createViewportDiscovery({
+          document: root.document,
+          NodeFilter: root.NodeFilter,
+          IntersectionObserver: root.IntersectionObserver,
+          scheduler,
+          budgets: settings.runtimeBudgets,
+          innerWidth: root.innerWidth,
+          innerHeight: root.innerHeight,
+          makeWork: (element, visible, metadata) => buildRootWork(element, {
+            rootId: metadata.rootId,
+            rootRevision: 1,
+            epoch,
+            priority: metadata.priority,
+            visible,
+            settings,
+            pipeline: Pipeline
+          })
+        });
+        activeRuntime = { scheduler, discovery, epoch };
+        lastStatus = Object.freeze({ ...emptyStatus(), queuedRoots: 0 });
+        discovery.start();
+        await scheduler.flush();
+        lastStatus = Object.freeze({ ...lastStatus, queuedRoots: scheduler.status().queuedRoots });
         return lastStatus;
       } catch (_error) {
         lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
@@ -291,5 +685,13 @@
   }
 
   initBrowser();
-  return Object.freeze({ bootstrapAnnotationSets, buildSegments, shouldSkipElement });
+  return Object.freeze({
+    bootstrapAnnotationSets,
+    buildSegments,
+    shouldSkipElement,
+    viewportRootMargin,
+    buildEnrichmentItems,
+    buildRootWork,
+    createViewportDiscovery
+  });
 });

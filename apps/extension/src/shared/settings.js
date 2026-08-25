@@ -28,6 +28,16 @@
     chunk: false,
     learningState: false
   });
+  const DEFAULT_RUNTIME_BUDGETS = Object.freeze({
+    maxTextNodes: 24,
+    maxCharacters: 12000,
+    maxSentences: 24,
+    maxSemanticTokens: 600,
+    maxShardIds: 24,
+    timeSliceMs: 8,
+    maxQueuedRoots: 200,
+    viewportBufferPx: 1200
+  });
   const DEFAULT_SETTINGS = Object.freeze({
     schemaVersion: 2,
     profileId: 'halo-default-v0.3.0',
@@ -37,6 +47,8 @@
     density: 0.65,
     minConfidence: 0.6,
     labelPosition: 'top-right',
+    runtimeBudgets: DEFAULT_RUNTIME_BUDGETS,
+    // Retained only while MarkingProfile/v2 serialization requires the legacy fields.
     maxTextNodes: 600,
     maxMarkedTokens: 3000
   });
@@ -58,6 +70,24 @@
     return DEFAULT_CHANNELS[name];
   }
 
+  function normalizeRuntimeBudgets(input) {
+    const raw = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    const budgets = {};
+    for (const name of [
+      'maxTextNodes', 'maxCharacters', 'maxSentences', 'maxSemanticTokens',
+      'maxShardIds', 'timeSliceMs', 'maxQueuedRoots'
+    ]) {
+      budgets[name] = Math.round(clampNumber(raw[name], 1, DEFAULT_RUNTIME_BUDGETS[name], DEFAULT_RUNTIME_BUDGETS[name]));
+    }
+    budgets.viewportBufferPx = Math.round(clampNumber(
+      raw.viewportBufferPx,
+      0,
+      DEFAULT_RUNTIME_BUDGETS.viewportBufferPx,
+      DEFAULT_RUNTIME_BUDGETS.viewportBufferPx
+    ));
+    return Object.freeze(budgets);
+  }
+
   function normalizeSettings(input) {
     const raw = input || {};
     const rawChannels = raw.channels && typeof raw.channels === 'object' && !Array.isArray(raw.channels)
@@ -77,6 +107,8 @@
       density: clampNumber(raw.density, 0, 1, DEFAULT_SETTINGS.density),
       minConfidence: clampNumber(raw.minConfidence, 0, 1, DEFAULT_SETTINGS.minConfidence),
       labelPosition: LABEL_POSITIONS.has(raw.labelPosition) ? raw.labelPosition : DEFAULT_SETTINGS.labelPosition,
+      runtimeBudgets: normalizeRuntimeBudgets(raw.runtimeBudgets),
+      // Compatibility fields are normalized for MarkingProfile/v2 only; runtime policy never reads them.
       maxTextNodes: Math.round(clampNumber(raw.maxTextNodes, 50, 2000, DEFAULT_SETTINGS.maxTextNodes)),
       maxMarkedTokens: Math.round(clampNumber(raw.maxMarkedTokens, 100, 10000, DEFAULT_SETTINGS.maxMarkedTokens))
     });
@@ -90,7 +122,9 @@
     CHANNEL_NAMES,
     UNAVAILABLE_CHANNELS,
     DEFAULT_CHANNELS,
+    DEFAULT_RUNTIME_BUDGETS,
     DEFAULT_SETTINGS,
+    normalizeRuntimeBudgets,
     normalizeSettings,
     migrateSettings
   });

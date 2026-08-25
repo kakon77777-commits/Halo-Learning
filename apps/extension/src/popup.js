@@ -3,10 +3,14 @@
 
   const STORAGE_KEY = 'haloSettings';
   const INJECT_FILES = [
+    'src/shared/progressive-runtime.js',
     'src/shared/dictionary-provider.js',
     'src/shared/semantic-annotations.js',
+    'src/shared/grammar-annotations.js',
     'src/shared/projection.js',
     'src/shared/settings.js',
+    'src/shared/sentence-pipeline.js',
+    'src/shared/runtime-scheduler.js',
     'src/content.js'
   ];
   const CHANNEL_CONTROLS = Object.freeze({
@@ -91,7 +95,8 @@
       if (result && result.lastError) throw new Error(result.lastError);
       const marked = result && result.markedTokens ? result.markedTokens : 0;
       const semantic = result && result.semanticTokens ? result.semanticTokens : 0;
-      showStatus(`Marked ${marked} / ${semantic} semantic tokens · 已標記`, false);
+      const queued = result && result.queuedRoots ? ` · ${result.queuedRoots} queued` : '';
+      showStatus(`Marked ${marked} / ${semantic} semantic tokens${queued} · 已標記`, false);
     } catch (error) {
       showStatus(`Cannot mark this page · ${error.message || error}`, true);
     } finally {
