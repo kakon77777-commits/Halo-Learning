@@ -392,6 +392,13 @@
       : (callback) => callback();
     const trackOwnedNode = typeof settings.trackOwnedNode === 'function' ? settings.trackOwnedNode : () => {};
     const trackMutation = typeof settings.trackMutation === 'function' ? settings.trackMutation : () => {};
+    if (Object.prototype.hasOwnProperty.call(settings, 'prepareCapabilities') &&
+        typeof settings.prepareCapabilities !== 'function') {
+      throw new TypeError('prepareCapabilities: must be a function');
+    }
+    const prepareCapabilities = typeof settings.prepareCapabilities === 'function'
+      ? settings.prepareCapabilities
+      : () => {};
     const renderState = createRenderState(Object.prototype.hasOwnProperty.call(settings, 'WeakRef')
       ? { WeakRef: settings.WeakRef }
       : {});
@@ -678,6 +685,20 @@
       }
     }
 
+    function grantPreparedOperations(prepared) {
+      const granted = [];
+      try {
+        for (const operation of prepared) {
+          granted.push(operation.wrapper);
+          wrapperCapabilities.add(operation.wrapper);
+          wrapperMetadata.set(operation.wrapper, operation.metadata);
+        }
+      } catch (error) {
+        revokeWrappers(granted);
+        throw error;
+      }
+    }
+
     function cleanupEntry(entry, normalizeParents) {
       const wrappers = ownedWrappers(entry);
       unwrapEntry(entry, normalizeParents);
@@ -688,8 +709,7 @@
     function preparedOperations(request) {
       return planNodeOperations(request.fragments).map((fragment) => {
         const wrapper = track(document.createElement('span'));
-        wrapperCapabilities.add(wrapper);
-        wrapperMetadata.set(wrapper, {
+        const metadata = Object.freeze({
           rootId: request.rootId,
           runId: request.runId,
           original: fragment.text,
@@ -699,7 +719,7 @@
         applyProjection(wrapper, request, fragment);
         wrapper.textContent = fragment.text;
         for (const child of Array.from(wrapper.childNodes || [])) track(child);
-        return { fragment, wrapper };
+        return { fragment, wrapper, metadata };
       });
     }
 
@@ -770,6 +790,8 @@
         .sort((left, right) => left.fragment.boundaryIndex - right.fragment.boundaryIndex)
         .map((operation) => operation.wrapper);
       const nextEntry = prepareRecord(request, wrappers);
+      prepareCapabilities(Object.freeze({ rootId: request.rootId, wrapperCount: wrappers.length }));
+      grantPreparedOperations(prepared);
       try {
         mutateRootAtomically(request.root, () => applyPrepared(prepared));
       } catch (error) {
@@ -814,13 +836,13 @@
       }, [entry]);
       for (const fragment of request.fragments) {
         const wrapper = byIndex.get(String(fragment.boundaryIndex));
-        wrapperMetadata.set(wrapper, {
+        wrapperMetadata.set(wrapper, Object.freeze({
           rootId: request.rootId,
           runId: request.runId,
           original: fragment.text,
           boundaryKey: fragment.boundaryKey,
           boundaryIndex: fragment.boundaryIndex
-        });
+        }));
       }
       renderState.commit(nextEntry);
       lastAction = 'updated';
@@ -841,6 +863,8 @@
         .map((operation) => operation.wrapper);
       const nextEntry = prepareRecord(request, wrappers);
       const oldWrappers = ownedWrappers(entry);
+      prepareCapabilities(Object.freeze({ rootId: request.rootId, wrapperCount: wrappers.length }));
+      grantPreparedOperations(prepared);
       try {
         mutateRootAtomically(request.root, () => {
           cleanupEntry(entry, false);
@@ -1042,8 +1066,11 @@
       });
     }
 
-    function ownsToken(element) {
-      return Boolean(element && wrapperCapabilities.has(element) && wrapperMetadata.has(element));
+    function ownsToken(element, expectedRootId) {
+      if (!element || !wrapperCapabilities.has(element)) return false;
+      const metadata = wrapperMetadata.get(element);
+      if (!metadata) return false;
+      return expectedRootId === undefined || metadata.rootId === expectedRootId;
     }
 
     return Object.freeze({ apply, reconcile, removeRoot, removeAll, openPanel, closePanel, status, ownsToken });

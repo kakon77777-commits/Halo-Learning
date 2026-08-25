@@ -102,6 +102,18 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
           text: article.textContent
         };
 
+        const ownerWrapper = firstWrappers[0];
+        ownerWrapper.setAttribute('data-halo-owned', 'tampered-owner');
+        ownerWrapper.setAttribute('data-halo-run', 'tampered-run');
+        ownerWrapper.setAttribute('data-halo-root', 'tampered-root');
+        ownerWrapper.setAttribute('data-halo-original', 'tampered-original');
+        ownerWrapper.className = 'page-class';
+        const privateOwnerBinding = {
+          anyRoot: renderer.ownsToken(ownerWrapper),
+          correctRoot: renderer.ownsToken(ownerWrapper, 'lesson-root'),
+          wrongRoot: renderer.ownsToken(ownerWrapper, 'other-root')
+        };
+
         renderer.removeRoot('lesson-root');
         const applyRemove = {
           wrappers: article.querySelectorAll('[data-halo-owned="token"]').length,
@@ -249,6 +261,52 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
         };
         detachedRenderer.removeAll();
 
+        function failedPreparationRenderer(options) {
+          const root = document.createElement('p');
+          root.textContent = 'model';
+          document.body.appendChild(root);
+          const candidates = [];
+          const candidateRenderer = HaloReversibleRenderer.createReversibleRenderer({
+            document,
+            trackOwnedNode: (node) => candidates.push(node),
+            ...options
+          });
+          let message = null;
+          try {
+            candidateRenderer.apply({
+              schemaVersion: 1,
+              runId: 'failed-preparation-run',
+              rootId: 'failed-preparation-root',
+              rootRevision: 1,
+              analysisKey: 'failed-preparation-analysis',
+              root,
+              fragments: [markedFragment(root.firstChild, 'failed-preparation-text', 0, 5, 'n')]
+            });
+          } catch (error) {
+            message = error.message;
+          }
+          const result = {
+            message,
+            authorizedCandidates: candidates.filter((node) => candidateRenderer.ownsToken(node)).length,
+            tokens: root.querySelectorAll('[data-halo-owned="token"]').length,
+            text: root.textContent,
+            rootCount: candidateRenderer.status().rootCount
+          };
+          root.remove();
+          return result;
+        }
+        class ThrowingWeakRef {
+          constructor() {
+            throw new Error('browser weak handle preparation failed');
+          }
+        }
+        const weakRefPreparation = failedPreparationRenderer({ WeakRef: ThrowingWeakRef });
+        const hookPreparation = failedPreparationRenderer({
+          prepareCapabilities() {
+            throw new Error('browser precommit preparation failed');
+          }
+        });
+
         return {
           applied: applied.action,
           sourceText,
@@ -259,7 +317,10 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
           panelResult,
           routeCleanup,
           movedRollback,
-          parentlessCleanup
+          parentlessCleanup,
+          privateOwnerBinding,
+          weakRefPreparation,
+          hookPreparation
         };
       });
 
@@ -315,6 +376,25 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
         privateTokens: 1,
         nestedTokens: 0,
         text: 'model!'
+      });
+      assert.deepEqual(result.privateOwnerBinding, {
+        anyRoot: true,
+        correctRoot: true,
+        wrongRoot: false
+      });
+      assert.deepEqual(result.weakRefPreparation, {
+        message: 'browser weak handle preparation failed',
+        authorizedCandidates: 0,
+        tokens: 0,
+        text: 'model',
+        rootCount: 0
+      });
+      assert.deepEqual(result.hookPreparation, {
+        message: 'browser precommit preparation failed',
+        authorizedCandidates: 0,
+        tokens: 0,
+        text: 'model',
+        rootCount: 0
       });
       assert.ok(requests.every((url) => url.startsWith(origin)), 'renderer makes no remote request');
     });

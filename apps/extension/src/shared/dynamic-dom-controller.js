@@ -101,8 +101,8 @@
       }
       operations.push({
         ...operation,
-        addedNodes: new Set(Array.from(operation.addedNodes || [])),
-        removedNodes: new Set(Array.from(operation.removedNodes || [])),
+        addedNodes: Array.from(operation.addedNodes || []),
+        removedNodes: Array.from(operation.removedNodes || []),
         consumed: false
       });
       return operation;
@@ -117,35 +117,74 @@
       }) || null;
     }
 
+    function containsNodeMultiset(values, expected) {
+      const remaining = Array.from(values || []);
+      for (const node of Array.from(expected || [])) {
+        const index = remaining.indexOf(node);
+        if (index < 0) return false;
+        remaining.splice(index, 1);
+      }
+      return true;
+    }
+
+    function subtractNodeMultiset(values, expected) {
+      const remaining = Array.from(values || []);
+      for (const node of Array.from(expected || [])) {
+        const index = remaining.indexOf(node);
+        if (index >= 0) remaining.splice(index, 1);
+      }
+      return remaining;
+    }
+
+    function discardConsumedOperations() {
+      for (let index = operations.length - 1; index >= 0; index -= 1) {
+        if (operations[index].consumed) operations.splice(index, 1);
+      }
+    }
+
     function sanitize(record) {
       if (!record) return null;
       if (record.type === 'characterData' || record.type === 'attributes') {
         const operation = matchingOperation(record);
         if (!operation) return record;
         operation.consumed = true;
+        discardConsumedOperations();
         return null;
       }
       if (record.type !== 'childList') return record;
       const matching = operations.filter((operation) =>
         !operation.consumed && operation.type === 'childList' && operation.target === record.target
       );
-      const addedNodes = Array.from(record.addedNodes || []).filter((node) => {
-        if (privateNodes.has(node)) return false;
-        const operation = matching.find((candidate) => candidate.addedNodes.has(node));
-        if (!operation) return true;
-        operation.addedNodes.delete(node);
-        return false;
-      });
-      const removedNodes = Array.from(record.removedNodes || []).filter((node) => {
-        if (privateNodes.has(node)) return false;
-        const operation = matching.find((candidate) => candidate.removedNodes.has(node));
-        if (!operation) return true;
-        operation.removedNodes.delete(node);
-        return false;
-      });
+      const originalAdded = Array.from(record.addedNodes || []);
+      const originalRemoved = Array.from(record.removedNodes || []);
+      let addedNodes = originalAdded;
+      let removedNodes = originalRemoved;
+      const complete = [];
       for (const operation of matching) {
-        if (!operation.addedNodes.size && !operation.removedNodes.size) operation.consumed = true;
+        const hasCompleteAdded = containsNodeMultiset(addedNodes, operation.addedNodes);
+        const hasCompleteRemoved = containsNodeMultiset(removedNodes, operation.removedNodes);
+        const overlaps = operation.addedNodes.some((node) => originalAdded.includes(node)) ||
+          operation.removedNodes.some((node) => originalRemoved.includes(node));
+        if (!hasCompleteAdded || !hasCompleteRemoved) {
+          if (overlaps) return record;
+          continue;
+        }
+        addedNodes = subtractNodeMultiset(addedNodes, operation.addedNodes);
+        removedNodes = subtractNodeMultiset(removedNodes, operation.removedNodes);
+        complete.push(operation);
       }
+      for (const operation of complete) {
+        operation.consumed = true;
+        for (const node of [...operation.addedNodes, ...operation.removedNodes]) privateNodes.delete(node);
+      }
+      discardConsumedOperations();
+      const pendingNodes = new Set();
+      for (const operation of operations) {
+        if (operation.consumed || operation.type !== 'childList') continue;
+        for (const node of [...operation.addedNodes, ...operation.removedNodes]) pendingNodes.add(node);
+      }
+      addedNodes = addedNodes.filter((node) => !privateNodes.has(node) || pendingNodes.has(node));
+      removedNodes = removedNodes.filter((node) => !privateNodes.has(node) || pendingNodes.has(node));
       if (!addedNodes.length && !removedNodes.length) return null;
       return {
         type: record.type,

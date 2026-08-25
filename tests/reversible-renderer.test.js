@@ -795,6 +795,119 @@ test('cleanup works without WeakRef and survives temporary root detachment', () 
   assert.equal(detached.article.textContent, 'The model learns.');
 });
 
+test('throwing WeakRef preparation never grants detached token authority', () => {
+  const dom = fixture();
+  const candidates = [];
+  class ThrowingWeakRef {
+    constructor() {
+      throw new Error('weak handle preparation failed');
+    }
+  }
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    WeakRef: ThrowingWeakRef,
+    trackOwnedNode(node) {
+      candidates.push(node);
+    }
+  });
+
+  assert.throws(() => renderer.apply(request(dom.article, {
+    fragments: [fragment(dom.model, 'model-node', 0, 5)]
+  })), /weak handle preparation failed/);
+
+  assert.equal(candidates.some((node) => renderer.ownsToken(node)), false);
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"]').length, 0);
+  assert.equal(dom.article.textContent, 'The model learns.');
+  assert.equal(renderer.status().rootCount, 0);
+  assert.equal(renderer.removeAll().wrappers, 0);
+});
+
+test('throwing precommit preparation hook revokes every detached candidate', () => {
+  const dom = fixture();
+  const candidates = [];
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    trackOwnedNode(node) {
+      candidates.push(node);
+    },
+    prepareCapabilities() {
+      throw new Error('precommit preparation failed');
+    }
+  });
+
+  assert.throws(() => renderer.apply(request(dom.article, {
+    fragments: [fragment(dom.model, 'model-node', 0, 5)]
+  })), /precommit preparation failed/);
+
+  assert.equal(candidates.some((node) => renderer.ownsToken(node)), false);
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"]').length, 0);
+  assert.equal(dom.article.textContent, 'The model learns.');
+  assert.equal(renderer.status().rootCount, 0);
+});
+
+test('rebuild handle preparation failure cannot leave new private authority', () => {
+  const dom = fixture();
+  const candidates = [];
+  let throwOnWrapperDeref = false;
+  class ControlledWeakRef {
+    constructor(value) {
+      this.value = value;
+    }
+
+    deref() {
+      if (throwOnWrapperDeref && this.value && this.value.tagName === 'SPAN') {
+        throw new Error('prior wrapper handle failed');
+      }
+      return this.value;
+    }
+  }
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    WeakRef: ControlledWeakRef,
+    trackOwnedNode(node) {
+      candidates.push(node);
+    }
+  });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const priorWrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  candidates.length = 0;
+  throwOnWrapperDeref = true;
+
+  assert.throws(() => renderer.reconcile(request(dom.article, {
+    rootRevision: 2,
+    analysisKey: 'analysis-rebuilt',
+    fragments: [fragment(priorWrapper.childNodes[0], 'replacement-node', 1, 4)]
+  })), /prior wrapper handle failed/);
+
+  assert.equal(candidates.some((node) => node !== priorWrapper && renderer.ownsToken(node)), false);
+  throwOnWrapperDeref = false;
+  assert.equal(renderer.ownsToken(priorWrapper, 'root-1'), true);
+  assert.equal(renderer.status().rootCount, 1);
+  assert.equal(dom.article.textContent, 'The model learns.');
+});
+
+test('private token owner binding survives every public marker change', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const owned = dom.article.querySelector('[data-halo-owned="token"]');
+  const forged = dom.document.createElement('span');
+  for (const [name, value] of owned.attributes) forged.setAttribute(name, value);
+  forged.textContent = 'model';
+
+  owned.setAttribute('data-halo-owned', 'page-value');
+  owned.setAttribute('data-halo-run', 'page-run');
+  owned.setAttribute('data-halo-root', 'page-root');
+  owned.setAttribute('data-halo-original', 'page-original');
+  owned.className = 'page-class';
+
+  assert.equal(renderer.ownsToken(owned), true);
+  assert.equal(renderer.ownsToken(owned, 'root-1'), true);
+  assert.equal(renderer.ownsToken(owned, 'another-root'), false);
+  assert.equal(renderer.ownsToken(forged), false);
+  assert.equal(renderer.ownsToken(forged, 'root-1'), false);
+});
+
 test('private ownership ignores forged markers and survives public marker tampering', () => {
   const dom = fixture();
   const renderer = Renderer.createReversibleRenderer({ document: dom.document });

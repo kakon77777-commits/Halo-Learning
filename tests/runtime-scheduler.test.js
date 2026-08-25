@@ -382,7 +382,7 @@ test('viewport discovery samples visible roots first and only enqueues intersect
 
   discovery.start();
 
-  assert.equal(enqueued[0].rootId, 'p-35', 'initial viewport sample is enqueued before discovery');
+  assert.equal(enqueued[0].rootId, 'halo-root-1', 'initial viewport sample receives private identity before discovery');
   assert.equal(enqueued[0].priority, 'explicit');
   assert.equal(observer.options.rootMargin, '1200px 0px 1200px 0px');
   slices.shift()({ didTimeout: false, timeRemaining: () => 50 });
@@ -391,9 +391,9 @@ test('viewport discovery samples visible roots first and only enqueues intersect
 
   observer.callback([{ target: candidates[10], isIntersecting: false }]);
   assert.equal(enqueued.length, 1);
-  assert.deepEqual(cancelled, ['p-10']);
+  assert.deepEqual(cancelled, ['halo-root-12']);
   observer.callback([{ target: candidates[10], isIntersecting: true }]);
-  assert.equal(enqueued.at(-1).rootId, 'p-10');
+  assert.equal(enqueued.at(-1).rootId, 'halo-root-12');
   assert.equal(enqueued.at(-1).priority, 'inferred');
   assert.equal(enqueued.at(-1).visible, true);
   discovery.disconnect();
@@ -453,15 +453,15 @@ test('dynamic root refresh cancels stale work and enqueues one incremented visib
   discovery.refreshRoots([paragraph, paragraph], { alreadyInvalidated: true });
   observer.callback([{ target: paragraph, isIntersecting: true }]);
 
-  assert.deepEqual(cancelled, ['lesson']);
+  assert.deepEqual(cancelled, ['halo-root-1']);
   assert.deepEqual(observer.unobserved, [paragraph]);
   assert.deepEqual(enqueued.map((item) => [item.rootId, item.rootRevision]), [
-    ['lesson', 1],
-    ['lesson', 2]
+    ['halo-root-1', 1],
+    ['halo-root-1', 2]
   ]);
 
   discovery.releaseRoots([paragraph]);
-  assert.deepEqual(cancelled, ['lesson', 'lesson']);
+  assert.deepEqual(cancelled, ['halo-root-1', 'halo-root-1']);
   assert.deepEqual(observer.unobserved, [paragraph, paragraph]);
 });
 
@@ -506,13 +506,98 @@ test('released discovery roots delete revision and identity state under bounded 
 
   const first = candidate('reused-id');
   assert.equal(discovery.isRootRevisionCurrent(first, 1), true);
+  const firstInternalId = discovery.rootIdsWithin([first])[0];
   discovery.invalidateRoots([first]);
   assert.equal(discovery.isRootRevisionCurrent(first, 2), true);
   discovery.releaseRoots([first]);
+  first.isConnected = false;
   const replacement = candidate('reused-id');
   assert.equal(discovery.isRootRevisionCurrent(replacement, 1), true);
+  const replacementInternalId = discovery.rootIdsWithin([replacement])[0];
   assert.equal(discovery.status().trackedRootRevisions, 1);
-  assert.ok(cancelled.includes('reused-id'));
+  assert.notEqual(replacementInternalId, firstInternalId);
+  assert.equal(Content.rootWorkIsCurrent({ payload: { element: first, rootRevision: 2 } }, discovery), false);
+  assert.ok(cancelled.includes(firstInternalId));
+});
+
+test('duplicate page IDs receive independent private identities and revision-first cancellation', () => {
+  const first = candidate('duplicate');
+  const second = candidate('duplicate');
+  const enqueued = [];
+  const cancelled = [];
+  const staleBeforeCancel = [];
+  const errors = [];
+  let discovery;
+  let throwingId = null;
+  class FixtureIntersectionObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  discovery = Content.createViewportDiscovery({
+    document: {
+      body: candidate('body'),
+      documentElement: candidate('html'),
+      elementsFromPoint: () => [first, second],
+      createTreeWalker: () => ({ nextNode: () => null })
+    },
+    NodeFilter: { SHOW_ELEMENT: 1 },
+    IntersectionObserver: FixtureIntersectionObserver,
+    scheduler: {
+      enqueue: (value) => { enqueued.push(value); return true; },
+      cancelRoot(rootId) {
+        cancelled.push(rootId);
+        const element = rootId === discovery.rootIdsWithin([first])[0] ? first : second;
+        staleBeforeCancel.push(!discovery.isRootRevisionCurrent(element, 1));
+        if (rootId === throwingId) throw new Error(`cancel failed for ${rootId}`);
+        return 1;
+      },
+      flush: () => Promise.resolve()
+    },
+    onError: (error, metadata) => errors.push([error.message, metadata.phase, metadata.rootId]),
+    budgets: { timeSliceMs: 8, viewportBufferPx: 1200 },
+    makeWork: (_element, _visible, metadata) => ({
+      id: `${metadata.rootId}:w0`,
+      rootId: metadata.rootId,
+      rootRevision: metadata.rootRevision
+    }),
+    innerWidth: 1000,
+    innerHeight: 800,
+    requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
+    cancelIdleCallback: () => {},
+    clock: { now: () => 0 }
+  });
+  discovery.start();
+  const [firstId] = discovery.rootIdsWithin([first]);
+  const [secondId] = discovery.rootIdsWithin([second]);
+  throwingId = firstId;
+
+  assert.equal(firstId, 'halo-root-1');
+  assert.equal(secondId, 'halo-root-2');
+  assert.notEqual(firstId, secondId);
+  assert.deepEqual(enqueued.map((item) => item.rootId), [firstId, secondId]);
+  first.isConnected = false;
+  assert.deepEqual(discovery.rootIdsWithin([first]), [firstId]);
+  first.isConnected = true;
+  assert.deepEqual(discovery.rootIdsWithin([first]), [firstId], 'reattaching the same live element keeps its identity');
+  assert.doesNotThrow(() => discovery.invalidateRoots([first, second]));
+  assert.deepEqual(cancelled, [firstId, secondId]);
+  assert.deepEqual(staleBeforeCancel, [true, true]);
+  assert.equal(discovery.isRootRevisionCurrent(first, 2), true);
+  assert.equal(discovery.isRootRevisionCurrent(second, 2), true);
+  assert.deepEqual(errors, [[`cancel failed for ${firstId}`, 'root-cancel', firstId]]);
+
+  assert.doesNotThrow(() => discovery.releaseRoots([first]));
+  assert.deepEqual(discovery.rootIdsWithin([first]), []);
+  assert.deepEqual(discovery.rootIdsWithin([second]), [secondId]);
+  assert.equal(discovery.isRootRevisionCurrent(second, 2), true);
+  assert.equal(discovery.status().trackedRootRevisions, 1);
+
+  const replacement = candidate('duplicate');
+  assert.equal(discovery.isRootRevisionCurrent(replacement, 1), true);
+  assert.equal(discovery.rootIdsWithin([replacement])[0], 'halo-root-3');
+  discovery.disconnect();
+  assert.equal(discovery.status().trackedRootRevisions, 0);
 });
 
 test('enrichment items recompute canonical keys from every semantic input', () => {
@@ -760,23 +845,24 @@ test('private discovery identity resolves live descendants and detached removal 
     clock: { now: () => 0 }
   });
   discovery.start();
+  const [contentRootId] = discovery.rootIdsWithin([paragraph]);
   const rendererRoots = new Map([
-    ['lesson-root', new Set(['lesson-root:w0', 'lesson-root:w1'])]
+    [contentRootId, new Set([`${contentRootId}:w0`, `${contentRootId}:w1`])]
   ]);
 
   assert.deepEqual(
     Content.rendererRootIdsForInvalidation(discovery, [mutatedDescendant], [], rendererRoots),
-    ['lesson-root:w0', 'lesson-root:w1']
+    [`${contentRootId}:w0`, `${contentRootId}:w1`]
   );
   const canonicalRoots = discovery.rootsWithin([mutatedDescendant]);
   mutatedDescendant.closest = () => null;
   mutatedDescendant.isConnected = false;
   discovery.invalidateRoots(canonicalRoots);
-  assert.deepEqual(cancelled, ['lesson-root']);
+  assert.deepEqual(cancelled, [contentRootId]);
   paragraph.isConnected = false;
   assert.deepEqual(
     Content.rendererRootIdsForInvalidation(discovery, [], [paragraph], rendererRoots),
-    ['lesson-root:w0', 'lesson-root:w1']
+    [`${contentRootId}:w0`, `${contentRootId}:w1`]
   );
 });
 
@@ -806,6 +892,7 @@ test('content eligibility uses private renderer authority instead of public toke
   const parent = {
     nodeType: 1,
     tagName: 'SPAN',
+    parentElement: token,
     closest(selector) {
       return selector.includes('data-halo-owned="token"') ? token : null;
     }
@@ -819,16 +906,26 @@ test('content eligibility uses private renderer authority instead of public toke
   }), true, 'a forged all-public-marker token remains ordinary page content');
   assert.equal(Content.eligibleTextNode(node, {
     rendererRootId: 'real-root',
-    ownsToken: (element) => element === token,
+    ownsToken: (element, expectedRootId) => element === token &&
+      (expectedRootId === undefined || expectedRootId === 'another-root'),
     isVisible: () => true
   }), false, 'a private token cannot remap under a different canonical renderer root');
   token.getAttribute = (name) => name === 'data-halo-root' ? 'real-root' :
     (name === 'data-halo-owned' ? 'token' : 'private');
   assert.equal(Content.eligibleTextNode(node, {
     rendererRootId: 'real-root',
-    ownsToken: (element) => element === token,
+    ownsToken: (element, expectedRootId) => element === token &&
+      (expectedRootId === undefined || expectedRootId === 'real-root'),
     isVisible: () => true
   }), true, 'the renderer private capability admits legitimate same-root remapping');
+
+  token.getAttribute = () => 'tampered-again';
+  assert.equal(Content.eligibleTextNode(node, {
+    rendererRootId: 'real-root',
+    ownsToken: (element, expectedRootId) => element === token &&
+      (expectedRootId === undefined || expectedRootId === 'real-root'),
+    isVisible: () => true
+  }), true, 'public marker tampering cannot revoke immutable private owner binding');
 });
 
 test('content invalidation cancels first and survives renderer cleanup failure through refresh', () => {
@@ -890,6 +987,41 @@ test('content invalidation cancels first and survives renderer cleanup failure t
 
   assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, []), 1);
   assert.deepEqual(calls.at(-1), 'refresh:changed-root:true');
+  assert.equal(runtime.pendingChangedRoots.size, 0);
+});
+
+test('failed root refresh remains deduplicated and retries every canonical root once', () => {
+  const first = candidate('first');
+  const second = candidate('second');
+  const attempts = [];
+  const errors = [];
+  let shouldThrow = true;
+  const runtime = {
+    pendingChangedRoots: new Set([first]),
+    discovery: {
+      rootsWithin(values) {
+        return Array.from(values || []);
+      },
+      refreshRoots(values, options) {
+        attempts.push([Array.from(values), options.alreadyInvalidated]);
+        if (shouldThrow) {
+          shouldThrow = false;
+          throw new Error('first refresh failed');
+        }
+        return values.length;
+      }
+    }
+  };
+
+  assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, [second, first], {
+    onError: (error, metadata) => errors.push([error.message, metadata.phase])
+  }), 0);
+  assert.deepEqual([...runtime.pendingChangedRoots], [first, second]);
+  assert.deepEqual(attempts[0], [[first, second], true]);
+  assert.deepEqual(errors, [['first refresh failed', 'root-refresh']]);
+
+  assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, []), 2);
+  assert.deepEqual(attempts[1], [[first, second], true]);
   assert.equal(runtime.pendingChangedRoots.size, 0);
 });
 

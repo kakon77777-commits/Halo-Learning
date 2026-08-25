@@ -256,6 +256,77 @@ test('operation-scoped sanitation subtracts only private nodes and exact rendere
   }, 'an expected record is consumed once and cannot hide a later page change');
 });
 
+test('child-list sanitation consumes only complete expected node multisets', () => {
+  const target = element('article');
+  const removed = element('removed', { parent: target });
+  const added = element('added', { parent: target });
+
+  for (const [name, actual] of [
+    ['remove-only', mutation({ target, removedNodes: [removed] })],
+    ['add-only', mutation({ target, addedNodes: [added] })]
+  ]) {
+    const sanitizer = Dynamic.createRendererMutationSanitizer();
+    sanitizer.trackNode(added);
+    sanitizer.expect({ type: 'childList', target, addedNodes: [added], removedNodes: [removed] });
+
+    assert.deepEqual(sanitizer.sanitize(actual), actual, name);
+    assert.equal(sanitizer.sanitize(mutation({
+      target,
+      addedNodes: [added],
+      removedNodes: [removed]
+    })), null, `${name} did not consume the complete expectation`);
+  }
+
+  const wrongTargetSanitizer = Dynamic.createRendererMutationSanitizer();
+  const otherTarget = element('aside');
+  wrongTargetSanitizer.trackNode(added);
+  wrongTargetSanitizer.expect({ type: 'childList', target, addedNodes: [added], removedNodes: [removed] });
+  const unexpectedMove = mutation({ target: otherTarget, addedNodes: [added] });
+  assert.deepEqual(
+    wrongTargetSanitizer.sanitize(unexpectedMove),
+    unexpectedMove,
+    'private identity cannot authorize an operation against a different parent'
+  );
+});
+
+test('complete child-list expectations subtract once and preserve legitimate extras', () => {
+  const sanitizer = Dynamic.createRendererMutationSanitizer();
+  const target = element('article');
+  const firstAdded = element('first-added', { parent: target });
+  const firstRemoved = element('first-removed', { parent: target });
+  const secondAdded = element('second-added', { parent: target });
+  const secondRemoved = element('second-removed', { parent: target });
+  const legitimateAdded = element('legitimate-added', { parent: target });
+  const legitimateRemoved = element('legitimate-removed', { parent: target });
+  sanitizer.trackNode(firstAdded);
+  sanitizer.trackNode(secondAdded);
+  sanitizer.expect({
+    type: 'childList',
+    target,
+    addedNodes: [firstAdded],
+    removedNodes: [firstRemoved]
+  });
+  sanitizer.expect({
+    type: 'childList',
+    target,
+    addedNodes: [secondAdded],
+    removedNodes: [secondRemoved]
+  });
+  const complete = mutation({
+    target,
+    addedNodes: [firstAdded, legitimateAdded, secondAdded],
+    removedNodes: [secondRemoved, legitimateRemoved, firstRemoved]
+  });
+
+  assert.deepEqual(sanitizer.sanitize(complete), {
+    type: 'childList',
+    target,
+    addedNodes: [legitimateAdded],
+    removedNodes: [legitimateRemoved]
+  });
+  assert.deepEqual(sanitizer.sanitize(complete), complete, 'consumed descriptors cannot sanitize a later record');
+});
+
 test('renderer suppression preserves monkey-patched page side effects while renderer-only records stay silent', () => {
   const clock = fakeClock();
   const invalidated = [];

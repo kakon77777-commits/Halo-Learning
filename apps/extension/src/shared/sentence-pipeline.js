@@ -50,11 +50,13 @@
       normalizedAttribute(element, 'data-halo-token') === '1';
   }
 
-  function privatelyOwnsToken(element, options) {
-    return Boolean(hasTokenMarker(element) && typeof options.ownsToken === 'function' && options.ownsToken(element));
+  function privatelyOwnsToken(element, options, expectedRootId) {
+    return Boolean(element && typeof options.ownsToken === 'function' &&
+      options.ownsToken(element, expectedRootId));
   }
 
   function isHaloOwned(element, options) {
+    if (privatelyOwnsToken(element, options)) return true;
     if (hasTokenMarker(element)) return privatelyOwnsToken(element, options);
     return hasAttribute(element, 'data-halo-token') ||
       hasAttribute(element, 'data-halo-owned') ||
@@ -63,7 +65,7 @@
   }
 
   function isRemappableHaloToken(element, options) {
-    return privatelyOwnsToken(element, options);
+    return privatelyOwnsToken(element, options, options.expectedRootId);
   }
 
   function isEditable(element) {
@@ -141,7 +143,10 @@
     if (tagName === 'NAV' || normalizedAttribute(element, 'role') === 'navigation') return true;
     if (normalizedAttribute(element, 'role') === 'textbox') return true;
     if (structurallyHidden || hasAttribute(element, 'inert')) return true;
-    if (isEditable(element) || (isHaloOwned(element, options) && !isRemappableHaloToken(element, options))) return true;
+    const privatelyOwned = privatelyOwnsToken(element, options);
+    const retainsOwnedOffsets = privatelyOwned && options.includeHaloOwnedTokens === true;
+    if (isEditable(element) ||
+        (isHaloOwned(element, options) && !isRemappableHaloToken(element, options) && !retainsOwnedOffsets)) return true;
     if (elementHasSensitiveMarker(element)) return true;
     if ((tagName === 'FORM' || normalizedAttribute(element, 'role') === 'form') &&
         subtreeHasSensitiveMarker(element, sensitiveCache)) return true;

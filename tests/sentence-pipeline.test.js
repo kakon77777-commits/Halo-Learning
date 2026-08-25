@@ -320,12 +320,14 @@ test('renderer remapping consults private token authority and never trusts match
     text(' learns.', 'tail'),
     element('div', { 'data-halo-owned': 'panel' }, [text('Panel detail', 'owned-panel')])
   ]);
-  const ownsToken = (element) => element === privatelyOwned;
+  const ownsToken = (element, expectedRootId) => element === privatelyOwned &&
+    (expectedRootId === undefined || expectedRootId === 'root-private');
 
   assert.deepEqual(
     Pipeline.createTextRuns(root, {
       getNodeId: (node) => node._id,
       includeHaloOwnedTokens: true,
+      expectedRootId: 'root-private',
       ownsToken
     }).map((run) => [run.nodeId, run.text]),
     [
@@ -336,8 +338,35 @@ test('renderer remapping consults private token authority and never trusts match
       ['tail', ' learns.']
     ]
   );
-  assert.equal(Pipeline.isRemappableHaloToken(forged, { includeHaloOwnedTokens: true, ownsToken }), false);
-  assert.equal(Pipeline.isRemappableHaloToken(privatelyOwned, { ownsToken }), true);
+  assert.equal(Pipeline.isRemappableHaloToken(forged, {
+    includeHaloOwnedTokens: true,
+    expectedRootId: 'root-private',
+    ownsToken
+  }), false);
+  assert.equal(Pipeline.isRemappableHaloToken(privatelyOwned, {
+    expectedRootId: 'root-private',
+    ownsToken
+  }), true);
+  assert.equal(Pipeline.isRemappableHaloToken(privatelyOwned, {
+    expectedRootId: 'another-root',
+    ownsToken
+  }), false);
+  assert.deepEqual(
+    Pipeline.createTextRuns(root, {
+      getNodeId: (node) => node._id,
+      includeHaloOwnedTokens: true,
+      expectedRootId: 'another-root',
+      ownsToken
+    }).map((run) => [run.nodeId, run.text]),
+    [
+      ['lead', 'The '],
+      ['forged-token', 'forged'],
+      ['middle', ' and '],
+      ['owned-token', 'model'],
+      ['tail', ' learns.']
+    ],
+    'foreign private tokens retain aggregate offsets but do not gain remapping authority'
+  );
 });
 
 test('sensitive-name filtering is scoped to form regions and preserves educational prose', () => {

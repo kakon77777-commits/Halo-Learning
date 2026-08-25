@@ -223,8 +223,22 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           feed.appendChild(item);
         }
         main.appendChild(feed);
+
+        for (const [slot, text] of [
+          ['first', 'Duplicate identity alpha works.'],
+          ['second', 'Duplicate identity beta works.']
+        ]) {
+          const duplicate = document.createElement('p');
+          duplicate.id = 'duplicate-runtime-root';
+          duplicate.dataset.duplicateSlot = slot;
+          duplicate.textContent = text;
+          main.appendChild(duplicate);
+        }
       });
       await page.waitForSelector('#inserted [data-halo-owned="token"]');
+      await page.waitForFunction(() =>
+        document.querySelectorAll('[data-duplicate-slot] [data-halo-owned="token"]').length >= 2
+      );
 
       await page.evaluate(() => {
         const race = document.createElement('p');
@@ -300,6 +314,10 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         const epochTwoTexts = __haloDynamic.semanticRequests
           .filter((request) => request.pageEpoch === 2)
           .flatMap((request) => request.items.map((item) => item.text));
+        const duplicateRootIds = __haloDynamic.semanticRequests
+          .flatMap((request) => request.items)
+          .filter((item) => item.text.startsWith('Duplicate identity '))
+          .map((item) => item.rootId);
         const nestedWrappers = document.querySelectorAll(
           '[data-halo-owned="token"] [data-halo-owned="token"]'
         ).length;
@@ -309,6 +327,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           itemTexts,
           epochs,
           epochTwoTexts,
+          duplicateRootIds,
           nestedWrappers,
           thirdPartyPreserved: document.getElementById('third-party-token-child') === __haloDynamic.thirdParty,
           wrappersAfterCleanup: document.querySelectorAll('[data-halo-owned="token"]').length,
@@ -324,6 +343,8 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         'Infinite item alpha arrives.',
         'Infinite item beta arrives.',
         'Infinite item gamma arrives.',
+        'Duplicate identity alpha works.',
+        'Duplicate identity beta works.',
         'The replacement content renders.',
         'The framework redraw stays singular.',
         'Pending semantic response.',
@@ -340,6 +361,8 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       assert.equal(result.itemTexts.filter((value) => value === 'The initial system! learns.').length, 1);
       assert.deepEqual(result.epochs, [1, 2, 3, 4, 5]);
       assert.deepEqual(result.epochTwoTexts, ['The history-first route starts.']);
+      assert.equal(result.duplicateRootIds.length, 2);
+      assert.notEqual(result.duplicateRootIds[0], result.duplicateRootIds[1]);
       assert.equal(result.nestedWrappers, 0);
       assert.equal(result.thirdPartyPreserved, true);
       assert.equal(result.rendererSideEffectObserved, true);

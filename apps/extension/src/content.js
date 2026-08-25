@@ -108,10 +108,12 @@
     if (!runtime || !runtime.discovery) return 0;
     const settings = options || {};
     const changedContentRoots = runtime.discovery.rootsWithin(roots);
-    const refreshRoots = [...runtime.pendingChangedRoots, ...changedContentRoots];
-    runtime.pendingChangedRoots.clear();
+    for (const contentRoot of changedContentRoots) runtime.pendingChangedRoots.add(contentRoot);
+    const refreshRoots = [...runtime.pendingChangedRoots];
     try {
-      return runtime.discovery.refreshRoots(refreshRoots, { alreadyInvalidated: true });
+      const refreshed = runtime.discovery.refreshRoots(refreshRoots, { alreadyInvalidated: true });
+      for (const contentRoot of refreshRoots) runtime.pendingChangedRoots.delete(contentRoot);
+      return refreshed;
     } catch (error) {
       if (typeof settings.onError === 'function') {
         try {
@@ -343,15 +345,22 @@
     let done = false;
     let disconnected = false;
 
+    function report(error, metadata) {
+      if (typeof settings.onError !== 'function') return;
+      try {
+        settings.onError(error, Object.freeze(metadata));
+      } catch (_reportError) {
+        // Discovery lifecycle work must not depend on an error reporter.
+      }
+    }
+
     function candidateRoot(element) {
       return canonicalContentRoot(element);
     }
 
     function rootIdFor(element) {
       if (!rootIds.has(element)) {
-        const hint = typeof element.id === 'string' && element.id.length <= 96 &&
-          /^[A-Za-z0-9._:-]+$/.test(element.id) ? element.id : null;
-        rootIds.set(element, hint || `halo-root-${++rootSequence}`);
+        rootIds.set(element, `halo-root-${++rootSequence}`);
       }
       return rootIds.get(element);
     }
@@ -518,14 +527,21 @@
     function invalidateRoots(values) {
       if (disconnected) return 0;
       const changed = changedContentRoots(values);
-      for (const contentRoot of changed) {
+      const records = changed.map((contentRoot) => {
         const rootId = rootIdFor(contentRoot);
         const wasObserved = observed.has(contentRoot);
-        scheduler.cancelRoot(rootId);
         if (wasObserved || rootRevisions.has(rootId)) {
           rootRevisions.set(rootId, rootRevisionFor(contentRoot) + 1);
         } else {
           rootRevisions.set(rootId, 1);
+        }
+        return { contentRoot, rootId };
+      });
+      for (const record of records) {
+        try {
+          scheduler.cancelRoot(record.rootId);
+        } catch (error) {
+          report(error, { phase: 'root-cancel', rootId: record.rootId });
         }
       }
       return changed.length;
@@ -535,18 +551,30 @@
       if (disconnected) return 0;
       const settings = options || {};
       const changed = changedContentRoots(values);
-      for (const contentRoot of changed) {
+      const records = changed.map((contentRoot) => {
         const rootId = rootIdFor(contentRoot);
         const wasObserved = observed.has(contentRoot);
         const wasIntersecting = intersecting.has(contentRoot);
         if (!settings.alreadyInvalidated) {
-          scheduler.cancelRoot(rootId);
           if (wasObserved || rootRevisions.has(rootId)) {
             rootRevisions.set(rootId, rootRevisionFor(contentRoot) + 1);
           } else {
             rootRevisions.set(rootId, 1);
           }
         }
+        return { contentRoot, rootId, wasObserved, wasIntersecting };
+      });
+      if (!settings.alreadyInvalidated) {
+        for (const record of records) {
+          try {
+            scheduler.cancelRoot(record.rootId);
+          } catch (error) {
+            report(error, { phase: 'root-cancel', rootId: record.rootId });
+          }
+        }
+      }
+      for (const record of records) {
+        const { contentRoot, wasObserved, wasIntersecting } = record;
         if (wasObserved && typeof observer.unobserve === 'function') observer.unobserve(contentRoot);
         if (!wasObserved) {
           observed.add(contentRoot);
@@ -575,12 +603,23 @@
           if (released.has(contentRoot)) continue;
           released.add(contentRoot);
           const rootId = rootIds.get(contentRoot);
-          if (rootId !== undefined) scheduler.cancelRoot(rootId);
-          intersecting.delete(contentRoot);
-          observed.delete(contentRoot);
-          if (typeof observer.unobserve === 'function') observer.unobserve(contentRoot);
-          if (rootId !== undefined) rootRevisions.delete(rootId);
-          rootIds.delete(contentRoot);
+          if (rootId !== undefined) {
+            try {
+              scheduler.cancelRoot(rootId);
+            } catch (error) {
+              report(error, { phase: 'root-cancel', rootId });
+            }
+          }
+          try {
+            if (typeof observer.unobserve === 'function') observer.unobserve(contentRoot);
+          } catch (error) {
+            report(error, { phase: 'root-release-unobserve', rootId });
+          } finally {
+            intersecting.delete(contentRoot);
+            observed.delete(contentRoot);
+            if (rootId !== undefined) rootRevisions.delete(rootId);
+            rootIds.delete(contentRoot);
+          }
         }
       }
       return released.size;
@@ -680,18 +719,19 @@
     return out;
   }
 
-  function closestHaloToken(element) {
-    return element && typeof element.closest === 'function'
-      ? element.closest('[data-halo-owned="token"], [data-halo-token="1"]')
-      : null;
+  function closestPrivateToken(element, ownsToken) {
+    if (typeof ownsToken !== 'function') return null;
+    for (let current = element; current; current = current.parentElement) {
+      if (ownsToken(current)) return current;
+    }
+    return null;
   }
 
   function shouldSkipElement(element, options) {
     const settings = options || {};
     if (!element || element.nodeType !== 1) return false;
     if (SKIP_TAGS.has(element.tagName)) return true;
-    const token = closestHaloToken(element);
-    if (token && typeof settings.ownsToken === 'function' && settings.ownsToken(token)) return true;
+    if (closestPrivateToken(element, settings.ownsToken)) return true;
     if (element.closest('[data-halo-owned="panel"]')) return true;
     if (element.closest('[contenteditable="true"], [contenteditable=""], [role="textbox"]')) return true;
     if (element.closest('nav, [aria-hidden="true"]')) return true;
@@ -701,9 +741,9 @@
   function eligibleTextNode(node, options) {
     const settings = options || {};
     if (!node || !node.parentElement) return false;
-    const ownedToken = closestHaloToken(node.parentElement);
-    if (ownedToken && typeof settings.ownsToken === 'function' && settings.ownsToken(ownedToken)) {
-      return ownedToken.getAttribute('data-halo-root') === settings.rendererRootId;
+    const ownedToken = closestPrivateToken(node.parentElement, settings.ownsToken);
+    if (ownedToken) {
+      return settings.ownsToken(ownedToken, settings.rendererRootId);
     }
     if (shouldSkipElement(node.parentElement, settings)) return false;
     const text = node.nodeValue || '';
@@ -904,6 +944,8 @@
         if (!rootWorkIsCurrent(work, activeRuntime && activeRuntime.discovery)) continue;
         const runs = modules.Pipeline.createTextRuns(payload.element, {
           rootRevision: payload.rootRevision,
+          includeHaloOwnedTokens: true,
+          expectedRootId: work.id,
           ownsToken: modules.Renderer.ownsToken
         });
         const renderFragments = [];
@@ -1030,6 +1072,9 @@
         IntersectionObserver: root.IntersectionObserver,
         scheduler,
         budgets: settings.runtimeBudgets,
+        onError: () => {
+          lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_MARKING_ERROR' });
+        },
         innerWidth: root.innerWidth,
         innerHeight: root.innerHeight,
         makeWork: (element, visible, metadata) => buildRootWork(element, {
