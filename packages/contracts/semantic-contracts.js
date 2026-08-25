@@ -2,7 +2,7 @@
 
 const BrowserSemanticContracts = require('../../apps/extension/src/shared/semantic-contracts');
 
-const SEMANTIC_SCHEMA_VERSION = 1;
+const SEMANTIC_SCHEMA_VERSION = BrowserSemanticContracts.SEMANTIC_SCHEMA_VERSION;
 const MARKING_PROFILE_SCHEMA_VERSION = 2;
 const LANGUAGES = Object.freeze(['en', 'zh-Hant']);
 const LANGUAGE_MODES = Object.freeze(['auto', 'both', 'en', 'zh-Hant']);

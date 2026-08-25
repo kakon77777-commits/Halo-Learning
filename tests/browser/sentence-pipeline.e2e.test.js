@@ -158,7 +158,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
     await withFixtureServer({
       '/long-lesson.html': {
         contentType: 'text/html',
-        body: '<!doctype html><html lang="zh-Hant"><body><main><p id="visible">The visible model learns.</p><div style="height:5000px"></div><p id="offscreen">離線字典讓中文學習更清楚。</p><div style="height:5000px"></div><p id="long-root">The model learns. We read clear words. They study a story. I write a sentence. You use the page. We learn together.</p><div style="height:5000px"></div><p id="invalid-root">Reject stale result.</p><div style="height:5000px"></div><p id="cancel-root">Cancellable visible sentence.</p></main></body></html>'
+        body: '<!doctype html><html lang="zh-Hant"><body><main><p id="visible">The visible model learns.</p><div style="height:5000px"></div><p id="offscreen">離線字典讓中文學習更清楚。</p><div style="height:5000px"></div><p id="long-root">The model learns. We read clear words. They study a story. I write a sentence. You use the page. We learn together.</p><div style="height:5000px"></div><p id="invalid-root">Reject stale result.</p><div style="height:5000px"></div><p id="invalid-batch">Reject batch version. Batch sibling remains.</p><div style="height:5000px"></div><p id="cancel-root">Cancellable visible sentence.</p></main></body></html>'
       }
     }, async ({ origin }) => {
       const page = await context.newPage();
@@ -176,9 +176,11 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
           });
           const generatedAt = new Date().toISOString();
           const response = {
+            schemaVersion: HaloSemanticContracts.SEMANTIC_SCHEMA_VERSION,
             requestId: message.requestId,
             pageEpoch: message.pageEpoch,
             results: message.items.map((item) => ({
+              schemaVersion: HaloSemanticContracts.SEMANTIC_SCHEMA_VERSION,
               requestId: message.requestId,
               pageEpoch: message.pageEpoch,
               rootId: item.rootId,
@@ -195,7 +197,10 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
             status: { mode: 'degraded', fallbackActivated: true, failures: [{ code: 'MANIFEST_UNAVAILABLE' }] }
           };
           if (message.items.some((item) => item.text.includes('Reject stale'))) {
-            response.results[0] = { ...response.results[0], rootRevision: response.results[0].rootRevision + 1 };
+            response.results[0] = { ...response.results[0], schemaVersion: 999 };
+          }
+          if (message.items.some((item) => item.text.includes('Reject batch version'))) {
+            response.schemaVersion = 999;
           }
           return response;
         }
@@ -397,6 +402,14 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
       );
       await page.waitForTimeout(100);
       assert.equal(await page.locator('#invalid-root [data-halo-token="1"]').count(), 0);
+
+      await page.locator('#invalid-batch').scrollIntoViewIfNeeded();
+      await page.waitForFunction(() =>
+        __haloFixture.semanticRequests.flatMap((request) => request.items)
+          .some((item) => item.text.includes('Reject batch version'))
+      );
+      await page.waitForTimeout(100);
+      assert.equal(await page.locator('#invalid-batch [data-halo-token="1"]').count(), 0);
 
       await page.locator('#cancel-root').scrollIntoViewIfNeeded();
       await page.waitForFunction(() =>

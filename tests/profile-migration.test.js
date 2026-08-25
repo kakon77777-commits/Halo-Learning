@@ -176,3 +176,92 @@ test('profile revision is monotonic across edits, stable across reload, and chan
     Progressive.createAnalysisKey({ ...versions, profileRevision: edited.profileRevision })
   );
 });
+
+test('overlapping popup saves serialize distinct edits into distinct revisions and keys', async () => {
+  const Persistence = require('../apps/extension/src/shared/profile-persistence');
+  const ProfileControls = require('../apps/extension/src/shared/profile-controls');
+  const Progressive = require('../apps/extension/src/shared/progressive-runtime');
+  const storageKey = 'haloSettings';
+  let stored = Settings.normalizeSettings({
+    profileId: 'shared-profile',
+    profileRevision: 4,
+    channels: { lemma: false },
+    density: 0.5
+  });
+  const writes = [];
+  const storage = {
+    async get(key) {
+      await Promise.resolve();
+      return { [key]: JSON.parse(JSON.stringify(stored)) };
+    },
+    async set(update) {
+      await Promise.resolve();
+      stored = update[storageKey];
+      writes.push(stored);
+    }
+  };
+  let tail = Promise.resolve();
+  const lockManager = {
+    request(name, options, callback) {
+      assert.equal(name, 'halo-settings-write');
+      assert.deepEqual(options, { mode: 'exclusive' });
+      const run = tail.then(callback);
+      tail = run.catch(() => {});
+      return run;
+    }
+  };
+  const options = {
+    storage,
+    storageKey,
+    lockManager,
+    normalizeSettings: Settings.normalizeSettings,
+    mergeUiSettings: ProfileControls.mergeUiSettings
+  };
+  const popupA = Persistence.createProfilePersistence(options);
+  const popupB = Persistence.createProfilePersistence(options);
+
+  const [lemmaEdit, densityEdit] = await Promise.all([
+    popupA.saveEdit({ channels: { lemma: true } }),
+    popupB.saveEdit({ density: 0.75 })
+  ]);
+
+  assert.equal(lemmaEdit.profileRevision, 5);
+  assert.equal(densityEdit.profileRevision, 6);
+  assert.equal(stored.profileId, 'shared-profile');
+  assert.equal(stored.profileRevision, 6);
+  assert.equal(stored.channels.lemma, true);
+  assert.equal(stored.density, 0.75);
+  assert.deepEqual(writes.map((value) => value.profileRevision), [5, 6]);
+
+  const keyFor = (profile) => Progressive.createAnalysisKey({
+    text: 'The model learns.',
+    languageMode: profile.languageMode,
+    semanticVersion: '0.3.0',
+    grammarVersion: '0.3.0',
+    profileRevision: profile.profileRevision,
+    lexicalVersion: 'halo-bootstrap-dictionary@0.3.0'
+  });
+  assert.notEqual(keyFor(lemmaEdit), keyFor(densityEdit));
+
+  const [sameA, sameB] = await Promise.all([
+    popupA.saveEdit({ labelPosition: 'bottom-right' }),
+    popupB.saveEdit({ labelPosition: 'bottom-right' })
+  ]);
+  assert.equal(sameA.profileRevision, 7);
+  assert.equal(sameB.profileRevision, 7);
+  assert.equal(stored.profileRevision, 7);
+});
+
+test('popup profile persistence fails closed without a cross-context lock manager', async () => {
+  const Persistence = require('../apps/extension/src/shared/profile-persistence');
+  const ProfileControls = require('../apps/extension/src/shared/profile-controls');
+  const persistence = Persistence.createProfilePersistence({
+    storage: { get: async () => ({}), set: async () => {} },
+    storageKey: 'haloSettings',
+    lockManager: null,
+    normalizeSettings: Settings.normalizeSettings,
+    mergeUiSettings: ProfileControls.mergeUiSettings
+  });
+
+  await assert.rejects(() => persistence.saveEdit({ density: 0.8 }), /LockManager/);
+});

@@ -26,6 +26,13 @@
     learningState: 'learningState'
   });
   let currentSettings = null;
+  const profilePersistence = HaloProfilePersistence.createProfilePersistence({
+    storage: chrome.storage.local,
+    storageKey: STORAGE_KEY,
+    lockManager: navigator.locks,
+    normalizeSettings: HaloSettings.normalizeSettings,
+    mergeUiSettings: HaloProfileControls.mergeUiSettings
+  });
 
   const get = (id) => document.getElementById(id);
   const controls = {
@@ -55,21 +62,25 @@
     controls.labelPosition.value = settings.labelPosition;
   }
 
-  function readSettings() {
+  function readUiPatch() {
+    const baseline = currentSettings || HaloSettings.DEFAULT_SETTINGS;
+    const patch = {};
     const channels = {};
-    for (const channel of Object.keys(CHANNEL_CONTROLS)) channels[channel] = controls[channel].checked;
-    return HaloProfileControls.mergeUiSettings(currentSettings || HaloSettings.DEFAULT_SETTINGS, {
-      channels,
-      density: Number(controls.density.value) / 100,
-      languageMode: controls.languageMode.value,
-      labelPosition: controls.labelPosition.value
-    }, HaloSettings.normalizeSettings);
+    for (const channel of Object.keys(CHANNEL_CONTROLS)) {
+      const value = controls[channel].checked;
+      if (value !== Boolean(baseline.channels[channel])) channels[channel] = value;
+    }
+    if (Object.keys(channels).length) patch.channels = channels;
+    const density = Number(controls.density.value) / 100;
+    if (density !== baseline.density) patch.density = density;
+    if (controls.languageMode.value !== baseline.languageMode) patch.languageMode = controls.languageMode.value;
+    if (controls.labelPosition.value !== baseline.labelPosition) patch.labelPosition = controls.labelPosition.value;
+    return patch;
   }
 
-  async function persistSettings() {
-    const settings = readSettings();
-    await chrome.storage.local.set({ [STORAGE_KEY]: settings });
-    currentSettings = settings;
+  async function persistSettings(uiPatch) {
+    const settings = await profilePersistence.saveEdit(uiPatch || readUiPatch());
+    renderSettings(settings);
     return settings;
   }
 
@@ -122,8 +133,7 @@
   }
 
   async function init() {
-    const stored = await chrome.storage.local.get(STORAGE_KEY);
-    const settings = HaloSettings.normalizeSettings(stored[STORAGE_KEY]);
+    const settings = await profilePersistence.load();
     renderSettings(settings);
     showStatus('Ready · 就緒', false);
   }
@@ -131,15 +141,24 @@
   controls.density.addEventListener('input', () => {
     controls.densityValue.value = `${controls.density.value}%`;
   });
-  const persistedControls = [
-    ...Object.keys(CHANNEL_CONTROLS).map((channel) => controls[channel]),
-    controls.density,
-    controls.languageMode,
-    controls.labelPosition
-  ];
-  for (const control of persistedControls) {
-    control.addEventListener('change', () => { persistSettings().catch(() => {}); });
+  for (const channel of Object.keys(CHANNEL_CONTROLS)) {
+    controls[channel].addEventListener('change', () => {
+      persistSettings({ channels: { [channel]: controls[channel].checked } })
+        .catch((error) => showStatus(`Settings error · ${error.message || error}`, true));
+    });
   }
+  controls.density.addEventListener('change', () => {
+    persistSettings({ density: Number(controls.density.value) / 100 })
+      .catch((error) => showStatus(`Settings error · ${error.message || error}`, true));
+  });
+  controls.languageMode.addEventListener('change', () => {
+    persistSettings({ languageMode: controls.languageMode.value })
+      .catch((error) => showStatus(`Settings error · ${error.message || error}`, true));
+  });
+  controls.labelPosition.addEventListener('change', () => {
+    persistSettings({ labelPosition: controls.labelPosition.value })
+      .catch((error) => showStatus(`Settings error · ${error.message || error}`, true));
+  });
   controls.applyButton.addEventListener('click', apply);
   controls.removeButton.addEventListener('click', remove);
 

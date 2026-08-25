@@ -49,9 +49,14 @@
     }));
   }
 
-  function validateEnrichmentResponse(response, request, normalizeAnnotationSet) {
-    if (typeof normalizeAnnotationSet !== 'function') throw new TypeError('normalizeAnnotationSet: must be a function');
+  function validateEnrichmentResponse(response, request, Contracts) {
+    if (!Contracts || typeof Contracts.normalizeAnnotationSet !== 'function' ||
+        !Number.isInteger(Contracts.SEMANTIC_SCHEMA_VERSION)) {
+      throw new TypeError('canonical semantic contracts are required');
+    }
+    const schemaVersion = Contracts.SEMANTIC_SCHEMA_VERSION;
     if (!response || typeof response !== 'object' || response.error ||
+        response.schemaVersion !== schemaVersion ||
         response.requestId !== request.requestId || response.pageEpoch !== request.pageEpoch ||
         !Array.isArray(request.items) || !Array.isArray(response.results) ||
         response.results.length !== request.items.length) return null;
@@ -61,13 +66,14 @@
     const normalized = [];
     try {
       for (const result of response.results) {
-        if (!result || typeof result !== 'object' || seen.has(result.rootId)) return null;
+        if (!result || typeof result !== 'object' || result.schemaVersion !== schemaVersion ||
+            seen.has(result.rootId)) return null;
         const expected = expectedByRoot.get(result.rootId);
         if (!expected || result.requestId !== request.requestId ||
             result.pageEpoch !== request.pageEpoch || result.rootRevision !== expected.rootRevision ||
             result.analysisKey !== expected.analysisKey || !['bootstrap', 'lexical'].includes(result.phase) ||
             result.lexicalVersion !== expected.lexicalVersion || typeof result.generatedAt !== 'string') return null;
-        const annotationSet = normalizeAnnotationSet(result.annotationSet);
+        const annotationSet = Contracts.normalizeAnnotationSet(result.annotationSet);
         if (annotationSet.textLength !== expected.text.length ||
             annotationSet.languageMode !== expected.languageMode ||
             annotationSet.generatedAt !== result.generatedAt ||
@@ -549,7 +555,7 @@
       try {
         const response = await root.chrome.runtime.sendMessage(request);
         if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;
-        const validated = validateEnrichmentResponse(response, request, modules.Contracts.normalizeAnnotationSet);
+        const validated = validateEnrichmentResponse(response, request, modules.Contracts);
         if (!validated) throw new Error('Local semantic service returned an invalid response');
         return validated;
       } catch (error) {

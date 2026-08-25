@@ -1,6 +1,7 @@
 if (typeof importScripts === 'function') {
   importScripts(
     'shared/progressive-runtime.js',
+    'shared/semantic-contracts.js',
     'shared/runtime-shard-browser.js',
     'shared/dictionary-provider.js',
     'shared/sharded-dictionary-provider.js',
@@ -13,14 +14,20 @@ if (typeof importScripts === 'function') {
   const progressiveModule = typeof module === 'object' && module.exports
     ? require('./shared/progressive-runtime')
     : root.HaloProgressiveRuntime;
-  const api = factory(root, progressiveModule);
+  const contractsModule = typeof module === 'object' && module.exports
+    ? require('./shared/semantic-contracts')
+    : root.HaloSemanticContracts;
+  const api = factory(root, progressiveModule, contractsModule);
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.HaloSemanticService = api;
   if (!(typeof module === 'object' && module.exports)) api.initializeBrowser();
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (root, Progressive) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (root, Progressive, Contracts) {
   'use strict';
 
-  const SCHEMA_VERSION = 1;
+  if (!Contracts || !Number.isInteger(Contracts.SEMANTIC_SCHEMA_VERSION)) {
+    throw new Error('Canonical semantic contracts are unavailable');
+  }
+  const SCHEMA_VERSION = Contracts.SEMANTIC_SCHEMA_VERSION;
   const SHARD_ROOT = 'data/lexical-v0.4.0';
   const MANIFEST_PATH = 'data/lexical-v0.4.0/manifest.json';
   const BATCH_LIMITS = Object.freeze({

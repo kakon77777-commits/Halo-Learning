@@ -453,6 +453,7 @@ test('enrichment response validation binds every result field and canonical anno
     items: [item]
   };
   const result = {
+    schemaVersion: Contracts.SEMANTIC_SCHEMA_VERSION,
     requestId: request.requestId,
     pageEpoch: request.pageEpoch,
     rootId: item.rootId,
@@ -464,13 +465,14 @@ test('enrichment response validation binds every result field and canonical anno
     annotationSet: engine.annotateText(item.text, { languageMode: item.languageMode, generatedAt })
   };
   const response = {
+    schemaVersion: Contracts.SEMANTIC_SCHEMA_VERSION,
     requestId: request.requestId,
     pageEpoch: request.pageEpoch,
     results: [result],
     status: { mode: 'degraded' }
   };
 
-  assert.equal(Content.validateEnrichmentResponse(response, request, Contracts.normalizeAnnotationSet).results.length, 1);
+  assert.equal(Content.validateEnrichmentResponse(response, request, Contracts).results.length, 1);
   for (const [field, badValue] of [
     ['requestId', 'req-wrong'],
     ['pageEpoch', 5],
@@ -484,12 +486,18 @@ test('enrichment response validation binds every result field and canonical anno
     assert.equal(Content.validateEnrichmentResponse({
       ...response,
       results: [{ ...result, [field]: badValue }]
-    }, request, Contracts.normalizeAnnotationSet), null, field);
+    }, request, Contracts), null, field);
   }
   assert.equal(Content.validateEnrichmentResponse({
     ...response,
     results: [{ ...result, annotationSet: { ...result.annotationSet, tokens: [{}] } }]
-  }, request, Contracts.normalizeAnnotationSet), null);
+  }, request, Contracts), null);
+  for (const value of [undefined, 999]) {
+    const outer = { ...response, schemaVersion: value };
+    const inner = { ...response, results: [{ ...result, schemaVersion: value }] };
+    assert.equal(Content.validateEnrichmentResponse(outer, request, Contracts), null);
+    assert.equal(Content.validateEnrichmentResponse(inner, request, Contracts), null);
+  }
 });
 
 test('root work is sentence-batched from runtime budgets and ignores legacy caps', () => {
