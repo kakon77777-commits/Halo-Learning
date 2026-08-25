@@ -321,6 +321,44 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         const nestedWrappers = document.querySelectorAll(
           '[data-halo-owned="token"] [data-halo-owned="token"]'
         ).length;
+        class FreshnessIntersectionObserver {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+        const freshnessRoot = document.createElement('p');
+        freshnessRoot.textContent = 'Freshness identity probe.';
+        document.body.appendChild(freshnessRoot);
+        const freshnessDiscovery = HaloContent.createViewportDiscovery({
+          document,
+          NodeFilter,
+          IntersectionObserver: FreshnessIntersectionObserver,
+          scheduler: {
+            enqueue: () => true,
+            cancelRoot: () => 1,
+            flush: () => Promise.resolve()
+          },
+          budgets: { timeSliceMs: 8, viewportBufferPx: 1200 },
+          makeWork: () => null,
+          innerWidth,
+          innerHeight,
+          clock: { now: () => 0 }
+        });
+        freshnessDiscovery.invalidateRoots([freshnessRoot]);
+        const firstFreshnessId = freshnessDiscovery.peekRootId(freshnessRoot);
+        const oldFreshnessWork = {
+          rootId: firstFreshnessId,
+          payload: { element: freshnessRoot, rootRevision: 1 }
+        };
+        freshnessDiscovery.releaseRoots([freshnessRoot]);
+        const releasedWorkCurrent = HaloContent.rootWorkIsCurrent(oldFreshnessWork, freshnessDiscovery);
+        const releasedRevisionCount = freshnessDiscovery.status().trackedRootRevisions;
+        const releasedIdentity = freshnessDiscovery.peekRootId(freshnessRoot);
+        freshnessDiscovery.invalidateRoots([freshnessRoot]);
+        const nextFreshnessId = freshnessDiscovery.peekRootId(freshnessRoot);
+        const oldWorkAfterReallocation = HaloContent.rootWorkIsCurrent(oldFreshnessWork, freshnessDiscovery);
+        freshnessDiscovery.disconnect();
+        freshnessRoot.remove();
         const listener = __haloDynamic.listeners[0];
         await new Promise((resolve) => listener({ type: 'HALO_REMOVE_MARKING' }, {}, resolve));
         return {
@@ -333,7 +371,14 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           wrappersAfterCleanup: document.querySelectorAll('[data-halo-owned="token"]').length,
           historyRestored: history.pushState === __haloDynamic.originalPushState &&
             history.replaceState === __haloDynamic.originalReplaceState,
-          rendererSideEffectObserved: itemTexts.includes('Legitimate side effect.')
+          rendererSideEffectObserved: itemTexts.includes('Legitimate side effect.'),
+          freshnessIdentity: {
+            releasedWorkCurrent,
+            releasedRevisionCount,
+            releasedIdentity,
+            identityChanged: firstFreshnessId !== nextFreshnessId,
+            oldWorkAfterReallocation
+          }
         };
       });
 
@@ -366,6 +411,13 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       assert.equal(result.nestedWrappers, 0);
       assert.equal(result.thirdPartyPreserved, true);
       assert.equal(result.rendererSideEffectObserved, true);
+      assert.deepEqual(result.freshnessIdentity, {
+        releasedWorkCurrent: false,
+        releasedRevisionCount: 0,
+        releasedIdentity: null,
+        identityChanged: true,
+        oldWorkAfterReallocation: false
+      });
       assert.equal(result.wrappersAfterCleanup, 0);
       assert.equal(result.historyRestored, true);
     });

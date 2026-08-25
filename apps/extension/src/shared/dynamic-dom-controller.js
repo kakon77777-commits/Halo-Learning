@@ -87,11 +87,9 @@
   }
 
   function createRendererMutationSanitizer() {
-    const privateNodes = new Set();
     const operations = [];
 
     function trackNode(node) {
-      if (node) privateNodes.add(node);
       return node;
     }
 
@@ -102,19 +100,18 @@
       operations.push({
         ...operation,
         addedNodes: Array.from(operation.addedNodes || []),
-        removedNodes: Array.from(operation.removedNodes || []),
-        consumed: false
+        removedNodes: Array.from(operation.removedNodes || [])
       });
       return operation;
     }
 
-    function matchingOperation(record) {
-      return operations.find((operation) => {
-        if (operation.consumed || operation.type !== record.type || operation.target !== record.target) return false;
+    function matchingOperationIndex(record) {
+      return operations.findIndex((operation) => {
+        if (operation.type !== record.type || operation.target !== record.target) return false;
         if (record.type === 'attributes' && operation.attributeName !== record.attributeName) return false;
         if (Object.prototype.hasOwnProperty.call(operation, 'oldValue') && operation.oldValue !== record.oldValue) return false;
         return true;
-      }) || null;
+      });
     }
 
     function containsNodeMultiset(values, expected) {
@@ -136,55 +133,31 @@
       return remaining;
     }
 
-    function discardConsumedOperations() {
-      for (let index = operations.length - 1; index >= 0; index -= 1) {
-        if (operations[index].consumed) operations.splice(index, 1);
-      }
-    }
-
     function sanitize(record) {
       if (!record) return null;
       if (record.type === 'characterData' || record.type === 'attributes') {
-        const operation = matchingOperation(record);
-        if (!operation) return record;
-        operation.consumed = true;
-        discardConsumedOperations();
+        const operationIndex = matchingOperationIndex(record);
+        if (operationIndex < 0) return record;
+        operations.splice(operationIndex, 1);
         return null;
       }
       if (record.type !== 'childList') return record;
-      const matching = operations.filter((operation) =>
-        !operation.consumed && operation.type === 'childList' && operation.target === record.target
-      );
-      const originalAdded = Array.from(record.addedNodes || []);
-      const originalRemoved = Array.from(record.removedNodes || []);
-      let addedNodes = originalAdded;
-      let removedNodes = originalRemoved;
-      const complete = [];
-      for (const operation of matching) {
-        const hasCompleteAdded = containsNodeMultiset(addedNodes, operation.addedNodes);
-        const hasCompleteRemoved = containsNodeMultiset(removedNodes, operation.removedNodes);
-        const overlaps = operation.addedNodes.some((node) => originalAdded.includes(node)) ||
-          operation.removedNodes.some((node) => originalRemoved.includes(node));
-        if (!hasCompleteAdded || !hasCompleteRemoved) {
-          if (overlaps) return record;
-          continue;
-        }
+      let addedNodes = Array.from(record.addedNodes || []);
+      let removedNodes = Array.from(record.removedNodes || []);
+      let consumed = false;
+      while (true) {
+        const operationIndex = operations.findIndex((operation) =>
+          operation.type === 'childList' && operation.target === record.target &&
+          containsNodeMultiset(addedNodes, operation.addedNodes) &&
+          containsNodeMultiset(removedNodes, operation.removedNodes)
+        );
+        if (operationIndex < 0) break;
+        const [operation] = operations.splice(operationIndex, 1);
         addedNodes = subtractNodeMultiset(addedNodes, operation.addedNodes);
         removedNodes = subtractNodeMultiset(removedNodes, operation.removedNodes);
-        complete.push(operation);
+        consumed = true;
       }
-      for (const operation of complete) {
-        operation.consumed = true;
-        for (const node of [...operation.addedNodes, ...operation.removedNodes]) privateNodes.delete(node);
-      }
-      discardConsumedOperations();
-      const pendingNodes = new Set();
-      for (const operation of operations) {
-        if (operation.consumed || operation.type !== 'childList') continue;
-        for (const node of [...operation.addedNodes, ...operation.removedNodes]) pendingNodes.add(node);
-      }
-      addedNodes = addedNodes.filter((node) => !privateNodes.has(node) || pendingNodes.has(node));
-      removedNodes = removedNodes.filter((node) => !privateNodes.has(node) || pendingNodes.has(node));
+      if (!consumed) return record;
       if (!addedNodes.length && !removedNodes.length) return null;
       return {
         type: record.type,
@@ -194,7 +167,11 @@
       };
     }
 
-    return Object.freeze({ trackNode, expect, sanitize });
+    function status() {
+      return Object.freeze({ pendingOperations: operations.length });
+    }
+
+    return Object.freeze({ trackNode, expect, sanitize, status });
   }
 
   function createDynamicDomController(options) {

@@ -845,10 +845,51 @@ test('throwing precommit preparation hook revokes every detached candidate', () 
   assert.equal(renderer.status().rootCount, 0);
 });
 
+test('apply prepares its rollback journal before granting private authority', () => {
+  const dom = fixture();
+  const candidates = [];
+  let renderer;
+  let authorityObservedDuringSnapshot = null;
+  const storedChildren = dom.article.childNodes;
+  renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    trackOwnedNode(node) {
+      candidates.push(node);
+    }
+  });
+  Object.defineProperty(dom.article, 'childNodes', {
+    configurable: true,
+    get() {
+      authorityObservedDuringSnapshot = candidates.some((node) => renderer.ownsToken(node));
+      throw new Error('apply snapshot preparation failed');
+    },
+    set(value) {
+      storedChildren.splice(0, storedChildren.length, ...value);
+    }
+  });
+
+  assert.throws(() => renderer.apply(request(dom.article, {
+    fragments: [fragment(dom.model, 'model-node', 0, 5)]
+  })), /apply snapshot preparation failed/);
+
+  Object.defineProperty(dom.article, 'childNodes', {
+    configurable: true,
+    writable: true,
+    value: storedChildren
+  });
+  assert.equal(authorityObservedDuringSnapshot, false);
+  assert.equal(candidates.some((node) => renderer.ownsToken(node)), false);
+  assert.equal(renderer.status().rootCount, 0);
+  assert.equal(dom.article.textContent, 'The model learns.');
+});
+
 test('rebuild handle preparation failure cannot leave new private authority', () => {
   const dom = fixture();
   const candidates = [];
   let throwOnWrapperDeref = false;
+  let wrapperDerefCount = 0;
+  let authorityObservedDuringSnapshot = null;
+  let renderer;
   class ControlledWeakRef {
     constructor(value) {
       this.value = value;
@@ -856,12 +897,16 @@ test('rebuild handle preparation failure cannot leave new private authority', ()
 
     deref() {
       if (throwOnWrapperDeref && this.value && this.value.tagName === 'SPAN') {
-        throw new Error('prior wrapper handle failed');
+        wrapperDerefCount += 1;
+        if (wrapperDerefCount === 2) {
+          authorityObservedDuringSnapshot = candidates.some((node) => renderer.ownsToken(node));
+          throw new Error('prior wrapper handle failed during snapshot');
+        }
       }
       return this.value;
     }
   }
-  const renderer = Renderer.createReversibleRenderer({
+  renderer = Renderer.createReversibleRenderer({
     document: dom.document,
     WeakRef: ControlledWeakRef,
     trackOwnedNode(node) {
@@ -877,8 +922,9 @@ test('rebuild handle preparation failure cannot leave new private authority', ()
     rootRevision: 2,
     analysisKey: 'analysis-rebuilt',
     fragments: [fragment(priorWrapper.childNodes[0], 'replacement-node', 1, 4)]
-  })), /prior wrapper handle failed/);
+  })), /prior wrapper handle failed during snapshot/);
 
+  assert.equal(authorityObservedDuringSnapshot, false);
   assert.equal(candidates.some((node) => node !== priorWrapper && renderer.ownsToken(node)), false);
   throwOnWrapperDeref = false;
   assert.equal(renderer.ownsToken(priorWrapper, 'root-1'), true);

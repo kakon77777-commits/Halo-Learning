@@ -307,6 +307,73 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
           }
         });
 
+        const journalRoot = document.createElement('p');
+        journalRoot.textContent = 'model';
+        document.body.appendChild(journalRoot);
+        const journalCandidates = [];
+        let journalRenderer;
+        let probePriorHandles = false;
+        let priorWrapperDerefs = 0;
+        let authorityDuringSnapshot = null;
+        class ControlledWeakRef {
+          constructor(value) {
+            this.value = value;
+          }
+
+          deref() {
+            if (probePriorHandles && this.value instanceof HTMLSpanElement) {
+              priorWrapperDerefs += 1;
+              if (priorWrapperDerefs === 2) {
+                authorityDuringSnapshot = journalCandidates.some((node) => journalRenderer.ownsToken(node));
+                throw new Error('browser snapshot handle failed');
+              }
+            }
+            return this.value;
+          }
+        }
+        journalRenderer = HaloReversibleRenderer.createReversibleRenderer({
+          document,
+          WeakRef: ControlledWeakRef,
+          trackOwnedNode: (node) => journalCandidates.push(node)
+        });
+        journalRenderer.apply({
+          schemaVersion: 1,
+          runId: 'journal-initial-run',
+          rootId: 'journal-root',
+          rootRevision: 1,
+          analysisKey: 'journal-initial-analysis',
+          root: journalRoot,
+          fragments: [markedFragment(journalRoot.firstChild, 'journal-initial-text', 0, 5, 'n')]
+        });
+        const journalPriorWrapper = journalRoot.querySelector('[data-halo-owned="token"]');
+        journalCandidates.length = 0;
+        probePriorHandles = true;
+        let journalFailure = null;
+        try {
+          journalRenderer.reconcile({
+            schemaVersion: 1,
+            runId: 'journal-rebuild-run',
+            rootId: 'journal-root',
+            rootRevision: 2,
+            analysisKey: 'journal-rebuild-analysis',
+            root: journalRoot,
+            fragments: [markedFragment(journalPriorWrapper.firstChild, 'journal-rebuild-text', 1, 4, 'v')]
+          });
+        } catch (error) {
+          journalFailure = error.message;
+        }
+        probePriorHandles = false;
+        const journalPreparation = {
+          message: journalFailure,
+          authorityDuringSnapshot,
+          candidateAuthority: journalCandidates.filter((node) => journalRenderer.ownsToken(node)).length,
+          priorOwned: journalRenderer.ownsToken(journalPriorWrapper, 'journal-root'),
+          text: journalRoot.textContent,
+          rootCount: journalRenderer.status().rootCount
+        };
+        journalRenderer.removeAll();
+        journalRoot.remove();
+
         return {
           applied: applied.action,
           sourceText,
@@ -320,7 +387,8 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
           parentlessCleanup,
           privateOwnerBinding,
           weakRefPreparation,
-          hookPreparation
+          hookPreparation,
+          journalPreparation
         };
       });
 
@@ -395,6 +463,14 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
         tokens: 0,
         text: 'model',
         rootCount: 0
+      });
+      assert.deepEqual(result.journalPreparation, {
+        message: 'browser snapshot handle failed',
+        authorityDuringSnapshot: false,
+        candidateAuthority: 0,
+        priorOwned: true,
+        text: 'model',
+        rootCount: 1
       });
       assert.ok(requests.every((url) => url.startsWith(origin)), 'renderer makes no remote request');
     });

@@ -211,6 +211,7 @@ test('operation-scoped sanitation subtracts only private nodes and exact rendere
   const pageText = textNode(article);
   const token = element('token', { parent: article, owned: true });
   sanitizer.trackNode(halo);
+  sanitizer.expect({ type: 'childList', target: article, addedNodes: [halo], removedNodes: [] });
   sanitizer.expect({ type: 'characterData', target: pageText, oldValue: 'before' });
   sanitizer.expect({ type: 'attributes', target: token, attributeName: 'data-halo-pos', oldValue: 'n' });
 
@@ -275,6 +276,7 @@ test('child-list sanitation consumes only complete expected node multisets', () 
       addedNodes: [added],
       removedNodes: [removed]
     })), null, `${name} did not consume the complete expectation`);
+    assert.equal(sanitizer.status().pendingOperations, 0);
   }
 
   const wrongTargetSanitizer = Dynamic.createRendererMutationSanitizer();
@@ -287,6 +289,33 @@ test('child-list sanitation consumes only complete expected node multisets', () 
     unexpectedMove,
     'private identity cannot authorize an operation against a different parent'
   );
+  assert.equal(wrongTargetSanitizer.status().pendingOperations, 1);
+
+  const identityOnlySanitizer = Dynamic.createRendererMutationSanitizer();
+  identityOnlySanitizer.trackNode(added);
+  const identityOnlyRecord = mutation({ target, addedNodes: [added] });
+  assert.deepEqual(
+    identityOnlySanitizer.sanitize(identityOnlyRecord),
+    identityOnlyRecord,
+    'tracked node identity alone cannot suppress a structural record'
+  );
+});
+
+test('identical child-list descriptors consume one matching record each', () => {
+  const sanitizer = Dynamic.createRendererMutationSanitizer();
+  const target = element('article');
+  const added = element('added', { parent: target });
+  const removed = element('removed', { parent: target });
+  const descriptor = { type: 'childList', target, addedNodes: [added], removedNodes: [removed] };
+  sanitizer.expect(descriptor);
+  sanitizer.expect(descriptor);
+  const matchingRecord = mutation({ target, addedNodes: [added], removedNodes: [removed] });
+
+  assert.equal(sanitizer.sanitize(matchingRecord), null);
+  assert.equal(sanitizer.status().pendingOperations, 1);
+  assert.equal(sanitizer.sanitize(matchingRecord), null);
+  assert.equal(sanitizer.status().pendingOperations, 0);
+  assert.deepEqual(sanitizer.sanitize(matchingRecord), matchingRecord);
 });
 
 test('complete child-list expectations subtract once and preserve legitimate extras', () => {
@@ -324,6 +353,7 @@ test('complete child-list expectations subtract once and preserve legitimate ext
     addedNodes: [legitimateAdded],
     removedNodes: [legitimateRemoved]
   });
+  assert.equal(sanitizer.status().pendingOperations, 0);
   assert.deepEqual(sanitizer.sanitize(complete), complete, 'consumed descriptors cannot sanitize a later record');
 });
 
@@ -351,6 +381,7 @@ test('renderer suppression preserves monkey-patched page side effects while rend
 
   scope = Dynamic.createRendererMutationSanitizer();
   scope.trackNode(halo);
+  scope.expect({ type: 'childList', target: article, addedNodes: [halo], removedNodes: [] });
   scope.expect({ type: 'characterData', target: legitimateText, oldValue: 'renderer-old' });
   controller.suppressRendererMutations(() => {
     observer.records.push(
@@ -369,6 +400,7 @@ test('renderer suppression preserves monkey-patched page side effects while rend
 
   scope = Dynamic.createRendererMutationSanitizer();
   scope.trackNode(halo);
+  scope.expect({ type: 'childList', target: article, addedNodes: [halo], removedNodes: [] });
   scope.expect({ type: 'characterData', target: legitimateText, oldValue: 'renderer-only' });
   controller.suppressRendererMutations(() => {
     observer.records.push(

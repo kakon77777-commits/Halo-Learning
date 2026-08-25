@@ -72,6 +72,7 @@
     };
 
     for (const contentRoot of changedContentRoots) runtime.pendingChangedRoots.add(contentRoot);
+    for (const contentRoot of removedContentRoots) runtime.pendingChangedRoots.delete(contentRoot);
     try {
       discovery.invalidateRoots(changedContentRoots);
     } catch (error) {
@@ -110,20 +111,22 @@
     const changedContentRoots = runtime.discovery.rootsWithin(roots);
     for (const contentRoot of changedContentRoots) runtime.pendingChangedRoots.add(contentRoot);
     const refreshRoots = [...runtime.pendingChangedRoots];
-    try {
-      const refreshed = runtime.discovery.refreshRoots(refreshRoots, { alreadyInvalidated: true });
-      for (const contentRoot of refreshRoots) runtime.pendingChangedRoots.delete(contentRoot);
-      return refreshed;
-    } catch (error) {
-      if (typeof settings.onError === 'function') {
-        try {
-          settings.onError(error, Object.freeze({ phase: 'root-refresh' }));
-        } catch (_reportError) {
-          // Refresh failure is already isolated from observer delivery.
+    let refreshed = 0;
+    for (const contentRoot of refreshRoots) {
+      try {
+        refreshed += runtime.discovery.refreshRoots([contentRoot], { alreadyInvalidated: true });
+        runtime.pendingChangedRoots.delete(contentRoot);
+      } catch (error) {
+        if (typeof settings.onError === 'function') {
+          try {
+            settings.onError(error, Object.freeze({ phase: 'root-refresh', root: contentRoot }));
+          } catch (_reportError) {
+            // One root's refresh/report failure cannot block its peers.
+          }
         }
       }
-      return 0;
     }
+    return refreshed;
   }
 
   function normalizedViewportBuffer(value) {
@@ -218,7 +221,7 @@
     if (!payload || !payload.element || payload.element.isConnected === false ||
         !revisionSource || typeof revisionSource.isRootRevisionCurrent !== 'function') return false;
     try {
-      return revisionSource.isRootRevisionCurrent(payload.element, payload.rootRevision);
+      return revisionSource.isRootRevisionCurrent(payload.element, work.rootId, payload.rootRevision);
     } catch (_error) {
       return false;
     }
@@ -590,9 +593,16 @@
       return changed.length;
     }
 
-    function isRootRevisionCurrent(element, revision) {
-      return Boolean(element && element.isConnected !== false &&
-        Number.isSafeInteger(revision) && rootRevisionFor(element) === revision);
+    function peekRootId(element) {
+      return element && rootIds.has(element) ? rootIds.get(element) : null;
+    }
+
+    function isRootRevisionCurrent(element, expectedRootId, revision) {
+      if (!element || element.isConnected === false || typeof expectedRootId !== 'string' ||
+          !Number.isSafeInteger(revision)) return false;
+      const rootId = peekRootId(element);
+      return rootId !== null && rootId === expectedRootId &&
+        rootRevisions.has(rootId) && rootRevisions.get(rootId) === revision;
     }
 
     function releaseRoots(values) {
@@ -680,6 +690,7 @@
       invalidateRoots,
       refreshRoots,
       releaseRoots,
+      peekRootId,
       rootIdsWithin,
       rootsWithin,
       isRootRevisionCurrent,
@@ -787,6 +798,10 @@
     };
 
     attempt('runtime-detach', settings.detach);
+    attempt('pending-refresh-clear', runtime && runtime.pendingChangedRoots &&
+      typeof runtime.pendingChangedRoots.clear === 'function'
+      ? () => runtime.pendingChangedRoots.clear()
+      : null);
     attempt('cancel-epoch', runtime && runtime.scheduler &&
       typeof runtime.scheduler.cancelEpoch === 'function'
       ? () => runtime.scheduler.cancelEpoch(epoch)

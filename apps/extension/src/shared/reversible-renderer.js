@@ -585,11 +585,19 @@
       return roots.map(captureSubtree);
     }
 
-    function mutateRootAtomically(renderRoot, mutate, entries) {
+    function prepareRootTransaction(renderRoot, entries) {
       const snapshots = snapshotRoots(renderRoot, entries);
-      return runSuppressedTransaction(mutate, () => {
-        for (const snapshot of snapshots) restoreSubtree(snapshot);
+      return Object.freeze({
+        run(mutate) {
+          return runSuppressedTransaction(mutate, () => {
+            for (const snapshot of snapshots) restoreSubtree(snapshot);
+          });
+        }
       });
+    }
+
+    function mutateRootAtomically(renderRoot, mutate, entries) {
+      return prepareRootTransaction(renderRoot, entries).run(mutate);
     }
 
     function ownedWrappers(entry) {
@@ -601,8 +609,8 @@
         });
     }
 
-    function unwrapEntry(entry, normalizeParents) {
-      const wrappers = ownedWrappers(entry);
+    function unwrapEntry(entry, normalizeParents, preparedWrappers) {
+      const wrappers = Array.isArray(preparedWrappers) ? preparedWrappers : ownedWrappers(entry);
       const parents = new Map();
       for (const wrapper of wrappers) {
         const parent = wrapper.parentNode;
@@ -699,9 +707,9 @@
       }
     }
 
-    function cleanupEntry(entry, normalizeParents) {
-      const wrappers = ownedWrappers(entry);
-      unwrapEntry(entry, normalizeParents);
+    function cleanupEntry(entry, normalizeParents, preparedWrappers) {
+      const wrappers = Array.isArray(preparedWrappers) ? preparedWrappers : ownedWrappers(entry);
+      unwrapEntry(entry, normalizeParents, wrappers);
       for (const wrapper of wrappers) scrubWrapper(wrapper);
       return wrappers;
     }
@@ -790,10 +798,11 @@
         .sort((left, right) => left.fragment.boundaryIndex - right.fragment.boundaryIndex)
         .map((operation) => operation.wrapper);
       const nextEntry = prepareRecord(request, wrappers);
+      const transaction = prepareRootTransaction(request.root);
       prepareCapabilities(Object.freeze({ rootId: request.rootId, wrapperCount: wrappers.length }));
       grantPreparedOperations(prepared);
       try {
-        mutateRootAtomically(request.root, () => applyPrepared(prepared));
+        transaction.run(() => applyPrepared(prepared));
       } catch (error) {
         revokeWrappers(wrappers);
         throw error;
@@ -863,13 +872,14 @@
         .map((operation) => operation.wrapper);
       const nextEntry = prepareRecord(request, wrappers);
       const oldWrappers = ownedWrappers(entry);
+      const transaction = prepareRootTransaction(request.root, [entry]);
       prepareCapabilities(Object.freeze({ rootId: request.rootId, wrapperCount: wrappers.length }));
       grantPreparedOperations(prepared);
       try {
-        mutateRootAtomically(request.root, () => {
-          cleanupEntry(entry, false);
+        transaction.run(() => {
+          cleanupEntry(entry, false, oldWrappers);
           applyPrepared(prepared);
-        }, [entry]);
+        });
       } catch (error) {
         revokeWrappers(wrappers);
         throw error;

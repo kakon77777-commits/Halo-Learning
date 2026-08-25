@@ -447,9 +447,9 @@ test('dynamic root refresh cancels stale work and enqueues one incremented visib
   });
   discovery.start();
 
-  assert.equal(discovery.isRootRevisionCurrent(paragraph, 1), true);
+  assert.equal(discovery.isRootRevisionCurrent(paragraph, 'halo-root-1', 1), true);
   discovery.invalidateRoots([paragraph, paragraph]);
-  assert.equal(discovery.isRootRevisionCurrent(paragraph, 1), false);
+  assert.equal(discovery.isRootRevisionCurrent(paragraph, 'halo-root-1', 1), false);
   discovery.refreshRoots([paragraph, paragraph], { alreadyInvalidated: true });
   observer.callback([{ target: paragraph, isIntersecting: true }]);
 
@@ -498,26 +498,85 @@ test('released discovery roots delete revision and identity state under bounded 
 
   for (let index = 0; index < 40; index += 1) {
     const transientRoot = candidate(`transient-${index}`);
-    assert.equal(discovery.isRootRevisionCurrent(transientRoot, 1), true);
+    discovery.invalidateRoots([transientRoot]);
+    const transientRootId = discovery.peekRootId(transientRoot);
+    assert.equal(discovery.isRootRevisionCurrent(transientRoot, transientRootId, 1), true);
     assert.equal(discovery.status().trackedRootRevisions, 1);
     assert.equal(discovery.releaseRoots([transientRoot]), 1);
     assert.equal(discovery.status().trackedRootRevisions, 0);
   }
 
   const first = candidate('reused-id');
-  assert.equal(discovery.isRootRevisionCurrent(first, 1), true);
-  const firstInternalId = discovery.rootIdsWithin([first])[0];
   discovery.invalidateRoots([first]);
-  assert.equal(discovery.isRootRevisionCurrent(first, 2), true);
+  const firstInternalId = discovery.rootIdsWithin([first])[0];
+  assert.equal(discovery.isRootRevisionCurrent(first, firstInternalId, 1), true);
+  discovery.invalidateRoots([first]);
+  assert.equal(discovery.isRootRevisionCurrent(first, firstInternalId, 2), true);
   discovery.releaseRoots([first]);
   first.isConnected = false;
   const replacement = candidate('reused-id');
-  assert.equal(discovery.isRootRevisionCurrent(replacement, 1), true);
+  discovery.invalidateRoots([replacement]);
   const replacementInternalId = discovery.rootIdsWithin([replacement])[0];
+  assert.equal(discovery.isRootRevisionCurrent(replacement, replacementInternalId, 1), true);
   assert.equal(discovery.status().trackedRootRevisions, 1);
   assert.notEqual(replacementInternalId, firstInternalId);
   assert.equal(Content.rootWorkIsCurrent({ payload: { element: first, rootRevision: 2 } }, discovery), false);
   assert.ok(cancelled.includes(firstInternalId));
+});
+
+test('freshness rejects released identity without allocating replacement state', () => {
+  const contentRoot = candidate('freshness-root');
+  class FixtureIntersectionObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  const discovery = Content.createViewportDiscovery({
+    document: {
+      body: candidate('body'),
+      documentElement: candidate('html'),
+      elementsFromPoint: () => [],
+      createTreeWalker: () => ({ nextNode: () => null })
+    },
+    NodeFilter: { SHOW_ELEMENT: 1 },
+    IntersectionObserver: FixtureIntersectionObserver,
+    scheduler: {
+      enqueue: () => true,
+      cancelRoot: () => 1,
+      flush: () => Promise.resolve()
+    },
+    budgets: { timeSliceMs: 8, viewportBufferPx: 1200 },
+    makeWork: () => null,
+    innerWidth: 1000,
+    innerHeight: 800,
+    requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
+    cancelIdleCallback: () => {},
+    clock: { now: () => 0 }
+  });
+
+  discovery.invalidateRoots([contentRoot]);
+  const firstRootId = discovery.peekRootId(contentRoot);
+  const oldWork = {
+    rootId: firstRootId,
+    payload: { element: contentRoot, rootRevision: 1 }
+  };
+  assert.equal(Content.rootWorkIsCurrent(oldWork, discovery), true);
+
+  discovery.releaseRoots([contentRoot]);
+  assert.equal(discovery.status().trackedRootRevisions, 0);
+  assert.equal(discovery.peekRootId(contentRoot), null);
+  assert.equal(Content.rootWorkIsCurrent(oldWork, discovery), false);
+  assert.equal(discovery.status().trackedRootRevisions, 0, 'freshness did not recreate a revision');
+  assert.equal(discovery.peekRootId(contentRoot), null, 'freshness did not recreate an identity');
+
+  discovery.invalidateRoots([contentRoot]);
+  const replacementRootId = discovery.peekRootId(contentRoot);
+  assert.notEqual(replacementRootId, firstRootId);
+  assert.equal(Content.rootWorkIsCurrent(oldWork, discovery), false, 'old response cannot bind to replacement identity');
+  assert.equal(Content.rootWorkIsCurrent({
+    rootId: replacementRootId,
+    payload: { element: contentRoot, rootRevision: 1 }
+  }, discovery), true);
 });
 
 test('duplicate page IDs receive independent private identities and revision-first cancellation', () => {
@@ -548,7 +607,7 @@ test('duplicate page IDs receive independent private identities and revision-fir
       cancelRoot(rootId) {
         cancelled.push(rootId);
         const element = rootId === discovery.rootIdsWithin([first])[0] ? first : second;
-        staleBeforeCancel.push(!discovery.isRootRevisionCurrent(element, 1));
+        staleBeforeCancel.push(!discovery.isRootRevisionCurrent(element, rootId, 1));
         if (rootId === throwingId) throw new Error(`cancel failed for ${rootId}`);
         return 1;
       },
@@ -583,18 +642,19 @@ test('duplicate page IDs receive independent private identities and revision-fir
   assert.doesNotThrow(() => discovery.invalidateRoots([first, second]));
   assert.deepEqual(cancelled, [firstId, secondId]);
   assert.deepEqual(staleBeforeCancel, [true, true]);
-  assert.equal(discovery.isRootRevisionCurrent(first, 2), true);
-  assert.equal(discovery.isRootRevisionCurrent(second, 2), true);
+  assert.equal(discovery.isRootRevisionCurrent(first, firstId, 2), true);
+  assert.equal(discovery.isRootRevisionCurrent(second, secondId, 2), true);
   assert.deepEqual(errors, [[`cancel failed for ${firstId}`, 'root-cancel', firstId]]);
 
   assert.doesNotThrow(() => discovery.releaseRoots([first]));
   assert.deepEqual(discovery.rootIdsWithin([first]), []);
   assert.deepEqual(discovery.rootIdsWithin([second]), [secondId]);
-  assert.equal(discovery.isRootRevisionCurrent(second, 2), true);
+  assert.equal(discovery.isRootRevisionCurrent(second, secondId, 2), true);
   assert.equal(discovery.status().trackedRootRevisions, 1);
 
   const replacement = candidate('duplicate');
-  assert.equal(discovery.isRootRevisionCurrent(replacement, 1), true);
+  discovery.invalidateRoots([replacement]);
+  assert.equal(discovery.isRootRevisionCurrent(replacement, 'halo-root-3', 1), true);
   assert.equal(discovery.rootIdsWithin([replacement])[0], 'halo-root-3');
   discovery.disconnect();
   assert.equal(discovery.status().trackedRootRevisions, 0);
@@ -957,7 +1017,7 @@ test('content invalidation cancels first and survives renderer cleanup failure t
   const runtime = {
     epoch: 4,
     discovery,
-    pendingChangedRoots: new Set(),
+    pendingChangedRoots: new Set([detachedRoot]),
     rendererRootsByContentRoot: new Map([
       ['changed-root', new Set(['changed-root:w0'])],
       ['detached-root', new Set(['detached-root:w0'])]
@@ -990,12 +1050,12 @@ test('content invalidation cancels first and survives renderer cleanup failure t
   assert.equal(runtime.pendingChangedRoots.size, 0);
 });
 
-test('failed root refresh remains deduplicated and retries every canonical root once', () => {
+test('root refresh isolates peer success and retries only failed canonical roots', () => {
   const first = candidate('first');
   const second = candidate('second');
   const attempts = [];
   const errors = [];
-  let shouldThrow = true;
+  let failingRoot = second;
   const runtime = {
     pendingChangedRoots: new Set([first]),
     discovery: {
@@ -1004,25 +1064,49 @@ test('failed root refresh remains deduplicated and retries every canonical root 
       },
       refreshRoots(values, options) {
         attempts.push([Array.from(values), options.alreadyInvalidated]);
-        if (shouldThrow) {
-          shouldThrow = false;
-          throw new Error('first refresh failed');
-        }
+        if (values[0] === failingRoot) throw new Error(`refresh failed for ${values[0].id}`);
         return values.length;
       }
     }
   };
 
   assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, [second, first], {
-    onError: (error, metadata) => errors.push([error.message, metadata.phase])
-  }), 0);
-  assert.deepEqual([...runtime.pendingChangedRoots], [first, second]);
-  assert.deepEqual(attempts[0], [[first, second], true]);
-  assert.deepEqual(errors, [['first refresh failed', 'root-refresh']]);
+    onError: (error, metadata) => errors.push([error.message, metadata.phase, metadata.root])
+  }), 1);
+  assert.deepEqual([...runtime.pendingChangedRoots], [second]);
+  assert.deepEqual(attempts, [[[first], true], [[second], true]]);
+  assert.deepEqual(errors, [['refresh failed for second', 'root-refresh', second]]);
 
-  assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, []), 2);
-  assert.deepEqual(attempts[1], [[first, second], true]);
+  failingRoot = null;
+  assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, []), 1);
+  assert.deepEqual(attempts[2], [[second], true]);
   assert.equal(runtime.pendingChangedRoots.size, 0);
+});
+
+test('persistent refresh failure stays bounded while successful peers never repeat', () => {
+  const first = candidate('first-fails');
+  const second = candidate('second-succeeds');
+  const attempts = [];
+  const runtime = {
+    pendingChangedRoots: new Set([first, second]),
+    discovery: {
+      rootsWithin: (values) => Array.from(values || []),
+      refreshRoots(values) {
+        attempts.push(values[0]);
+        if (values[0] === first) throw new Error('persistent refresh failure');
+        return 1;
+      }
+    }
+  };
+
+  assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, []), 1);
+  assert.deepEqual(attempts, [first, second]);
+  assert.deepEqual([...runtime.pendingChangedRoots], [first]);
+
+  assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, []), 0);
+  assert.deepEqual(attempts, [first, second, first]);
+  assert.deepEqual([...runtime.pendingChangedRoots], [first]);
+  assert.equal(runtime.pendingChangedRoots.size, 1);
 });
 
 test('runtime teardown detaches first and attempts every cleanup stage after independent failures', () => {
@@ -1031,6 +1115,7 @@ test('runtime teardown detaches first and attempts every cleanup stage after ind
     const errors = [];
     const runtime = {
       epoch: 7,
+      pendingChangedRoots: new Set([candidate('pending-route-root')]),
       scheduler: {
         cancelEpoch(epoch) {
           calls.push(`cancel:${epoch}`);
@@ -1065,6 +1150,7 @@ test('runtime teardown detaches first and attempts every cleanup stage after ind
 
     assert.equal(result, null, failingStage);
     assert.equal(activeRuntime, null, failingStage);
+    assert.equal(runtime.pendingChangedRoots.size, 0, failingStage);
     assert.deepEqual(calls.filter((call) => !call.startsWith('error:')), [
       'detach', 'cancel:7', 'suppress', 'renderer', 'disconnect'
     ], failingStage);
