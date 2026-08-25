@@ -134,3 +134,45 @@ test('runtime budgets migrate from legacy caps and normalize every bounded dimen
   assert.equal(Object.isFrozen(normalized.runtimeBudgets), true);
   assert.deepEqual(Settings.normalizeSettings(normalized), normalized);
 });
+
+test('profile revision is monotonic across edits, stable across reload, and changes analysis keys', () => {
+  const ProfileControls = require('../apps/extension/src/shared/profile-controls');
+  const Progressive = require('../apps/extension/src/shared/progressive-runtime');
+  const initial = Settings.normalizeSettings({
+    profileId: 'study-profile',
+    profileRevision: 4,
+    channels: { lemma: false },
+    density: 0.5
+  });
+  const unchanged = ProfileControls.mergeUiSettings(initial, {
+    channels: initial.channels,
+    density: 0.5,
+    languageMode: initial.languageMode,
+    labelPosition: initial.labelPosition
+  }, Settings.normalizeSettings);
+  const edited = ProfileControls.mergeUiSettings(initial, {
+    channels: { ...initial.channels, lemma: true },
+    density: 0.75
+  }, Settings.normalizeSettings);
+  const reloaded = Settings.normalizeSettings(JSON.parse(JSON.stringify(edited)));
+
+  assert.equal(initial.profileId, 'study-profile');
+  assert.equal(unchanged.profileRevision, 4);
+  assert.equal(edited.profileId, 'study-profile');
+  assert.equal(edited.profileRevision, 5);
+  assert.equal(Contracts.normalizeMarkingProfile(edited).profileRevision, 5);
+  assert.equal(reloaded.profileRevision, 5);
+  assert.deepEqual(Settings.normalizeSettings(reloaded), reloaded);
+
+  const versions = {
+    text: 'The model learns.',
+    languageMode: 'both',
+    semanticVersion: '0.3.0',
+    grammarVersion: '0.3.0',
+    lexicalVersion: 'halo-bootstrap-dictionary@0.3.0'
+  };
+  assert.notEqual(
+    Progressive.createAnalysisKey({ ...versions, profileRevision: initial.profileRevision }),
+    Progressive.createAnalysisKey({ ...versions, profileRevision: edited.profileRevision })
+  );
+});

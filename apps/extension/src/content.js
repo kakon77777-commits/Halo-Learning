@@ -49,6 +49,44 @@
     }));
   }
 
+  function validateEnrichmentResponse(response, request, normalizeAnnotationSet) {
+    if (typeof normalizeAnnotationSet !== 'function') throw new TypeError('normalizeAnnotationSet: must be a function');
+    if (!response || typeof response !== 'object' || response.error ||
+        response.requestId !== request.requestId || response.pageEpoch !== request.pageEpoch ||
+        !Array.isArray(request.items) || !Array.isArray(response.results) ||
+        response.results.length !== request.items.length) return null;
+    const expectedByRoot = new Map(request.items.map((item) => [item.rootId, item]));
+    if (expectedByRoot.size !== request.items.length) return null;
+    const seen = new Set();
+    const normalized = [];
+    try {
+      for (const result of response.results) {
+        if (!result || typeof result !== 'object' || seen.has(result.rootId)) return null;
+        const expected = expectedByRoot.get(result.rootId);
+        if (!expected || result.requestId !== request.requestId ||
+            result.pageEpoch !== request.pageEpoch || result.rootRevision !== expected.rootRevision ||
+            result.analysisKey !== expected.analysisKey || !['bootstrap', 'lexical'].includes(result.phase) ||
+            result.lexicalVersion !== expected.lexicalVersion || typeof result.generatedAt !== 'string') return null;
+        const annotationSet = normalizeAnnotationSet(result.annotationSet);
+        if (annotationSet.textLength !== expected.text.length ||
+            annotationSet.languageMode !== expected.languageMode ||
+            annotationSet.generatedAt !== result.generatedAt ||
+            annotationSet.tokens.some((token) => expected.text.slice(token.start, token.end) !== token.surface)) return null;
+        seen.add(result.rootId);
+        normalized.push(Object.freeze({ ...result, annotationSet }));
+      }
+    } catch (_error) {
+      return null;
+    }
+    if (seen.size !== expectedByRoot.size) return null;
+    return Object.freeze({
+      results: Object.freeze(normalized),
+      providerMode: response.status && ['ready', 'degraded', 'bootstrap-only'].includes(response.status.mode)
+        ? response.status.mode
+        : 'degraded'
+    });
+  }
+
   function estimateSemanticTokens(text) {
     let count = 0;
     for (const _match of String(text || '').matchAll(/\p{Script=Han}|[\p{Script=Latin}\p{M}]+(?:['’][\p{Script=Latin}\p{M}]+)*/gu)) {
@@ -396,10 +434,10 @@
       semanticTokens: 0,
       markedTokens: 0,
       providerMode: null,
+      oversizedWork: Object.freeze([]),
       lastError: null
     });
     let lastStatus = emptyStatus();
-    let lastAnnotationSets = Object.freeze([]);
     let activeRuntime = null;
     let pageEpoch = 0;
     let requestSequence = 0;
@@ -445,7 +483,6 @@
         parent.replaceChild(root.document.createTextNode(span.dataset.haloOriginal || span.textContent || ''), span);
       }
       for (const parent of parents) if (typeof parent.normalize === 'function') parent.normalize();
-      lastAnnotationSets = Object.freeze([]);
       lastStatus = emptyStatus();
       return lastStatus;
     }
@@ -486,38 +523,16 @@
       return count;
     }
 
-    function annotationResults(response, request, records, settings, Dictionary, Semantic) {
-      if (response && !response.error && response.requestId === request.requestId &&
-          response.pageEpoch === request.pageEpoch && Array.isArray(response.results) &&
-          response.results.length === records.length) {
-        return Object.freeze({
-          results: Object.freeze(response.results),
-          providerMode: response.status && response.status.mode ? response.status.mode : 'degraded'
-        });
-      }
-      const generatedAt = new Date().toISOString();
-      const sets = bootstrapAnnotationSets(records.map((record) => record.text), settings, Dictionary, Semantic, generatedAt);
-      return Object.freeze({
-        results: Object.freeze(records.map((record, index) => Object.freeze({
-          rootId: request.items[index].rootId,
-          annotationSet: sets[index]
-        }))),
-        providerMode: 'content-bootstrap'
-      });
-    }
-
     async function requestEnrichment(batch, context, modules, settings, epoch, lexicalVersion) {
-      const records = [];
       const items = [];
       for (const work of batch.items) {
         const workRecords = work.payload.records;
-        records.push(...workRecords);
         items.push(...buildEnrichmentItems(workRecords, {
           rootId: work.id,
           languageMode: settings.languageMode,
           semanticVersion: modules.Semantic.ENGINE.version,
           grammarVersion: modules.Grammar.ALGORITHM.version,
-          profileRevision: settings.profileId,
+          profileRevision: settings.profileRevision,
           lexicalVersion
         }, modules.Progressive));
       }
@@ -534,10 +549,12 @@
       try {
         const response = await root.chrome.runtime.sendMessage(request);
         if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;
-        return annotationResults(response, request, records, settings, modules.Dictionary, modules.Semantic);
-      } catch (_error) {
+        const validated = validateEnrichmentResponse(response, request, modules.Contracts.normalizeAnnotationSet);
+        if (!validated) throw new Error('Local semantic service returned an invalid response');
+        return validated;
+      } catch (error) {
         if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;
-        return annotationResults(null, request, records, settings, modules.Dictionary, modules.Semantic);
+        throw error;
       } finally {
         context.signal.removeEventListener('abort', cancel);
       }
@@ -546,7 +563,6 @@
     function renderBatch(batch, results, modules, settings) {
       const byItemId = new Map(results.results.map((result) => [result.rootId, result.annotationSet]));
       const plansByNode = new Map();
-      const allSets = [];
       let semanticTokens = 0;
       for (const work of batch.items) {
         const payload = work.payload;
@@ -556,7 +572,6 @@
           const record = payload.records[index];
           const annotationSet = byItemId.get(`${work.id}:s${index}`);
           if (!annotationSet || !Array.isArray(annotationSet.tokens)) continue;
-          allSets.push(annotationSet);
           semanticTokens += annotationSet.tokens.length;
           const plan = modules.Projection.createMarkingPlan(annotationSet.tokens, settings);
           for (const item of plan) {
@@ -585,7 +600,6 @@
         markedTokens += replaceTextNode(node, buildSegments(node.nodeValue || '', plan));
       }
       return Object.freeze({
-        annotationSets: Object.freeze(allSets),
         semanticTokens,
         markedTokens
       });
@@ -601,8 +615,9 @@
         const Pipeline = root.HaloSentencePipeline;
         const Progressive = root.HaloProgressiveRuntime;
         const RuntimeScheduler = root.HaloRuntimeScheduler;
+        const Contracts = root.HaloSemanticContracts;
         if (!Settings || !Dictionary || !Semantic || !Grammar || !Projection || !Pipeline ||
-            !Progressive || !RuntimeScheduler) throw new Error('Halo shared modules are not loaded');
+            !Progressive || !RuntimeScheduler || !Contracts) throw new Error('Halo shared modules are not loaded');
         const settings = Settings.normalizeSettings(rawSettings);
         removeMarking();
         if (!settings.enabled) return lastStatus;
@@ -614,14 +629,13 @@
         const epoch = pageEpoch;
         const provider = Dictionary.createBootstrapDictionaryProvider();
         const lexicalVersion = `${provider.id}@${provider.version}`;
-        const modules = { Dictionary, Semantic, Grammar, Projection, Pipeline, Progressive };
+        const modules = { Semantic, Grammar, Projection, Pipeline, Progressive, Contracts };
         const scheduler = RuntimeScheduler.createRuntimeScheduler({
           budgets: settings.runtimeBudgets,
           processBatch: async (batch, context) => {
             const result = await requestEnrichment(batch, context, modules, settings, epoch, lexicalVersion);
             if (!result || context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return;
             const rendered = renderBatch(batch, result, modules, settings);
-            lastAnnotationSets = Object.freeze([...lastAnnotationSets, ...rendered.annotationSets]);
             lastStatus = Object.freeze({
               active: lastStatus.active || rendered.markedTokens > 0,
               textNodesVisited: lastStatus.textNodesVisited + batch.textNodes,
@@ -629,8 +643,13 @@
               markedTokens: lastStatus.markedTokens + rendered.markedTokens,
               providerMode: result.providerMode,
               queuedRoots: scheduler.status().queuedRoots,
+              oversizedWork: scheduler.status().oversizedWork,
               lastError: null
             });
+          },
+          onQuarantine: (outcome) => {
+            const retained = [...lastStatus.oversizedWork, outcome].slice(-settings.runtimeBudgets.maxQueuedRoots);
+            lastStatus = Object.freeze({ ...lastStatus, oversizedWork: Object.freeze(retained) });
           },
           onError: () => {
             lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_MARKING_ERROR' });
@@ -658,7 +677,11 @@
         lastStatus = Object.freeze({ ...emptyStatus(), queuedRoots: 0 });
         discovery.start();
         await scheduler.flush();
-        lastStatus = Object.freeze({ ...lastStatus, queuedRoots: scheduler.status().queuedRoots });
+        lastStatus = Object.freeze({
+          ...lastStatus,
+          queuedRoots: scheduler.status().queuedRoots,
+          oversizedWork: scheduler.status().oversizedWork
+        });
         return lastStatus;
       } catch (_error) {
         lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
@@ -691,6 +714,7 @@
     shouldSkipElement,
     viewportRootMargin,
     buildEnrichmentItems,
+    validateEnrichmentResponse,
     buildRootWork,
     createViewportDiscovery
   });

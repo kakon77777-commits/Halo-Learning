@@ -4,6 +4,10 @@ const assert = require('node:assert/strict');
 const Scheduler = require('../apps/extension/src/shared/runtime-scheduler');
 const Content = require('../apps/extension/src/content');
 const Progressive = require('../apps/extension/src/shared/progressive-runtime');
+const Contracts = require('../packages/contracts/semantic-contracts');
+const Dictionary = require('../apps/extension/src/shared/dictionary-provider');
+const Semantic = require('../apps/extension/src/shared/semantic-annotations');
+const Grammar = require('../apps/extension/src/shared/grammar-annotations');
 
 const generousBudgets = Object.freeze({
   maxTextNodes: 100,
@@ -120,6 +124,66 @@ test('queue backpressure counts distinct roots and evicts every chunk of the sel
   assert.equal(scheduler.status().droppedRoots, 1);
 });
 
+test('inferred backpressure cannot evict a root containing any explicit chunk', () => {
+  const scheduler = Scheduler.createRuntimeScheduler({
+    budgets: { ...generousBudgets, maxQueuedRoots: 1 }
+  });
+  scheduler.enqueue([
+    work('mixed-background', { rootId: 'root-mixed', priority: 'background', visible: false, stale: true }),
+    work('mixed-explicit', { rootId: 'root-mixed', priority: 'explicit', visible: true })
+  ]);
+
+  assert.equal(scheduler.enqueue(work('new-inferred', {
+    rootId: 'root-new',
+    priority: 'inferred',
+    visible: true
+  })), false);
+
+  assert.deepEqual(scheduler.status().queuedRootIds, ['root-mixed']);
+  assert.equal(scheduler.peek().priority, 'explicit');
+});
+
+test('oversized work is quarantined before enqueue with stable dimensions and no processing', async () => {
+  const cases = [
+    ['maxTextNodes', { textNodes: 3 }, ['maxTextNodes']],
+    ['maxCharacters', { characters: 11 }, ['maxCharacters']],
+    ['maxSemanticTokens', { semanticTokens: 11 }, ['maxSemanticTokens']],
+    ['maxShardIds', { shardIds: ['a', 'b', 'c'] }, ['maxShardIds']]
+  ];
+  for (const [name, overrides, dimensions] of cases) {
+    let processed = 0;
+    const scheduler = Scheduler.createRuntimeScheduler({
+      budgets: {
+        ...generousBudgets,
+        maxTextNodes: 2,
+        maxCharacters: 10,
+        maxSemanticTokens: 10,
+        maxShardIds: 2
+      },
+      processBatch: async () => { processed += 1; }
+    });
+    const accepted = scheduler.enqueue(work(name, {
+      textNodes: 1,
+      characters: 1,
+      semanticTokens: 1,
+      shardIds: ['one'],
+      ...overrides
+    }));
+
+    assert.equal(accepted, false, name);
+    assert.equal(scheduler.status().queuedRoots, 0, name);
+    assert.deepEqual(scheduler.status().oversizedWork, [{
+      id: name,
+      rootId: `root-${name}`,
+      reason: 'WORK_EXCEEDS_BUDGET',
+      dimensions
+    }], name);
+    await scheduler.flush();
+    assert.equal(processed, 0, name);
+    assert.equal(scheduler.status().completedBatches, 0, name);
+  }
+});
+
 test('root, epoch, and batch cancellation remove queued work and abort in-flight work', async () => {
   let release;
   let observedSignal;
@@ -182,6 +246,37 @@ test('cancelling one in-flight root requeues unaffected explicit work from the a
     ['click', 'hover'],
     ['click']
   ]);
+});
+
+test('sequential root cancellations never resurrect work from the same settling batch', async () => {
+  const batches = [];
+  let releaseFirst;
+  const firstPending = new Promise((resolve) => { releaseFirst = resolve; });
+  const scheduler = Scheduler.createRuntimeScheduler({
+    budgets: generousBudgets,
+    processBatch: async (batch) => {
+      batches.push(batch.items.map((item) => item.id));
+      if (batches.length === 1) await firstPending;
+    },
+    requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
+    cancelIdleCallback: () => {}
+  });
+  scheduler.enqueue([
+    work('a', { priority: 'explicit' }),
+    work('b', { priority: 'inferred' }),
+    work('c', { priority: 'background' })
+  ]);
+  const flushing = scheduler.flush();
+  await Promise.resolve();
+
+  assert.equal(scheduler.cancelRoot('root-a'), 1);
+  assert.equal(scheduler.cancelRoot('root-b'), 1);
+  releaseFirst();
+  await flushing;
+
+  assert.deepEqual(batches, [['a', 'b', 'c'], ['c']]);
+  assert.deepEqual(scheduler.status().queuedRootIds, []);
+  assert.equal(scheduler.status().cancelledRoots, 2);
 });
 
 test('flush schedules through requestIdleCallback with a bounded timeout', async () => {
@@ -333,6 +428,68 @@ test('enrichment items recompute canonical keys from every semantic input', () =
     }));
     assert.equal(Object.isFrozen(item), true);
   }
+});
+
+test('enrichment response validation binds every result field and canonical annotation contract', () => {
+  const generatedAt = '2026-08-26T04:00:00.000Z';
+  const provider = Dictionary.createBootstrapDictionaryProvider();
+  const engine = Semantic.createSemanticEngine({
+    provider,
+    grammarAnnotator: Grammar.annotateGrammar
+  });
+  const item = Content.buildEnrichmentItems([
+    { text: 'The model learns.', language: 'en', rootRevision: 3 }
+  ], {
+    rootId: 'lesson:w0',
+    languageMode: 'both',
+    semanticVersion: Semantic.ENGINE.version,
+    grammarVersion: Grammar.ALGORITHM.version,
+    profileRevision: 7,
+    lexicalVersion: `${provider.id}@${provider.version}`
+  }, Progressive)[0];
+  const request = {
+    requestId: 'req-4-1',
+    pageEpoch: 4,
+    items: [item]
+  };
+  const result = {
+    requestId: request.requestId,
+    pageEpoch: request.pageEpoch,
+    rootId: item.rootId,
+    rootRevision: item.rootRevision,
+    analysisKey: item.analysisKey,
+    phase: 'bootstrap',
+    lexicalVersion: item.lexicalVersion,
+    generatedAt,
+    annotationSet: engine.annotateText(item.text, { languageMode: item.languageMode, generatedAt })
+  };
+  const response = {
+    requestId: request.requestId,
+    pageEpoch: request.pageEpoch,
+    results: [result],
+    status: { mode: 'degraded' }
+  };
+
+  assert.equal(Content.validateEnrichmentResponse(response, request, Contracts.normalizeAnnotationSet).results.length, 1);
+  for (const [field, badValue] of [
+    ['requestId', 'req-wrong'],
+    ['pageEpoch', 5],
+    ['rootId', 'other-root'],
+    ['rootRevision', 4],
+    ['analysisKey', `ak1:${'0'.repeat(64)}`],
+    ['phase', 'unknown'],
+    ['lexicalVersion', 'other-version'],
+    ['generatedAt', '2026-08-26T04:00:01.000Z']
+  ]) {
+    assert.equal(Content.validateEnrichmentResponse({
+      ...response,
+      results: [{ ...result, [field]: badValue }]
+    }, request, Contracts.normalizeAnnotationSet), null, field);
+  }
+  assert.equal(Content.validateEnrichmentResponse({
+    ...response,
+    results: [{ ...result, annotationSet: { ...result.annotationSet, tokens: [{}] } }]
+  }, request, Contracts.normalizeAnnotationSet), null);
 });
 
 test('root work is sentence-batched from runtime budgets and ignores legacy caps', () => {

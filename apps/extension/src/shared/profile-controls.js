@@ -18,7 +18,16 @@
     for (const name of ['density', 'languageMode', 'labelPosition']) {
       if (Object.hasOwn(ui, name)) merged[name] = ui[name];
     }
-    return normalizeSettings(merged);
+    const candidate = normalizeSettings(merged);
+    const changed = candidate.density !== current.density ||
+      candidate.languageMode !== current.languageMode ||
+      candidate.labelPosition !== current.labelPosition ||
+      Object.keys(current.channels).some((name) => candidate.channels[name] !== current.channels[name]);
+    if (!changed) return candidate;
+    if (current.profileRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError('profileRevision: cannot be incremented safely');
+    }
+    return normalizeSettings({ ...candidate, profileRevision: current.profileRevision + 1 });
   }
 
   return Object.freeze({ mergeUiSettings });

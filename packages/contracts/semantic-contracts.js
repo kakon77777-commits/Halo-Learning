@@ -1,5 +1,7 @@
 'use strict';
 
+const BrowserSemanticContracts = require('../../apps/extension/src/shared/semantic-contracts');
+
 const SEMANTIC_SCHEMA_VERSION = 1;
 const MARKING_PROFILE_SCHEMA_VERSION = 2;
 const LANGUAGES = Object.freeze(['en', 'zh-Hant']);
@@ -267,6 +269,9 @@ function normalizeMarkingProfile(value) {
       'profile.schemaVersion'
     ),
     profileId: stringAt(raw.profileId, 'profile.profileId'),
+    profileRevision: raw.profileRevision === undefined
+      ? 0
+      : integerAt(raw.profileRevision, 'profile.profileRevision', 0, Number.MAX_SAFE_INTEGER),
     enabled: booleanAt(raw.enabled, 'profile.enabled'),
     languageMode: enumAt(raw.languageMode, LANGUAGE_MODES, 'profile.languageMode'),
     channels: normalizedChannels,
@@ -329,7 +334,7 @@ module.exports = Object.freeze({
   CHANNELS,
   normalizeSemanticAnnotation,
   normalizeSemanticToken,
-  normalizeAnnotationSet,
+  normalizeAnnotationSet: BrowserSemanticContracts.normalizeAnnotationSet,
   normalizeMarkingProfile,
   migrateLegacySemanticToken
 });

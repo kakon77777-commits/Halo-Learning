@@ -4,6 +4,7 @@
   const STORAGE_KEY = 'haloSettings';
   const INJECT_FILES = [
     'src/shared/progressive-runtime.js',
+    'src/shared/semantic-contracts.js',
     'src/shared/dictionary-provider.js',
     'src/shared/semantic-annotations.js',
     'src/shared/grammar-annotations.js',

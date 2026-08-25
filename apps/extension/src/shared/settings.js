@@ -41,6 +41,7 @@
   const DEFAULT_SETTINGS = Object.freeze({
     schemaVersion: 2,
     profileId: 'halo-default-v0.3.0',
+    profileRevision: 0,
     enabled: true,
     languageMode: 'both',
     channels: DEFAULT_CHANNELS,
@@ -101,6 +102,9 @@
       profileId: typeof raw.profileId === 'string' && raw.profileId.trim()
         ? raw.profileId.trim()
         : (raw.schemaVersion === 2 ? DEFAULT_SETTINGS.profileId : 'migrated-v0.1-v0.2'),
+      profileRevision: Number.isSafeInteger(raw.profileRevision) && raw.profileRevision >= 0
+        ? raw.profileRevision
+        : DEFAULT_SETTINGS.profileRevision,
       enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_SETTINGS.enabled,
       languageMode: LANGUAGE_MODES.has(rawLanguage) ? rawLanguage : DEFAULT_SETTINGS.languageMode,
       channels: Object.freeze(channels),

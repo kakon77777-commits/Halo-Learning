@@ -105,8 +105,10 @@
     const AbortControllerClass = settings.AbortController || root.AbortController;
     const processBatch = typeof settings.processBatch === 'function' ? settings.processBatch : async (batch) => batch;
     const onError = typeof settings.onError === 'function' ? settings.onError : () => {};
+    const onQuarantine = typeof settings.onQuarantine === 'function' ? settings.onQuarantine : () => {};
     const idleTimeout = boundedInteger(settings.idleTimeoutMs, Math.max(32, budgets.timeSliceMs * 4), budgets.timeSliceMs, 1000);
     const queue = [];
+    const quarantinedWork = [];
     const inFlight = new Map();
     const waiters = new Set();
     let sequence = 0;
@@ -145,11 +147,56 @@
       return [...new Set(queue.map((item) => item.rootId))];
     }
 
+    function queuedRootSummaries() {
+      const values = new Map();
+      for (const item of queue) {
+        const current = values.get(item.rootId);
+        if (!current) {
+          values.set(item.rootId, {
+            rootId: item.rootId,
+            priority: item.priority,
+            visible: item.visible,
+            stale: item.stale,
+            sequence: item.sequence
+          });
+          continue;
+        }
+        if (PRIORITY[item.priority] > PRIORITY[current.priority]) current.priority = item.priority;
+        current.visible = current.visible || item.visible;
+        current.stale = current.stale && item.stale;
+        current.sequence = Math.min(current.sequence, item.sequence);
+      }
+      return [...values.values()];
+    }
+
+    function oversizedDimensions(item) {
+      const dimensions = [];
+      if (item.textNodes > budgets.maxTextNodes) dimensions.push('maxTextNodes');
+      if (item.characters > budgets.maxCharacters) dimensions.push('maxCharacters');
+      if (item.sentences > budgets.maxSentences) dimensions.push('maxSentences');
+      if (item.semanticTokens > budgets.maxSemanticTokens) dimensions.push('maxSemanticTokens');
+      if (item.shardIds.size > budgets.maxShardIds) dimensions.push('maxShardIds');
+      return dimensions;
+    }
+
     function enqueueOne(raw) {
       const item = normalizeWork(raw, ++sequence);
+      const dimensions = oversizedDimensions(item);
+      if (dimensions.length) {
+        const outcome = Object.freeze({
+          id: item.id,
+          rootId: item.rootId,
+          reason: 'WORK_EXCEEDS_BUDGET',
+          dimensions: Object.freeze(dimensions)
+        });
+        if (quarantinedWork.length >= budgets.maxQueuedRoots) quarantinedWork.shift();
+        quarantinedWork.push(outcome);
+        onQuarantine(outcome);
+        return false;
+      }
       const existingRoot = queue.some((value) => value.rootId === item.rootId);
       if (!existingRoot && queuedRootIds().length >= budgets.maxQueuedRoots) {
-        const candidate = [...queue].sort(evictionOrder).find((value) => canEvict(value, item));
+        const candidate = queuedRootSummaries().sort(evictionOrder).find((value) => canEvict(value, item));
         if (!candidate) {
           droppedRoots += 1;
           return false;
@@ -182,12 +229,6 @@
       return shards.size <= budgets.maxShardIds;
     }
 
-    function oversized(item) {
-      return item.textNodes > budgets.maxTextNodes || item.characters > budgets.maxCharacters ||
-        item.sentences > budgets.maxSentences || item.semanticTokens > budgets.maxSemanticTokens ||
-        item.shardIds.size > budgets.maxShardIds;
-    }
-
     async function nextBatch() {
       const batch = {
         id: `batch-${++batchSequence}`,
@@ -202,11 +243,6 @@
       const ordered = [...queue].sort(priorityOrder);
       for (const item of ordered) {
         if (batch.items.length && now() - startedAt >= budgets.timeSliceMs) break;
-        if (oversized(item)) {
-          queue.splice(queue.indexOf(item), 1);
-          droppedRoots += 1;
-          continue;
-        }
         if (!fits(batch, item)) continue;
         queue.splice(queue.indexOf(item), 1);
         batch.items.push(item);
@@ -235,7 +271,7 @@
         if (batch.items.length) {
           if (typeof AbortControllerClass !== 'function') throw new Error('AbortController is unavailable');
           const controller = new AbortControllerClass();
-          inFlight.set(batch.id, { batch, controller });
+          inFlight.set(batch.id, { batch, controller, cancelledItemIds: new Set() });
           try {
             await processBatch(batch, { signal: controller.signal });
             completedBatches += 1;
@@ -290,6 +326,7 @@
     function cancelBatch(batchId) {
       const active = inFlight.get(String(batchId));
       if (!active) return false;
+      for (const item of active.batch.items) active.cancelledItemIds.add(item.id);
       active.controller.abort();
       return true;
     }
@@ -302,12 +339,14 @@
         queue.splice(index, 1);
       }
       for (const active of inFlight.values()) {
-        const cancelledItems = active.batch.items.filter(predicate);
+        const cancelledItems = active.batch.items.filter((item) =>
+          !active.cancelledItemIds.has(item.id) && predicate(item));
         if (!cancelledItems.length) continue;
+        for (const item of cancelledItems) active.cancelledItemIds.add(item.id);
         active.controller.abort();
         for (const item of cancelledItems) cancelledIds.add(item.rootId);
         for (const item of active.batch.items) {
-          if (predicate(item) || queue.some((queued) => queued.id === item.id)) continue;
+          if (active.cancelledItemIds.has(item.id) || queue.some((queued) => queued.id === item.id)) continue;
           enqueueOne(item);
         }
       }
@@ -347,7 +386,8 @@
         droppedRoots,
         cancelledRoots,
         completedBatches,
-        failedBatches
+        failedBatches,
+        oversizedWork: Object.freeze([...quarantinedWork])
       });
     }
 

@@ -78,6 +78,7 @@ test('content renderer source defines reversible handlers, safety skips, and bud
   assert.match(source, /HALO_ENRICH_BATCH/);
   assert.match(source, /annotationSet/);
   assert.doesNotMatch(source, /settings\.maxTextNodes|settings\.maxMarkedTokens/);
+  assert.doesNotMatch(source, /lastAnnotationSets/);
   assert.match(source, /async function applyMarking/);
   assert.match(source, /return true/);
   assert.match(source, /textContent/);
@@ -130,7 +131,8 @@ test('popup exposes bilingual basic controls and injects only packaged local fil
 test('executable extension source contains no remote script or API dependency', () => {
   const sourceFiles = [
     'src/popup.js', 'src/content.js', 'src/shared/linguistics.js',
-    'src/shared/projection.js', 'src/shared/settings.js', 'src/shared/dictionary-provider.js'
+    'src/shared/projection.js', 'src/shared/settings.js', 'src/shared/dictionary-provider.js',
+    'src/shared/runtime-scheduler.js', 'src/shared/semantic-contracts.js'
   ];
   const combined = sourceFiles.map((rel) => fs.readFileSync(path.join(extensionRoot, rel), 'utf8')).join('\n');
   assert.doesNotMatch(combined, /https?:\/\//i);
