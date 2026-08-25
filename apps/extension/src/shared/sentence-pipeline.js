@@ -52,6 +52,12 @@
       normalizedAttribute(element, 'data-halo-owner') === 'halo-learning';
   }
 
+  function isRemappableHaloToken(element, options) {
+    if (!options.includeHaloOwnedTokens) return false;
+    return normalizedAttribute(element, 'data-halo-owned') === 'token' ||
+      normalizedAttribute(element, 'data-halo-token') === '1';
+  }
+
   function isEditable(element) {
     const editable = normalizedAttribute(element, 'contenteditable');
     return editable !== null && editable !== 'false';
@@ -127,7 +133,7 @@
     if (tagName === 'NAV' || normalizedAttribute(element, 'role') === 'navigation') return true;
     if (normalizedAttribute(element, 'role') === 'textbox') return true;
     if (structurallyHidden || hasAttribute(element, 'inert')) return true;
-    if (isEditable(element) || isHaloOwned(element)) return true;
+    if (isEditable(element) || (isHaloOwned(element) && !isRemappableHaloToken(element, options))) return true;
     if (elementHasSensitiveMarker(element)) return true;
     if ((tagName === 'FORM' || normalizedAttribute(element, 'role') === 'form') &&
         subtreeHasSensitiveMarker(element, sensitiveCache)) return true;

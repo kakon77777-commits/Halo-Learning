@@ -9,9 +9,9 @@
     const element = node && node.nodeType === 1 ? node : node && (node.parentElement || node.parentNode);
     if (!element) return false;
     if (element.owned === true) return true;
-    if (element.dataset && (element.dataset.haloToken === '1' || element.dataset.haloOwned === '1')) return true;
+    if (element.dataset && ['token', 'panel'].includes(element.dataset.haloOwned)) return true;
     return typeof element.closest === 'function' &&
-      Boolean(element.closest('[data-halo-token="1"], [data-halo-owned="1"]'));
+      Boolean(element.closest('[data-halo-owned="token"], [data-halo-owned="panel"]'));
   }
 
   function elementFor(node, fallback) {

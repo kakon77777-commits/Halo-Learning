@@ -297,6 +297,23 @@ test('TextRun extraction filters unsuitable and sensitive subtrees before readin
   assert.deepEqual(runs.map((run) => [run.nodeId, run.text]), [['approved', 'Approved text.']]);
 });
 
+test('renderer remapping may include owned token text without admitting owned panel text', () => {
+  const root = fixtureRoot([
+    text('The ', 'lead'),
+    element('span', { 'data-halo-owned': 'token' }, [text('model', 'owned-token')]),
+    text(' learns.', 'tail'),
+    element('div', { 'data-halo-owned': 'panel' }, [text('Panel detail', 'owned-panel')])
+  ]);
+
+  assert.deepEqual(
+    Pipeline.createTextRuns(root, {
+      getNodeId: (node) => node._id,
+      includeHaloOwnedTokens: true
+    }).map((run) => [run.nodeId, run.text]),
+    [['lead', 'The '], ['owned-token', 'model'], ['tail', ' learns.']]
+  );
+});
+
 test('sensitive-name filtering is scoped to form regions and preserves educational prose', () => {
   const root = fixtureRoot([
     element('p', { id: 'password-guide' }, [text('Use a password manager.', 'guide')], { display: 'block' })

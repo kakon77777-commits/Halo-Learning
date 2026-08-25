@@ -6,6 +6,7 @@ const path = require('node:path');
 const extensionRoot = path.join(__dirname, '..', 'apps', 'extension');
 const contentPath = path.join(extensionRoot, 'src', 'content.js');
 const cssPath = path.join(extensionRoot, 'src', 'content.css');
+const rendererPath = path.join(extensionRoot, 'src', 'shared', 'reversible-renderer.js');
 
 function loadContent() {
   return require(contentPath);
@@ -63,13 +64,20 @@ test('content-service failure fallback uses the conservative semantic engine ins
   assert.equal(sets[0].diagnostics.fallbackActivated, true);
 });
 
-test('content renderer source defines reversible handlers, safety skips, and budgets', () => {
+test('content delegates reversible DOM ownership to the versioned renderer boundary', () => {
   const source = fs.readFileSync(contentPath, 'utf8');
+  const renderer = fs.readFileSync(rendererPath, 'utf8');
   assert.match(source, /HALO_APPLY_MARKING/);
   assert.match(source, /HALO_REMOVE_MARKING/);
   assert.match(source, /HALO_STATUS/);
-  assert.match(source, /data-halo-token/);
-  assert.match(source, /haloOriginal/);
+  assert.match(source, /HaloReversibleRenderer/);
+  assert.match(source, /createReversibleRenderer/);
+  assert.doesNotMatch(source, /function spanFor|function replaceTextNode|function removeRenderedDom/);
+  assert.match(renderer, /data-halo-owned/);
+  assert.match(renderer, /data-halo-original/);
+  assert.match(renderer, /createReversibleRenderer/);
+  assert.match(renderer, /createCorePanel/);
+  assert.doesNotMatch(renderer, /innerHTML\s*=/);
   for (const tag of ['SCRIPT', 'STYLE', 'TEXTAREA', 'INPUT', 'CODE', 'PRE']) {
     assert.match(source, new RegExp(tag));
   }
@@ -81,7 +89,6 @@ test('content renderer source defines reversible handlers, safety skips, and bud
   assert.doesNotMatch(source, /lastAnnotationSets/);
   assert.match(source, /async function applyMarking/);
   assert.match(source, /return true/);
-  assert.match(source, /textContent/);
   assert.doesNotMatch(source, /innerHTML\s*=/);
 });
 
@@ -94,6 +101,8 @@ test('CSS uses POS pseudo labels and does not replace the visible word', () => {
   assert.match(css, /halo-pos-v/);
   assert.match(css, /content:\s*attr\(data-halo-meta\)/);
   assert.match(css, /halo-structure-chunk/);
+  assert.match(css, /halo-noncolor-marker/);
+  assert.match(css, /text-decoration-style:\s*dotted/);
 });
 
 test('Manifest V3 uses minimal click-scoped permissions and no host permissions', () => {
@@ -126,13 +135,20 @@ test('popup exposes bilingual basic controls and injects only packaged local fil
   assert.match(html, /value=["']zh-Hant["']/);
   assert.doesNotMatch(js, /fetch\s*\(/);
   assert.doesNotMatch(js, /XMLHttpRequest/);
+  const injection = js.match(/const INJECT_FILES = \[([\s\S]*?)\];/)[1];
+  assert.ok(injection.includes("'src/shared/reversible-renderer.js'"));
+  assert.ok(
+    injection.indexOf("'src/shared/reversible-renderer.js'") < injection.indexOf("'src/content.js'"),
+    'renderer must load before the content orchestrator'
+  );
 });
 
 test('executable extension source contains no remote script or API dependency', () => {
   const sourceFiles = [
     'src/popup.js', 'src/content.js', 'src/shared/linguistics.js',
     'src/shared/projection.js', 'src/shared/settings.js', 'src/shared/dictionary-provider.js',
-    'src/shared/runtime-scheduler.js', 'src/shared/semantic-contracts.js'
+    'src/shared/runtime-scheduler.js', 'src/shared/semantic-contracts.js',
+    'src/shared/reversible-renderer.js'
   ];
   const combined = sourceFiles.map((rel) => fs.readFileSync(path.join(extensionRoot, rel), 'utf8')).join('\n');
   assert.doesNotMatch(combined, /https?:\/\//i);

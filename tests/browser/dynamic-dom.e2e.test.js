@@ -21,6 +21,7 @@ const scripts = [
   'shared/sentence-pipeline.js',
   'shared/runtime-scheduler.js',
   'shared/dynamic-dom-controller.js',
+  'shared/reversible-renderer.js',
   'content.js'
 ].map(source);
 
@@ -131,7 +132,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           settings: HaloSettings.DEFAULT_SETTINGS
         }, {}, resolve));
       });
-      await page.waitForSelector('#initial [data-halo-token="1"]');
+      await page.waitForSelector('#initial [data-halo-owned="token"]');
 
       await page.evaluate(() => {
         const main = document.getElementById('content');
@@ -158,7 +159,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         }
         main.appendChild(feed);
       });
-      await page.waitForSelector('#inserted [data-halo-token="1"]');
+      await page.waitForSelector('#inserted [data-halo-owned="token"]');
 
       await page.evaluate(() => {
         const race = document.createElement('p');
@@ -175,13 +176,13 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         document.getElementById('race').textContent = 'Replacement wins before response.';
         __haloDynamic.resolvePending();
         await new Promise((resolve) => setTimeout(resolve, 20));
-        return document.querySelectorAll('#race [data-halo-token="1"]').length;
+        return document.querySelectorAll('#race [data-halo-owned="token"]').length;
       });
       assert.equal(staleProjection, 0, 'pending result cannot project onto replaced text');
-      await page.waitForSelector('#race [data-halo-token="1"]');
-      await page.waitForSelector('#lazy [data-halo-token="1"]');
+      await page.waitForSelector('#race [data-halo-owned="token"]');
+      await page.waitForSelector('#lazy [data-halo-owned="token"]');
       await page.waitForFunction(() =>
-        document.querySelectorAll('#feed > p [data-halo-token="1"]').length >= 3
+        document.querySelectorAll('#feed > p [data-halo-owned="token"]').length >= 3
       );
 
       await page.evaluate(() => {
@@ -189,7 +190,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       });
       await page.waitForFunction(() =>
         document.getElementById('initial').textContent === 'The replacement content renders.' &&
-        document.querySelector('#initial [data-halo-token="1"]')
+        document.querySelector('#initial [data-halo-owned="token"]')
       );
 
       await page.evaluate(() => {
@@ -199,31 +200,31 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         redraw.textContent = 'The framework redraw stays singular.';
         oldNode.replaceWith(redraw);
       });
-      await page.waitForSelector('#inserted [data-halo-token="1"]');
+      await page.waitForSelector('#inserted [data-halo-owned="token"]');
 
       await page.evaluate(() => {
         history.pushState({ route: 'push' }, '', '/route-push');
         document.getElementById('content').innerHTML = '<p id="spa-push">The history-first route starts.</p>';
       });
-      await page.waitForSelector('#spa-push [data-halo-token="1"]');
+      await page.waitForSelector('#spa-push [data-halo-owned="token"]');
 
       await page.evaluate(() => {
         document.getElementById('content').innerHTML = '<p id="spa-replace">The replaced route starts.</p>';
         history.replaceState({ route: 'replace' }, '', '/route-replace');
       });
-      await page.waitForSelector('#spa-replace [data-halo-token="1"]');
+      await page.waitForSelector('#spa-replace [data-halo-owned="token"]');
 
       await page.evaluate(() => {
         __haloDynamic.setPopMarkup('<p id="spa-pop">The popped route starts.</p>');
         history.back();
       });
-      await page.waitForSelector('#spa-pop [data-halo-token="1"]');
+      await page.waitForSelector('#spa-pop [data-halo-owned="token"]');
 
       await page.evaluate(() => {
         document.getElementById('content').innerHTML = '<p id="spa-hash">The hash route starts.</p>';
         location.hash = 'lesson';
       });
-      await page.waitForSelector('#spa-hash [data-halo-token="1"]');
+      await page.waitForSelector('#spa-hash [data-halo-owned="token"]');
       await page.waitForTimeout(400);
 
       const result = await page.evaluate(async () => {
@@ -235,7 +236,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           .filter((request) => request.pageEpoch === 2)
           .flatMap((request) => request.items.map((item) => item.text));
         const nestedWrappers = document.querySelectorAll(
-          '[data-halo-token="1"] [data-halo-token="1"]'
+          '[data-halo-owned="token"] [data-halo-owned="token"]'
         ).length;
         const listener = __haloDynamic.listeners[0];
         await new Promise((resolve) => listener({ type: 'HALO_REMOVE_MARKING' }, {}, resolve));
@@ -244,7 +245,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           epochs,
           epochTwoTexts,
           nestedWrappers,
-          wrappersAfterCleanup: document.querySelectorAll('[data-halo-token="1"]').length,
+          wrappersAfterCleanup: document.querySelectorAll('[data-halo-owned="token"]').length,
           historyRestored: history.pushState === __haloDynamic.originalPushState &&
             history.replaceState === __haloDynamic.originalReplaceState
         };

@@ -151,6 +151,20 @@ test('Halo-owned mutations never become article work', () => {
   assert.deepEqual(result.roots, []);
 });
 
+test('final token and panel ownership markers never become article work', () => {
+  for (const ownership of ['token', 'panel']) {
+    const owned = {
+      nodeType: 1,
+      dataset: { haloOwned: ownership },
+      parentElement: null,
+      closest: () => null
+    };
+    const result = Dynamic.classifyMutation(mutation({ target: owned, addedNodes: [owned] }));
+    assert.deepEqual(result.roots, [], ownership);
+    assert.equal(result.ignored, true, ownership);
+  }
+});
+
 test('coalescing keeps independent inserted roots and folds nested redraw records', () => {
   const article = element('article');
   const first = element('first', { parent: article });

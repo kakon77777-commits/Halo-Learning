@@ -669,6 +669,52 @@ test('same-element replacement invalidates pending root work before projection',
   assert.equal(Content.rootWorkIsCurrent(work, discovery), false);
 });
 
+test('external root invalidation identifies only exact renderer-owned roots for pre-remap cleanup', () => {
+  const wrapper = (ownership, rootId) => ({
+    getAttribute(name) {
+      if (name === 'data-halo-owned') return ownership;
+      if (name === 'data-halo-root') return rootId;
+      return null;
+    }
+  });
+  const affected = {
+    nodeType: 1,
+    matches: () => false,
+    querySelectorAll: () => [
+      wrapper('token', 'lesson:w0'),
+      wrapper('token', 'lesson:w1'),
+      wrapper('token', 'lesson:w0'),
+      wrapper('article-author', 'forged-root')
+    ]
+  };
+
+  assert.deepEqual(Content.rendererRootIdsWithin([affected]), ['lesson:w0', 'lesson:w1']);
+});
+
+test('external invalidation scans the canonical content root for wrappers beside a mutated sibling', () => {
+  const staleWrapper = {
+    getAttribute(name) {
+      if (name === 'data-halo-owned') return 'token';
+      if (name === 'data-halo-root') return 'lesson-root';
+      return null;
+    }
+  };
+  const paragraph = {
+    nodeType: 1,
+    matches: () => true,
+    querySelector: () => null,
+    querySelectorAll: () => [staleWrapper]
+  };
+  const mutatedSibling = {
+    nodeType: 1,
+    matches: () => false,
+    closest: () => paragraph,
+    querySelectorAll: () => []
+  };
+
+  assert.deepEqual(Content.rendererRootIdsWithin([mutatedSibling]), ['lesson-root']);
+});
+
 test('runtime teardown detaches first and attempts every cleanup stage after independent failures', () => {
   for (const failingStage of ['cancel-epoch', 'renderer-cleanup', 'discovery-disconnect']) {
     const calls = [];

@@ -14,6 +14,16 @@
     'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'td', 'th', 'dd', 'dt'
   ].join(',');
 
+  function canonicalContentRoot(element) {
+    if (!element || element.nodeType !== 1) return null;
+    const contentRoot = typeof element.matches === 'function' && element.matches(CONTENT_ROOT_SELECTOR)
+      ? element
+      : (typeof element.closest === 'function' ? element.closest(CONTENT_ROOT_SELECTOR) : null);
+    if (contentRoot && typeof contentRoot.querySelector === 'function' &&
+        contentRoot.querySelector(CONTENT_ROOT_SELECTOR)) return null;
+    return contentRoot;
+  }
+
   function normalizedViewportBuffer(value) {
     const number = Number(value);
     if (!Number.isFinite(number)) return 1200;
@@ -234,13 +244,7 @@
     let disconnected = false;
 
     function candidateRoot(element) {
-      if (!element || element.nodeType !== 1) return null;
-      const contentRoot = typeof element.matches === 'function' && element.matches(CONTENT_ROOT_SELECTOR)
-        ? element
-        : (typeof element.closest === 'function' ? element.closest(CONTENT_ROOT_SELECTOR) : null);
-      if (contentRoot && typeof contentRoot.querySelector === 'function' &&
-          contentRoot.querySelector(CONTENT_ROOT_SELECTOR)) return null;
-      return contentRoot;
+      return canonicalContentRoot(element);
     }
 
     function rootIdFor(element) {
@@ -539,10 +543,32 @@
   function shouldSkipElement(element) {
     if (!element || element.nodeType !== 1) return false;
     if (SKIP_TAGS.has(element.tagName)) return true;
-    if (element.closest('[data-halo-token="1"]')) return true;
+    if (element.closest('[data-halo-owned="token"], [data-halo-owned="panel"]')) return true;
     if (element.closest('[contenteditable="true"], [contenteditable=""], [role="textbox"]')) return true;
     if (element.closest('nav, [aria-hidden="true"]')) return true;
     return false;
+  }
+
+  function rendererRootIdsWithin(values) {
+    const rootIds = [];
+    const seen = new Set();
+    function consider(wrapper) {
+      if (!wrapper || typeof wrapper.getAttribute !== 'function' ||
+          wrapper.getAttribute('data-halo-owned') !== 'token') return;
+      const rootId = wrapper.getAttribute('data-halo-root');
+      if (typeof rootId !== 'string' || !rootId || seen.has(rootId)) return;
+      seen.add(rootId);
+      rootIds.push(rootId);
+    }
+    for (const value of Array.from(values || [])) {
+      const element = value && value.nodeType === 1 ? value : value && value.parentElement;
+      if (!element) continue;
+      const scanRoot = canonicalContentRoot(element) || element;
+      consider(scanRoot);
+      if (typeof scanRoot.querySelectorAll !== 'function') continue;
+      for (const wrapper of scanRoot.querySelectorAll('[data-halo-owned="token"]')) consider(wrapper);
+    }
+    return Object.freeze(rootIds);
   }
 
   function bootstrapAnnotationSets(texts, settings, Dictionary, Semantic, generatedAt) {
@@ -617,6 +643,7 @@
     let lastStatus = emptyStatus();
     let activeRuntime = null;
     let activeController = null;
+    let activeRenderer = null;
     let requestSequence = 0;
     let rendererOwnedNodes = null;
 
@@ -640,9 +667,9 @@
       const element = node && node.nodeType === 1 ? node : node && (node.parentElement || node.parentNode);
       if (!element) return false;
       if (rendererOwnedNodes && rendererOwnedNodes.has(element)) return true;
-      if (element.dataset && (element.dataset.haloToken === '1' || element.dataset.haloOwned === '1')) return true;
+      if (element.dataset && ['token', 'panel'].includes(element.dataset.haloOwned)) return true;
       return typeof element.closest === 'function' &&
-        Boolean(element.closest('[data-halo-token="1"], [data-halo-owned="1"]'));
+        Boolean(element.closest('[data-halo-owned="token"], [data-halo-owned="panel"]'));
     }
 
     function isVisible(element) {
@@ -651,8 +678,10 @@
       return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
     }
 
-    function eligibleTextNode(node) {
+    function eligibleTextNode(node, rendererRootId) {
       if (!node || !node.parentElement) return false;
+      const ownedToken = node.parentElement.closest('[data-halo-owned="token"]');
+      if (ownedToken) return ownedToken.getAttribute('data-halo-root') === rendererRootId;
       if (shouldSkipElement(node.parentElement)) return false;
       const text = node.nodeValue || '';
       if (!/[A-Za-z\p{Script=Han}]/u.test(text)) return false;
@@ -671,24 +700,15 @@
       ));
     }
 
-    function removeRenderedDom() {
-      const parents = new Set();
-      const markedNodes = Array.from(root.document.querySelectorAll('[data-halo-token="1"]'));
-      for (const span of markedNodes) {
-        const parent = span.parentNode;
-        if (!parent) continue;
-        parents.add(parent);
-        trackRendererNode(span);
-        parent.replaceChild(
-          trackRendererNode(root.document.createTextNode(span.dataset.haloOriginal || span.textContent || '')),
-          span
-        );
+    function ensureRenderer(Renderer) {
+      if (!activeRenderer) {
+        activeRenderer = Renderer.createReversibleRenderer({
+          document: root.document,
+          suppressMutations: (callback) => runRendererMutation(activeController, callback),
+          trackOwnedNode: trackRendererNode
+        });
       }
-      for (const parent of parents) {
-        if (typeof parent.normalize !== 'function') continue;
-        for (const child of Array.from(parent.childNodes || [])) trackRendererNode(child);
-        parent.normalize();
-      }
+      return activeRenderer;
     }
 
     function removeMarking() {
@@ -702,48 +722,10 @@
           activeRuntime.scheduler.cancelAll();
           activeRuntime = null;
         }
-        removeRenderedDom();
+        if (activeRenderer) activeRenderer.removeAll();
       }
       lastStatus = emptyStatus();
       return lastStatus;
-    }
-
-    function spanFor(segment) {
-      const span = root.document.createElement('span');
-      trackRendererNode(span);
-      span.dataset.haloToken = '1';
-      span.dataset.haloOriginal = segment.text;
-      if (segment.label) span.dataset.haloPos = segment.label;
-      if (segment.metaLabel) span.dataset.haloMeta = segment.metaLabel;
-      if (segment.glossHint) {
-        span.dataset.haloGloss = segment.glossHint;
-        span.title = segment.glossHint;
-      }
-      if (Number.isFinite(segment.confidence)) span.dataset.haloConfidence = String(segment.confidence);
-      span.className = 'halo-token';
-      if (segment.label) span.classList.add(`halo-label-${segment.labelPosition || 'top-right'}`);
-      if (segment.metaLabel) span.classList.add('halo-has-meta');
-      if (segment.colorClass) span.classList.add(segment.colorClass);
-      if (segment.chunkClass) span.classList.add(segment.chunkClass);
-      span.textContent = segment.text;
-      return span;
-    }
-
-    function replaceTextNode(node, segments) {
-      if (!segments.some((segment) => segment.marked)) return 0;
-      const fragment = root.document.createDocumentFragment();
-      let count = 0;
-      for (const segment of segments) {
-        if (segment.marked) {
-          fragment.appendChild(spanFor(segment));
-          count += 1;
-        } else if (segment.text) {
-          fragment.appendChild(trackRendererNode(root.document.createTextNode(segment.text)));
-        }
-      }
-      trackRendererNode(node);
-      node.parentNode.replaceChild(fragment, node);
-      return count;
     }
 
     async function requestEnrichment(batch, context, modules, settings, epoch, lexicalVersion) {
@@ -784,17 +766,26 @@
     }
 
     function renderBatch(batch, results, modules, settings) {
-      const byItemId = new Map(results.results.map((result) => [result.rootId, result.annotationSet]));
-      const plansByNode = new Map();
+      const byItemId = new Map(results.results.map((result) => [result.rootId, result]));
       let semanticTokens = 0;
+      let markedTokens = 0;
       for (const work of batch.items) {
         const payload = work.payload;
         if (!rootWorkIsCurrent(work, activeRuntime && activeRuntime.discovery)) continue;
-        const runs = modules.Pipeline.createTextRuns(payload.element, { rootRevision: payload.rootRevision });
+        const runs = modules.Pipeline.createTextRuns(payload.element, {
+          rootRevision: payload.rootRevision,
+          includeHaloOwnedTokens: true
+        });
+        const renderFragments = [];
+        const analysisKeys = [];
+        let runId = null;
         for (let index = 0; index < payload.records.length; index += 1) {
           const record = payload.records[index];
-          const annotationSet = byItemId.get(`${work.id}:s${index}`);
-          if (!annotationSet || !Array.isArray(annotationSet.tokens)) continue;
+          const semanticResult = byItemId.get(`${work.id}:s${index}`);
+          const annotationSet = semanticResult && semanticResult.annotationSet;
+          if (!semanticResult || !annotationSet || !Array.isArray(annotationSet.tokens)) continue;
+          analysisKeys.push(semanticResult.analysisKey);
+          runId = semanticResult.requestId;
           semanticTokens += annotationSet.tokens.length;
           const plan = modules.Projection.createMarkingPlan(annotationSet.tokens, settings);
           for (const item of plan) {
@@ -804,28 +795,37 @@
               record.start + item.start,
               record.start + item.end
             );
-            for (const fragment of fragments) {
-              if (!fragment.node || !eligibleTextNode(fragment.node)) continue;
-              if (!plansByNode.has(fragment.node)) plansByNode.set(fragment.node, []);
-              plansByNode.get(fragment.node).push({
-                ...item,
+            for (let fragmentIndex = 0; fragmentIndex < fragments.length; fragmentIndex += 1) {
+              const fragment = fragments[fragmentIndex];
+              if (!fragment.node || !eligibleTextNode(fragment.node, work.id)) continue;
+              renderFragments.push({
+                node: fragment.node,
+                nodeId: fragment.nodeId,
                 text: fragment.node.nodeValue.slice(fragment.start, fragment.end),
                 start: fragment.start,
-                end: fragment.end
+                end: fragment.end,
+                boundaryKey: `${record.start + item.start}:${record.start + item.end}:${fragmentIndex}`,
+                renderPlan: item
               });
             }
           }
         }
-      }
-      let markedTokens = 0;
-      const render = () => {
-        for (const [node, plan] of plansByNode) {
-          if (!node.parentNode) continue;
-          markedTokens += replaceTextNode(node, buildSegments(node.nodeValue || '', plan));
+        if (renderFragments.length) {
+          const analysisKey = analysisKeys.length === 1
+            ? analysisKeys[0]
+            : `${analysisKeys[0]}:${analysisKeys.length}`;
+          const rendered = modules.Renderer.apply({
+            schemaVersion: modules.RendererSchemaVersion,
+            runId: `${runId}:${work.id}`,
+            rootId: work.id,
+            rootRevision: payload.rootRevision,
+            analysisKey,
+            root: payload.element,
+            fragments: renderFragments
+          });
+          if (rendered.action !== 'duplicate') markedTokens += rendered.wrappers;
         }
-      };
-      if (activeController) runRendererMutation(activeController, render);
-      else render();
+      }
       return Object.freeze({
         semanticTokens,
         markedTokens
@@ -841,13 +841,24 @@
       const Progressive = root.HaloProgressiveRuntime;
       const RuntimeScheduler = root.HaloRuntimeScheduler;
       const Contracts = root.HaloSemanticContracts;
+      const Renderer = root.HaloReversibleRenderer;
       if (isSensitivePage()) {
         lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'SENSITIVE_PAGE_BLOCKED' });
         return lastStatus;
       }
       const provider = Dictionary.createBootstrapDictionaryProvider();
       const lexicalVersion = `${provider.id}@${provider.version}`;
-      const modules = { Semantic, Grammar, Projection, Pipeline, Progressive, Contracts };
+      const renderer = ensureRenderer(Renderer);
+      const modules = {
+        Semantic,
+        Grammar,
+        Projection,
+        Pipeline,
+        Progressive,
+        Contracts,
+        Renderer: renderer,
+        RendererSchemaVersion: Renderer.RENDER_REQUEST_SCHEMA_VERSION
+      };
       const scheduler = RuntimeScheduler.createRuntimeScheduler({
         budgets: settings.runtimeBudgets,
         processBatch: async (batch, context) => {
@@ -916,8 +927,9 @@
         const RuntimeScheduler = root.HaloRuntimeScheduler;
         const Contracts = root.HaloSemanticContracts;
         const DynamicDom = root.HaloDynamicDomController;
+        const Renderer = root.HaloReversibleRenderer;
         if (!Settings || !Dictionary || !Semantic || !Grammar || !Projection || !Pipeline ||
-            !Progressive || !RuntimeScheduler || !Contracts || !DynamicDom) {
+            !Progressive || !RuntimeScheduler || !Contracts || !DynamicDom || !Renderer) {
           throw new Error('Halo shared modules are not loaded');
         }
         const settings = Settings.normalizeSettings(rawSettings);
@@ -931,6 +943,9 @@
           isHaloOwned: isRendererOwned,
           onRootsInvalidated: (roots, metadata) => {
             if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
+            if (activeRenderer) {
+              for (const rootId of rendererRootIdsWithin(roots)) activeRenderer.removeRoot(rootId);
+            }
             activeRuntime.discovery.releaseRoots(metadata.removedRoots);
             activeRuntime.discovery.invalidateRoots(roots);
           },
@@ -947,7 +962,7 @@
                 if (activeRuntime === runtime) activeRuntime = null;
               },
               suppressRendererMutations: (callback) => runRendererMutation(controller, callback),
-              rendererCleanup: removeRenderedDom,
+              rendererCleanup: () => activeRenderer && activeRenderer.removeAll(),
               onError: () => {
                 cleanupFailed = true;
                 lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
@@ -1000,6 +1015,7 @@
     buildEnrichmentItems,
     validateEnrichmentResponse,
     rootWorkIsCurrent,
+    rendererRootIdsWithin,
     cleanupRuntime,
     buildRootWork,
     createViewportDiscovery

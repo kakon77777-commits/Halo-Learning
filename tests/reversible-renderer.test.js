@@ -1,0 +1,578 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const Renderer = require('../apps/extension/src/shared/reversible-renderer');
+
+class FakeNode {
+  constructor(nodeType, ownerDocument) {
+    this.nodeType = nodeType;
+    this.ownerDocument = ownerDocument || null;
+    this.parentNode = null;
+    this.childNodes = [];
+  }
+
+  get parentElement() {
+    return this.parentNode && this.parentNode.nodeType === 1 ? this.parentNode : null;
+  }
+
+  get isConnected() {
+    for (let current = this; current; current = current.parentNode) {
+      if (current.nodeType === 9) return true;
+    }
+    return false;
+  }
+
+  get textContent() {
+    return this.childNodes.map((child) => child.textContent).join('');
+  }
+
+  set textContent(value) {
+    for (const child of this.childNodes) child.parentNode = null;
+    this.childNodes = [];
+    const source = String(value);
+    if (source) this.appendChild(this.ownerDocument.createTextNode(source));
+  }
+
+  _insertAt(node, index) {
+    if (node.nodeType === 11 && !node.host) {
+      const children = [...node.childNodes];
+      for (const child of children) this._insertAt(child, index++);
+      return node;
+    }
+    if (node.parentNode) node.parentNode.removeChild(node);
+    node.parentNode = this;
+    node.ownerDocument = this.nodeType === 9 ? this : this.ownerDocument;
+    this.childNodes.splice(index, 0, node);
+    return node;
+  }
+
+  appendChild(node) {
+    return this._insertAt(node, this.childNodes.length);
+  }
+
+  append(...nodes) {
+    for (const node of nodes) this.appendChild(node);
+  }
+
+  insertBefore(node, reference) {
+    const index = reference === null ? this.childNodes.length : this.childNodes.indexOf(reference);
+    if (index < 0) throw new Error('reference is not a child');
+    return this._insertAt(node, index);
+  }
+
+  removeChild(node) {
+    const index = this.childNodes.indexOf(node);
+    if (index < 0) throw new Error('node is not a child');
+    this.childNodes.splice(index, 1);
+    node.parentNode = null;
+    return node;
+  }
+
+  replaceChild(next, previous) {
+    const index = this.childNodes.indexOf(previous);
+    if (index < 0) throw new Error('node is not a child');
+    this.removeChild(previous);
+    this._insertAt(next, index);
+    return previous;
+  }
+
+  replaceWith(...nodes) {
+    if (!this.parentNode) return;
+    const parent = this.parentNode;
+    let index = parent.childNodes.indexOf(this);
+    parent.removeChild(this);
+    for (const node of nodes) parent._insertAt(node, index++);
+  }
+
+  remove() {
+    if (this.parentNode) this.parentNode.removeChild(this);
+  }
+
+  contains(candidate) {
+    for (let current = candidate; current; current = current.parentNode) {
+      if (current === this) return true;
+    }
+    return false;
+  }
+
+  normalize() {
+    for (const child of [...this.childNodes]) {
+      if (child.nodeType !== 3) child.normalize();
+    }
+    for (let index = this.childNodes.length - 1; index >= 0; index -= 1) {
+      const child = this.childNodes[index];
+      if (child.nodeType === 3 && child.nodeValue === '') this.removeChild(child);
+    }
+    for (let index = this.childNodes.length - 1; index > 0; index -= 1) {
+      const child = this.childNodes[index];
+      const previous = this.childNodes[index - 1];
+      if (child.nodeType === 3 && previous.nodeType === 3) {
+        previous.nodeValue += child.nodeValue;
+        this.removeChild(child);
+      }
+    }
+  }
+
+  querySelectorAll(selector) {
+    const matches = [];
+    const visit = (node) => {
+      for (const child of node.childNodes) {
+        if (child.nodeType === 1 && child.matches(selector)) matches.push(child);
+        visit(child);
+      }
+    };
+    visit(this);
+    return matches;
+  }
+
+  querySelector(selector) {
+    return this.querySelectorAll(selector)[0] || null;
+  }
+}
+
+class FakeText extends FakeNode {
+  constructor(value, document) {
+    super(3, document);
+    this.nodeValue = String(value);
+  }
+
+  get textContent() {
+    return this.nodeValue;
+  }
+
+  set textContent(value) {
+    this.nodeValue = String(value);
+  }
+
+  splitText(offset) {
+    if (!Number.isInteger(offset) || offset < 0 || offset > this.nodeValue.length) {
+      throw new RangeError('invalid split offset');
+    }
+    const suffix = new FakeText(this.nodeValue.slice(offset), this.ownerDocument);
+    this.nodeValue = this.nodeValue.slice(0, offset);
+    if (this.parentNode) this.parentNode.insertBefore(suffix, this.parentNode.childNodes[this.parentNode.childNodes.indexOf(this) + 1] || null);
+    return suffix;
+  }
+}
+
+class FakeStyle {
+  constructor() {
+    this.priorities = new Map();
+  }
+
+  setProperty(name, value, priority = '') {
+    this[name] = String(value);
+    this.priorities.set(String(name), String(priority));
+  }
+
+  getPropertyValue(name) {
+    return this[name] || '';
+  }
+
+  getPropertyPriority(name) {
+    return this.priorities.get(String(name)) || '';
+  }
+}
+
+class FakeElement extends FakeNode {
+  constructor(tagName, document) {
+    super(1, document);
+    this.tagName = String(tagName).toUpperCase();
+    this.attributes = new Map();
+    this.style = new FakeStyle();
+    this.shadowRoot = null;
+  }
+
+  get className() {
+    return this.getAttribute('class') || '';
+  }
+
+  set className(value) {
+    this.setAttribute('class', value);
+  }
+
+  setAttribute(name, value) {
+    this.attributes.set(String(name).toLowerCase(), String(value));
+  }
+
+  getAttribute(name) {
+    return this.attributes.get(String(name).toLowerCase()) ?? null;
+  }
+
+  hasAttribute(name) {
+    return this.attributes.has(String(name).toLowerCase());
+  }
+
+  removeAttribute(name) {
+    this.attributes.delete(String(name).toLowerCase());
+  }
+
+  matches(selector) {
+    if (selector.startsWith('.')) return this.className.split(/\s+/).includes(selector.slice(1));
+    const attribute = /^\[([^=\]]+)(?:="([^"]*)")?\]$/.exec(selector);
+    if (attribute) {
+      return this.hasAttribute(attribute[1]) &&
+        (attribute[2] === undefined || this.getAttribute(attribute[1]) === attribute[2]);
+    }
+    return this.tagName.toLowerCase() === selector.toLowerCase();
+  }
+
+  attachShadow(options) {
+    assert.equal(options.mode, 'open');
+    this.shadowRoot = new FakeShadowRoot(this.ownerDocument, this);
+    return this.shadowRoot;
+  }
+
+  getBoundingClientRect() {
+    return { width: 320, height: 180, left: 0, top: 0, right: 320, bottom: 180 };
+  }
+}
+
+class FakeShadowRoot extends FakeNode {
+  constructor(document, host) {
+    super(11, document);
+    this.host = host;
+  }
+}
+
+class FakeDocumentFragment extends FakeNode {
+  constructor(document) {
+    super(11, document);
+  }
+}
+
+class FakeDocument extends FakeNode {
+  constructor() {
+    super(9, null);
+    this.ownerDocument = this;
+    this.defaultView = { innerWidth: 800, innerHeight: 600 };
+    this.documentElement = new FakeElement('html', this);
+    this.body = new FakeElement('body', this);
+    this.appendChild(this.documentElement);
+    this.documentElement.appendChild(this.body);
+  }
+
+  createElement(name) {
+    return new FakeElement(name, this);
+  }
+
+  createTextNode(value) {
+    return new FakeText(value, this);
+  }
+
+  createDocumentFragment() {
+    return new FakeDocumentFragment(this);
+  }
+}
+
+function fixture() {
+  const document = new FakeDocument();
+  const article = document.createElement('article');
+  const lead = document.createTextNode('The ');
+  const link = document.createElement('a');
+  link.setAttribute('href', '/model');
+  const model = document.createTextNode('model');
+  link.appendChild(model);
+  const emphasis = document.createElement('em');
+  const learns = document.createTextNode(' learns.');
+  emphasis.appendChild(learns);
+  article.append(lead, link, emphasis);
+  document.body.appendChild(article);
+  return { document, article, lead, link, model, emphasis, learns };
+}
+
+function request(root, settings) {
+  const values = settings || {};
+  return {
+    schemaVersion: 1,
+    runId: values.runId || 'run-1',
+    rootId: values.rootId || 'root-1',
+    rootRevision: values.rootRevision || 1,
+    analysisKey: values.analysisKey || 'analysis-1',
+    root,
+    fragments: values.fragments || []
+  };
+}
+
+function fragment(node, nodeId, start, end, projection) {
+  return {
+    node,
+    nodeId,
+    start,
+    end,
+    text: node.nodeValue.slice(start, end),
+    renderPlan: {
+      marked: true,
+      pos: 'n',
+      label: 'n',
+      colorClass: 'halo-pos-n',
+      labelPosition: 'top-right',
+      ...projection
+    }
+  };
+}
+
+function fragmentWithBoundary(node, nodeId, start, end, boundaryKey, projection) {
+  return { ...fragment(node, nodeId, start, end, projection), boundaryKey };
+}
+
+test('node-local operations sort from last offset to first', () => {
+  const operations = Renderer.planNodeOperations([
+    { nodeId: 'a', start: 0, end: 3 },
+    { nodeId: 'a', start: 4, end: 9 },
+    { nodeId: 'b', start: 0, end: 5 }
+  ]);
+
+  assert.deepEqual(operations.map((value) => [value.nodeId, value.start]), [
+    ['b', 0],
+    ['a', 4],
+    ['a', 0]
+  ]);
+});
+
+test('same root revision and analysis key is an idempotent no-op', () => {
+  const state = Renderer.createRenderState();
+  state.record({ rootId: 'r', rootRevision: 2, analysisKey: 'k', wrappers: 3 });
+
+  assert.equal(state.classify({ rootId: 'r', rootRevision: 2, analysisKey: 'k' }), 'duplicate');
+  assert.equal(state.classify({ rootId: 'r', rootRevision: 3, analysisKey: 'k' }), 'reconcile');
+});
+
+test('apply is exact, node-local, and preserves inline element identity', () => {
+  const dom = fixture();
+  let suppressionEpochs = 0;
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    suppressMutations(callback) {
+      suppressionEpochs += 1;
+      return callback();
+    }
+  });
+  const renderRequest = request(dom.article, {
+    fragments: [
+      fragment(dom.model, 'model-node', 0, 5),
+      fragment(dom.learns, 'learn-node', 1, 7, { pos: 'v', label: 'v', colorClass: 'halo-pos-v' })
+    ]
+  });
+
+  const first = renderer.apply(renderRequest);
+  const wrappers = dom.article.querySelectorAll('[data-halo-owned="token"]');
+  const wrapperIdentities = [...wrappers];
+  const second = renderer.apply(renderRequest);
+
+  assert.equal(first.action, 'applied');
+  assert.equal(second.action, 'duplicate');
+  assert.equal(suppressionEpochs, 1);
+  assert.equal(dom.article.textContent, 'The model learns.');
+  assert.equal(dom.link.parentNode, dom.article);
+  assert.equal(dom.emphasis.parentNode, dom.article);
+  assert.equal(dom.link.getAttribute('href'), '/model');
+  assert.deepEqual(dom.article.querySelectorAll('[data-halo-owned="token"]'), wrapperIdentities);
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"] [data-halo-owned="token"]').length, 0);
+  for (const wrapper of wrappers) {
+    assert.equal(wrapper.getAttribute('data-halo-run'), 'run-1');
+    assert.equal(wrapper.getAttribute('data-halo-root'), 'root-1');
+    assert.equal(wrapper.className.includes('halo-token'), true);
+    assert.ok(wrapper.getAttribute('data-halo-original'));
+    assert.ok(wrapper.getAttribute('data-halo-carrier'), 'a non-color carrier is retained');
+  }
+});
+
+test('remove unwraps only this renderer run and preserves page-authored lookalikes and third-party children', () => {
+  const dom = fixture();
+  const authored = dom.document.createElement('span');
+  authored.className = 'halo-token';
+  authored.setAttribute('data-halo-owned', 'article-author');
+  authored.textContent = ' Authored.';
+  dom.article.appendChild(authored);
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const owned = dom.article.querySelector('[data-halo-owned="token"]');
+  const thirdParty = dom.document.createElement('i');
+  thirdParty.textContent = '!';
+  owned.appendChild(thirdParty);
+
+  const result = renderer.removeRoot('root-1');
+
+  assert.equal(result.action, 'removed');
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"]').length, 0);
+  assert.equal(authored.parentNode, dom.article);
+  assert.equal(thirdParty.parentNode, dom.link);
+  assert.equal(dom.article.textContent, 'The model! learns. Authored.');
+  assert.equal(renderer.status().rootCount, 0);
+});
+
+test('apply remove apply and mutation apply remain reversible with bounded live-root state', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  renderer.removeRoot('root-1');
+  assert.equal(dom.article.textContent, 'The model learns.');
+
+  const restoredModel = dom.link.childNodes.find((node) => node.nodeType === 3);
+  renderer.apply(request(dom.article, {
+    runId: 'run-2',
+    analysisKey: 'analysis-2',
+    fragments: [fragment(restoredModel, 'model-node', 0, 5)]
+  }));
+  renderer.removeRoot('root-1');
+  dom.link.textContent = 'system';
+  renderer.apply(request(dom.article, {
+    runId: 'run-3',
+    rootRevision: 2,
+    analysisKey: 'analysis-3',
+    fragments: [fragment(dom.link.childNodes[0], 'model-node-v2', 0, 6, { label: 'n' })]
+  }));
+
+  assert.equal(dom.article.textContent, 'The system learns.');
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"]').length, 1);
+  assert.deepEqual(renderer.status().roots, [{
+    rootId: 'root-1',
+    rootRevision: 2,
+    analysisKey: 'analysis-3',
+    runId: 'run-3',
+    wrappers: 1
+  }]);
+  renderer.removeAll();
+  assert.equal(dom.article.textContent, 'The system learns.');
+  assert.equal(renderer.status().rootCount, 0);
+});
+
+test('same boundaries reconcile projection attributes in place', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const ownedText = wrapper.childNodes[0];
+
+  const result = renderer.reconcile(request(dom.article, {
+    runId: 'run-2',
+    analysisKey: 'analysis-2',
+    fragments: [fragment(ownedText, 'model-node', 0, 5, {
+      pos: 'v',
+      label: 'verb',
+      colorClass: 'halo-pos-v',
+      metaLabel: 'present'
+    })]
+  }));
+
+  assert.equal(result.action, 'updated');
+  assert.equal(dom.article.querySelector('[data-halo-owned="token"]'), wrapper);
+  assert.equal(wrapper.getAttribute('data-halo-run'), 'run-2');
+  assert.equal(wrapper.getAttribute('data-halo-pos'), 'verb');
+  assert.equal(wrapper.getAttribute('data-halo-meta'), 'present');
+  assert.equal(dom.article.textContent, 'The model learns.');
+});
+
+test('stable aggregate boundary identity permits in-place reconcile after local text splitting', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, {
+    fragments: [fragmentWithBoundary(dom.learns, 'learn-node', 1, 7, '10:16:learn-node')]
+  }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const ownedText = wrapper.childNodes[0];
+
+  const result = renderer.reconcile(request(dom.article, {
+    runId: 'run-2',
+    analysisKey: 'analysis-2',
+    fragments: [fragmentWithBoundary(ownedText, 'run-shifted-after-split', 0, 6, '10:16:learn-node', {
+      pos: 'v',
+      label: 'verb'
+    })]
+  }));
+
+  assert.equal(result.action, 'updated');
+  assert.equal(dom.article.querySelector('[data-halo-owned="token"]'), wrapper);
+  assert.equal(dom.article.textContent, 'The model learns.');
+});
+
+test('different boundaries rebuild once without moving containing elements', () => {
+  const dom = fixture();
+  let epochs = 0;
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    suppressMutations(callback) {
+      epochs += 1;
+      return callback();
+    }
+  });
+  renderer.apply(request(dom.article, {
+    fragments: [fragment(dom.learns, 'learn-node', 1, 7, { pos: 'v', label: 'v' })]
+  }));
+  const oldWrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const ownedText = oldWrapper.childNodes[0];
+
+  const result = renderer.reconcile(request(dom.article, {
+    runId: 'run-2',
+    analysisKey: 'analysis-2',
+    fragments: [fragment(ownedText, 'learn-node', 0, 5, { pos: 'v', label: 'verb' })]
+  }));
+
+  assert.equal(result.action, 'rebuilt');
+  assert.equal(epochs, 2, 'one apply epoch plus one complete reconcile epoch');
+  assert.equal(oldWrapper.parentNode, null);
+  assert.equal(dom.emphasis.parentNode, dom.article);
+  assert.equal(dom.article.textContent, 'The model learns.');
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"]').length, 1);
+  assert.equal(dom.article.querySelector('[data-halo-owned="token"]').textContent, 'learn');
+});
+
+test('request validation rejects stale versions, forged text, unsafe classes, and overlaps before mutation', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  const validFragment = fragment(dom.model, 'model-node', 0, 5);
+
+  assert.throws(() => renderer.apply({ ...request(dom.article, { fragments: [validFragment] }), schemaVersion: 2 }), /schemaVersion/);
+  assert.throws(() => renderer.apply(request(dom.article, {
+    fragments: [{ ...validFragment, text: 'forged' }]
+  })), /source text/);
+  assert.throws(() => renderer.apply(request(dom.article, {
+    fragments: [fragment(dom.model, 'model-node', 0, 5, { colorClass: 'page-owned-class' })]
+  })), /class/);
+  assert.throws(() => renderer.apply(request(dom.article, {
+    fragments: [
+      fragment(dom.model, 'model-node', 0, 4),
+      fragment(dom.model, 'model-node', 3, 5)
+    ]
+  })), /overlap/);
+  assert.equal(dom.article.textContent, 'The model learns.');
+});
+
+test('core panel uses an isolated dialog, literal text, fixed clamped positioning, and deterministic close status', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+
+  const opened = renderer.openPanel({
+    title: '<img src=x onerror=alert(1)>',
+    body: 'Literal <b>learning</b> detail',
+    status: 'Ready',
+    anchor: { x: 790, y: 590 }
+  });
+  const host = dom.document.body.querySelector('[data-halo-owned="panel"]');
+  const panel = host.shadowRoot.querySelector('[role="dialog"]');
+
+  assert.equal(opened.action, 'opened');
+  assert.equal(host.style.position, 'fixed');
+  assert.equal(panel.getAttribute('aria-modal'), 'false');
+  assert.equal(panel.getAttribute('aria-labelledby'), 'halo-panel-title');
+  for (const property of ['display', 'position', 'width', 'height', 'visibility']) {
+    assert.equal(host.style.getPropertyPriority(property), 'important', `${property} resists hostile page CSS`);
+  }
+  assert.equal(host.style.getPropertyValue('display'), 'block');
+  assert.equal(host.style.getPropertyValue('position'), 'fixed');
+  assert.equal(host.style.getPropertyValue('width'), '0px');
+  assert.equal(host.style.getPropertyValue('height'), '0px');
+  assert.equal(host.style.getPropertyValue('visibility'), 'visible');
+  assert.equal(host.shadowRoot.querySelector('#halo-panel-title'), null, 'the fake selector does not synthesize HTML from text');
+  assert.equal(panel.textContent, '<img src=x onerror=alert(1)>Literal <b>learning</b> detailReady');
+  assert.ok(Number.parseFloat(panel.style.left) >= 8 && Number.parseFloat(panel.style.left) <= 472);
+  assert.ok(Number.parseFloat(panel.style.top) >= 8 && Number.parseFloat(panel.style.top) <= 412);
+  assert.deepEqual(renderer.status().panel, { open: true, closeReason: null });
+
+  const closed = renderer.closePanel('route-cleanup');
+  assert.equal(closed.action, 'closed');
+  assert.equal(host.parentNode, null);
+  assert.deepEqual(renderer.status().panel, { open: false, closeReason: 'route-cleanup' });
+  assert.equal(renderer.closePanel('again').action, 'noop');
+});

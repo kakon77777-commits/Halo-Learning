@@ -12,6 +12,7 @@ const extensionRoot = path.join(repositoryRoot, 'apps', 'extension');
 const pipelinePath = path.join(extensionRoot, 'src', 'shared', 'sentence-pipeline.js');
 const linguisticsPath = path.join(extensionRoot, 'src', 'shared', 'linguistics.js');
 const schedulerPath = path.join(extensionRoot, 'src', 'shared', 'runtime-scheduler.js');
+const rendererPath = path.join(extensionRoot, 'src', 'shared', 'reversible-renderer.js');
 const contractsPath = path.join(extensionRoot, 'src', 'shared', 'semantic-contracts.js');
 const settingsPath = path.join(extensionRoot, 'src', 'shared', 'settings.js');
 const progressivePath = path.join(extensionRoot, 'src', 'shared', 'progressive-runtime.js');
@@ -233,7 +234,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
       });
       for (const scriptPath of [
         progressivePath, contractsPath, dictionaryPath, semanticPath, grammarPath, projectionPath,
-        settingsPath, pipelinePath, schedulerPath
+        settingsPath, pipelinePath, schedulerPath, rendererPath
       ]) {
         await page.addScriptTag({ path: scriptPath });
       }
@@ -359,7 +360,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
         return {
           result,
           requests: __haloFixture.semanticRequests.map((request) => request.items.map((item) => item.text)),
-          offscreenWrapped: Boolean(document.querySelector('#offscreen [data-halo-token="1"]'))
+          offscreenWrapped: Boolean(document.querySelector('#offscreen [data-halo-owned="token"]'))
         };
       });
 
@@ -375,7 +376,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
       await page.waitForFunction(() =>
         __haloFixture.semanticRequests.flatMap((request) => request.items).some((item) => item.text.includes('離線字典'))
       );
-      assert.equal(await page.locator('#offscreen [data-halo-token="1"]').count() > 0, true);
+      assert.equal(await page.locator('#offscreen [data-halo-owned="token"]').count() > 0, true);
 
       const longText = await page.locator('#long-root').textContent();
       await page.locator('#long-root').scrollIntoViewIfNeeded();
@@ -384,7 +385,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
           .filter((item) => item.rootId.startsWith('long-root:')).length >= 6
       );
       assert.equal(await page.locator('#long-root').textContent(), longText);
-      assert.equal(await page.locator('#long-root [data-halo-token="1"]').count() > 0, true);
+      assert.equal(await page.locator('#long-root [data-halo-owned="token"]').count() > 0, true);
       const schedulerBatches = await page.evaluate(() => __haloFixture.schedulerBatches.map((batch) => ({ ...batch })));
       assert.ok(schedulerBatches.length >= 4);
       for (const batch of schedulerBatches) {
@@ -401,7 +402,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
           .some((item) => item.text.includes('Reject stale'))
       );
       await page.waitForTimeout(100);
-      assert.equal(await page.locator('#invalid-root [data-halo-token="1"]').count(), 0);
+      assert.equal(await page.locator('#invalid-root [data-halo-owned="token"]').count(), 0);
 
       await page.locator('#invalid-batch').scrollIntoViewIfNeeded();
       await page.waitForFunction(() =>
@@ -409,7 +410,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
           .some((item) => item.text.includes('Reject batch version'))
       );
       await page.waitForTimeout(100);
-      assert.equal(await page.locator('#invalid-batch [data-halo-token="1"]').count(), 0);
+      assert.equal(await page.locator('#invalid-batch [data-halo-owned="token"]').count(), 0);
 
       await page.locator('#cancel-root').scrollIntoViewIfNeeded();
       await page.waitForFunction(() =>
@@ -426,7 +427,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
         (requestId) => __haloFixture.cancelRequests.includes(requestId),
         cancellableRequestId
       );
-      assert.equal(await page.locator('#cancel-root [data-halo-token="1"]').count(), 0);
+      assert.equal(await page.locator('#cancel-root [data-halo-owned="token"]').count(), 0);
     });
   } finally {
     if (context) await context.close();
