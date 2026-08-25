@@ -14,6 +14,7 @@
     'zh-Hant': Object.freeze({ id: 'fnv1a-first-code-point', version: '1.0.0' })
   });
   const EMPTY_RESULTS = Object.freeze([]);
+  const VERIFIED_MANIFESTS = new WeakSet();
 
   class BrowserShardError extends Error {
     constructor(code, message) {
@@ -119,17 +120,29 @@
       fail('MANIFEST_INVALID', 'Browser lexical manifest metadata is invalid');
     }
     const identities = new Set();
-    for (const descriptor of raw.shards) {
+    const paths = new Set();
+    const width = String(raw.bucketCount - 1).length;
+    for (const [descriptorIndex, descriptor] of raw.shards.entries()) {
+      const localeIndex = Math.floor(descriptorIndex / raw.bucketCount);
+      const expectedLocale = raw.locales[localeIndex];
+      const expectedBucket = descriptorIndex % raw.bucketCount;
+      const bucketText = String(expectedBucket).padStart(width, '0');
+      const expectedId = `${expectedLocale}-${bucketText}`;
+      const expectedPath = `shards/${expectedLocale}/${bucketText}.json`;
       if (!descriptor || typeof descriptor.id !== 'string' || !['en', 'zh-Hant'].includes(descriptor.locale) ||
           !Number.isInteger(descriptor.bucket) || descriptor.bucket < 0 || descriptor.bucket >= raw.bucketCount ||
-          typeof descriptor.path !== 'string' || !descriptor.path.startsWith(`shards/${descriptor.locale}/`) ||
+          descriptor.locale !== expectedLocale || descriptor.bucket !== expectedBucket ||
+          descriptor.id !== expectedId || descriptor.path !== expectedPath ||
           !Number.isInteger(descriptor.bytes) || descriptor.bytes < 1 || !validHash(descriptor.hash) ||
           !descriptor.rowCounts || !['lexical', 'morphology', 'glosses'].every((name) =>
             Number.isInteger(descriptor.rowCounts[name]) && descriptor.rowCounts[name] >= 0)) {
         fail('MANIFEST_INVALID', 'Browser lexical shard descriptor is invalid');
       }
-      if (identities.has(descriptor.id)) fail('MANIFEST_INVALID', 'Browser lexical shard ID is duplicated');
+      if (identities.has(descriptor.id) || paths.has(descriptor.path)) {
+        fail('MANIFEST_INVALID', 'Browser lexical shard descriptor is duplicated');
+      }
       identities.add(descriptor.id);
+      paths.add(descriptor.path);
     }
     assertCanonical('manifest shards', raw.shards, (left, right) =>
       compareUtf8(left.locale, right.locale) || left.bucket - right.bucket);
@@ -154,7 +167,9 @@
     if (await sha256Hex(canonicalJson(rootPayload), cryptoValue) !== payload.rootHash.value) {
       fail('MANIFEST_ROOT_MISMATCH', 'Browser lexical manifest root does not match');
     }
-    return deepFreeze({ ...payload, hash: { ...raw.hash } });
+    const manifest = deepFreeze({ ...payload, hash: { ...raw.hash } });
+    VERIFIED_MANIFESTS.add(manifest);
+    return manifest;
   }
 
   function datasetRef(manifest, datasetIndex, recordRef) {
@@ -297,6 +312,7 @@
   }
 
   async function loadBrowserLexicalShard(serialized, manifest, options) {
+    if (!VERIFIED_MANIFESTS.has(manifest)) throw new TypeError('manifest: must be verified');
     const raw = parseDocument(serialized, 'SHARD_INVALID_JSON', 'Browser lexical shard is not valid JSON');
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !validHash(raw.hash)) {
       fail('SHARD_INVALID_HASH', 'Browser lexical shard hash is malformed');
@@ -324,7 +340,7 @@
   function createBrowserLexicalRuntime(options) {
     const settings = options || {};
     const manifest = settings.manifest;
-    if (!manifest || manifest.manifestFormat !== MANIFEST_FORMAT) throw new TypeError('manifest: must be verified');
+    if (!VERIFIED_MANIFESTS.has(manifest)) throw new TypeError('manifest: must be verified');
     if (typeof settings.readText !== 'function') throw new TypeError('readText: must be a function');
     const maxResidentShards = settings.maxResidentShards === undefined ? 32 : settings.maxResidentShards;
     if (!Number.isInteger(maxResidentShards) || maxResidentShards < 1) {
@@ -355,8 +371,7 @@
       }
     }
 
-    function load(id, signal) {
-      if (signal && signal.aborted) return Promise.reject(new BrowserShardError('ABORTED', 'Shard load was aborted'));
+    function load(id) {
       if (resident.has(id)) {
         touch(id);
         return Promise.resolve(resident.get(id).shard);
@@ -365,13 +380,13 @@
       const descriptor = descriptors.get(id);
       if (!descriptor) return Promise.reject(new BrowserShardError('SHARD_NOT_DECLARED', 'Shard ID is absent from manifest'));
       const promise = Promise.resolve()
-        .then(() => settings.readText(descriptor.path, { signal }))
-        .then((serialized) => {
-          if (signal && signal.aborted) fail('ABORTED', 'Shard load was aborted');
-          return loadBrowserLexicalShard(serialized, manifest, { crypto: settings.crypto || root.crypto });
-        })
+        .then(() => settings.readText(descriptor.path))
+        .then((serialized) => loadBrowserLexicalShard(
+          serialized,
+          manifest,
+          { crypto: settings.crypto || root.crypto }
+        ))
         .then((shard) => {
-          if (signal && signal.aborted) fail('ABORTED', 'Shard load was aborted');
           resident.set(id, { shard, usedAt: now() });
           evict();
           return shard;
@@ -383,6 +398,26 @@
         .finally(() => pending.delete(id));
       pending.set(id, promise);
       return promise;
+    }
+
+    function waitForCaller(promise, signal) {
+      if (!signal) return promise;
+      if (signal.aborted) return Promise.reject(new BrowserShardError('ABORTED', 'Shard wait was aborted'));
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (callback, value) => {
+          if (settled) return;
+          settled = true;
+          signal.removeEventListener('abort', onAbort);
+          callback(value);
+        };
+        const onAbort = () => finish(reject, new BrowserShardError('ABORTED', 'Shard wait was aborted'));
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(
+          (value) => finish(resolve, value),
+          (error) => finish(reject, error)
+        );
+      });
     }
 
     function requiredShardIds(texts, languageMode) {
@@ -413,12 +448,23 @@
     function ensureShards(ids, loadOptions) {
       const signal = loadOptions && loadOptions.signal;
       if (!Array.isArray(ids)) return Promise.reject(new TypeError('ids: must be an array'));
-      return Promise.all([...new Set(ids)].map((id) => load(id, signal))).then((values) => Object.freeze(values));
+      const unique = [...new Set(ids)];
+      if (unique.length > maxResidentShards) {
+        return Promise.reject(new BrowserShardError(
+          'SHARD_SET_EXCEEDS_CACHE_LIMIT',
+          'Required shard set exceeds the resident cache limit'
+        ));
+      }
+      return Promise.all(unique.map((id) => waitForCaller(load(id), signal)))
+        .then((values) => Object.freeze(values));
     }
 
     function withPinnedShards(ids, callback) {
       if (!Array.isArray(ids) || typeof callback !== 'function') throw new TypeError('ids and callback are required');
       const unique = [...new Set(ids)];
+      if (unique.length > maxResidentShards) {
+        throw new BrowserShardError('SHARD_SET_EXCEEDS_CACHE_LIMIT', 'Pinned shard set exceeds the cache limit');
+      }
       const shards = unique.map((id) => {
         const value = resident.get(id);
         if (!value) throw new BrowserShardError('SHARD_NOT_RESIDENT', 'Required shard is not resident');

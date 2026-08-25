@@ -850,23 +850,56 @@ async function runShardComparison(options) {
 function verifyBrowserShardComparison(report) {
   requireProfile(report && report.schemaVersion === 1 &&
     report.comparisonFormat === 'BrowserLexicalShardComparison/v1', 'shard comparison format is unsupported');
+  requireProfile(typeof report.generatedAt === 'string' && !Number.isNaN(Date.parse(report.generatedAt)),
+    'shard comparison generatedAt is invalid');
   requireProfile(report.browser && report.browser.name === 'Chromium' &&
     typeof report.browser.version === 'string' && report.browser.version.includes('Chromium'),
   'actual Chromium version is required');
+  requireProfile(report.host && ['os', 'cpuClass', 'memoryClass'].every((name) =>
+    typeof report.host[name] === 'string' && Boolean(report.host[name])), 'host class evidence is incomplete');
+  requireProfile(report.fixture && report.fixture.id === 'bilingual-required-shards-v1' &&
+    typeof report.fixture.text === 'string' && Boolean(report.fixture.text) &&
+    report.fixture.languageMode === 'both', 'shard comparison fixture evidence is incomplete');
   requireProfile(Array.isArray(report.candidates) && report.candidates.length === 2 &&
     report.candidates[0].bucketCount === 64 && report.candidates[1].bucketCount === 128,
   'shard candidates must be ordered exactly 64,128');
   for (const candidate of report.candidates) {
+    const validHash = (value) => value && value.algorithm === 'sha256' && /^[a-f0-9]{64}$/.test(value.value || '');
+    requireProfile(validHash(candidate.manifestHash) && validHash(candidate.manifestRootHash),
+      'candidate manifest hashes are incomplete');
+    requireProfile(candidate.shardCount === candidate.bucketCount * 2,
+      'candidate shard count is inconsistent');
+    requireProfile(candidate.browserVersion === report.browser.version,
+      'candidate browser version is inconsistent');
+    requireProfile(candidate.sizes && ['manifestBytes', 'totalShardBytes', 'totalShardGzipBytes', 'maximumShardBytes']
+      .every((name) => Number.isInteger(candidate.sizes[name]) && candidate.sizes[name] > 0),
+    'candidate size evidence is incomplete');
     requireProfile(candidate.conditions && candidate.conditions.cold.browserContexts >= 5 &&
       candidate.conditions.cold.samples.length === candidate.conditions.cold.browserContexts,
     'candidate cold browser samples are incomplete');
+    requireProfile(candidate.conditions.cold.samples.every((sample, contextIndex) =>
+      sample.condition === 'cold' && sample.contextIndex === contextIndex &&
+      Number.isFinite(sample.durationMs) && sample.durationMs >= 0 &&
+      Number.isInteger(sample.requiredShardCount) && sample.requiredShardCount >= 0 &&
+      Number.isInteger(sample.residentShardCount) && sample.residentShardCount >= 0),
+    'candidate cold browser samples are incomplete');
     requireProfile(candidate.conditions.warm.annotationsPerContext >= 20 &&
       candidate.conditions.warm.samples.length === candidate.conditions.cold.browserContexts &&
-      candidate.conditions.warm.samples.every((sample) =>
-        sample.samplesMs.length >= candidate.conditions.warm.annotationsPerContext),
+      candidate.conditions.warm.samples.every((sample, contextIndex) =>
+        sample.condition === 'warm' && sample.contextIndex === contextIndex &&
+        sample.samplesMs.length >= candidate.conditions.warm.annotationsPerContext &&
+        sample.samplesMs.every((value) => Number.isFinite(value) && value >= 0)),
     'candidate warm browser samples are incomplete');
+    requireProfile(candidate.conditions.longTasks &&
+      candidate.conditions.longTasks.samples.length === candidate.conditions.cold.browserContexts &&
+      candidate.conditions.longTasks.samples.every((sample, contextIndex) =>
+        sample.condition === 'long-tasks' && sample.contextIndex === contextIndex &&
+        Array.isArray(sample.durationsMs) &&
+        sample.durationsMs.every((value) => Number.isFinite(value) && value >= 0)),
+    'candidate long-task browser samples are incomplete');
     const evaluated = evaluateShardCandidate(candidate);
     requireProfile(JSON.stringify(evaluated.measurements) === JSON.stringify(candidate.measurements) &&
+      JSON.stringify(candidate.budgets) === JSON.stringify(SHARD_COMPARISON_BUDGETS) &&
       JSON.stringify(evaluated.gates) === JSON.stringify(candidate.gates) &&
       evaluated.allBlockingPassed === candidate.allBlockingPassed,
     'candidate gates do not match raw browser samples');

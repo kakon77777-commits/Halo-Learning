@@ -8,6 +8,7 @@ const {
   BUILDER,
   buildBrowserLexicalArtifacts
 } = require('../packages/lexical-index/browser-lexical-shards');
+const { verifyBrowserShardComparison } = require('./profile-browser-runtime');
 
 const CANONICAL_BUILD_TIME = '2026-08-25T00:00:00.000Z';
 const DEFAULT_SELECTION_FILE = 'docs/validation/v0.4.0-browser-shard-comparison.json';
@@ -235,13 +236,31 @@ function parseCommandLine(args) {
   });
 }
 
-function selectedBucketCount(selectionFile) {
+function readSelectedComparison(selectionFile) {
   const evidence = JSON.parse(fs.readFileSync(selectionFile, 'utf8'));
+  verifyBrowserShardComparison(evidence);
   const value = evidence && evidence.selection && evidence.selection.selectedBucketCount;
-  if (![64, 128].includes(value)) {
+  if (evidence.selection.status !== 'selected' || ![64, 128].includes(value)) {
     throw new Error('comparison evidence has no benchmark-selected 64/128 bucket count');
   }
-  return value;
+  return evidence;
+}
+
+function selectedBucketCount(selectionFile) {
+  return readSelectedComparison(selectionFile).selection.selectedBucketCount;
+}
+
+function assertSelectedArtifactBinding(artifacts, evidence) {
+  const selected = evidence.selection.selectedBucketCount;
+  const candidate = evidence.candidates.find((value) => value.bucketCount === selected);
+  const sameHash = (left, right) => left && right &&
+    left.algorithm === right.algorithm && left.value === right.value;
+  if (!candidate || artifacts.manifest.bucketCount !== selected ||
+      !sameHash(candidate.manifestHash, artifacts.manifest.hash) ||
+      !sameHash(candidate.manifestRootHash, artifacts.manifest.rootHash)) {
+    throw new Error('selected comparison evidence does not match freshly rebuilt artifacts');
+  }
+  return true;
 }
 
 function buildTimeFromEnvironment(environment) {
@@ -256,8 +275,9 @@ function buildTimeFromEnvironment(environment) {
 function main(args, environment) {
   const command = parseCommandLine(args);
   const projectRoot = process.cwd();
-  const bucketCount = command.bucketCount || selectedBucketCount(command.selectionFile);
   const selected = Boolean(command.selectionFile);
+  const comparison = selected ? readSelectedComparison(command.selectionFile) : null;
+  const bucketCount = command.bucketCount || comparison.selection.selectedBucketCount;
   const artifacts = buildBrowserRuntimeArtifacts({
     englishDir: path.join(projectRoot, 'data/corpora/princeton-wordnet-3.0'),
     chineseDir: path.join(projectRoot, 'data/corpora/cc-cedict-v1-2026-08-24'),
@@ -265,6 +285,7 @@ function main(args, environment) {
     bucketCount,
     selectionStatus: selected ? 'selected-by-browser-comparison' : 'candidate-unselected'
   });
+  if (selected) assertSelectedArtifactBinding(artifacts, comparison);
   if (!selected) {
     publishCandidateTree(artifacts, { outputRoot: command.outputRoot, mode: command.mode });
   } else {
@@ -291,7 +312,9 @@ module.exports = Object.freeze({
   publishCandidateTree,
   publishSelectedTrees,
   parseCommandLine,
+  readSelectedComparison,
   selectedBucketCount,
+  assertSelectedArtifactBinding,
   buildTimeFromEnvironment,
   main
 });

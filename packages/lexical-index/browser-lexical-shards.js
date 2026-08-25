@@ -76,14 +76,20 @@ function normalizeDatasets(values) {
   if (!Array.isArray(values) || values.length === 0) {
     throw new TypeError('options.datasets: must be a non-empty array');
   }
-  const result = values.map((value, index) => {
+  const indexed = values.map((value, index) => {
     if (!value || typeof value.datasetId !== 'string' || !value.datasetId ||
         typeof value.version !== 'string' || !value.version || !LOCALES.includes(value.locale)) {
       throw new TypeError(`options.datasets[${index}]: has invalid identity`);
     }
-    return value;
-  }).sort((left, right) => compareUtf8(left.datasetId, right.datasetId) || compareUtf8(left.version, right.version));
-  return deepFreeze(result);
+    return { value, originalIndex: index };
+  }).sort((left, right) => compareUtf8(left.value.datasetId, right.value.datasetId) ||
+    compareUtf8(left.value.version, right.value.version));
+  const indexRemap = Array(values.length);
+  indexed.forEach((item, canonicalIndex) => { indexRemap[item.originalIndex] = canonicalIndex; });
+  return Object.freeze({
+    datasets: deepFreeze(indexed.map((item) => item.value)),
+    indexRemap: Object.freeze(indexRemap)
+  });
 }
 
 function cloneRow(value, length, path) {
@@ -101,7 +107,7 @@ function shardPath(locale, bucket, bucketCount) {
   return `shards/${locale}/${String(bucket).padStart(width, '0')}.json`;
 }
 
-function normalizeInputs(entryValues, options, bucketCount) {
+function normalizeInputs(entryValues, options, bucketCount, datasetIndexRemap) {
   if (!Array.isArray(entryValues)) throw new TypeError('entries: must be an array');
   const settings = options || {};
   const lexical = entryValues.map((entry, index) => {
@@ -110,6 +116,10 @@ function normalizeInputs(entryValues, options, bucketCount) {
     }
     const row = cloneRow(entry.row, entry.locale === 'en' ? 8 : 9, `entries[${index}].row`);
     if (typeof row[0] !== 'string' || !row[0]) throw new TypeError(`entries[${index}].row: surface is invalid`);
+    if (!Number.isInteger(row[7]) || datasetIndexRemap[row[7]] === undefined) {
+      throw new TypeError(`entries[${index}].row: dataset index is invalid`);
+    }
+    row[7] = datasetIndexRemap[row[7]];
     const bucket = entry.locale === 'en'
       ? routeEnglishSurface(row[0], bucketCount)
       : routeChineseSurface(row[0], bucketCount);
@@ -123,6 +133,10 @@ function normalizeInputs(entryValues, options, bucketCount) {
     if (typeof row[0] !== 'string' || !row[0]) {
       throw new TypeError(`options.morphologyRows[${index}]: inflected surface is invalid`);
     }
+    if (!Number.isInteger(row[3]) || datasetIndexRemap[row[3]] === undefined) {
+      throw new TypeError(`options.morphologyRows[${index}]: dataset index is invalid`);
+    }
+    row[3] = datasetIndexRemap[row[3]];
     return { bucket: routeEnglishSurface(row[0], bucketCount), row };
   });
   morphology.sort((left, right) => left.bucket - right.bucket || compareRows(left.row, right.row));
@@ -150,8 +164,9 @@ function buildBrowserLexicalArtifacts(entryValues, options) {
     throw new TypeError('options.builtAt: must be an ISO 8601 timestamp');
   }
   const sourceIndex = normalizeSourceIndex(settings.sourceIndex);
-  const datasets = normalizeDatasets(settings.datasets);
-  const { lexical, morphology } = normalizeInputs(entryValues, settings, bucketCount);
+  const datasetInfo = normalizeDatasets(settings.datasets);
+  const datasets = datasetInfo.datasets;
+  const { lexical, morphology } = normalizeInputs(entryValues, settings, bucketCount, datasetInfo.indexRemap);
   const rowCounts = {
     english: lexical.filter((entry) => entry.locale === 'en').length,
     traditionalChinese: lexical.filter((entry) => entry.locale === 'zh-Hant').length,

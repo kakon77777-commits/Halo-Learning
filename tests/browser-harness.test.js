@@ -76,6 +76,52 @@ test('comparison command fixes candidate order and routes evidence to the v0.4 s
   );
 });
 
+test('comparison verification requires candidate manifest hashes and a selected status', () => {
+  const { verifyBrowserShardComparison } = require('../scripts/profile-browser-runtime');
+  const base = {
+    schemaVersion: 1,
+    comparisonFormat: 'BrowserLexicalShardComparison/v1',
+    generatedAt: '2026-08-26T00:00:00.000Z',
+    browser: { name: 'Chromium', version: 'Chromium 140.0.0.0' },
+    host: { os: 'TestOS', cpuClass: 'test-cpu', memoryClass: 'test-memory' },
+    fixture: { id: 'bilingual-required-shards-v1', text: 'Models 學習', languageMode: 'both' },
+    candidates: [64, 128].map((bucketCount) => ({
+      bucketCount,
+      manifestHash: { algorithm: 'sha256', value: 'a'.repeat(64) },
+      manifestRootHash: { algorithm: 'sha256', value: 'b'.repeat(64) },
+      shardCount: bucketCount * 2,
+      sizes: { manifestBytes: 1, totalShardBytes: 2, totalShardGzipBytes: 1, maximumShardBytes: 1 },
+      browserVersion: 'Chromium 140.0.0.0',
+      conditions: {
+        cold: { browserContexts: 5, samples: Array.from({ length: 5 }, (_v, contextIndex) => ({
+          condition: 'cold', contextIndex, durationMs: 10, requiredShardCount: 1, residentShardCount: 1
+        })) },
+        warm: { annotationsPerContext: 20, samples: Array.from({ length: 5 }, (_v, contextIndex) => ({
+          condition: 'warm', contextIndex, samplesMs: Array(20).fill(1)
+        })) },
+        longTasks: { samples: Array.from({ length: 5 }, (_v, contextIndex) => ({
+          condition: 'long-tasks', contextIndex, durationsMs: []
+        })) }
+      },
+      measurements: { coldRequiredShardsP95Ms: 10, warmLookupP95Ms: 1, longTaskMaxMs: 0 },
+      budgets: { coldRequiredShardsP95Ms: 300, warmLookupP95Ms: 100, longTaskMaxMs: 50 },
+      gates: { coldRequiredShards: true, warmLookup: true, longTask: true },
+      allBlockingPassed: true
+    })),
+    selection: {
+      rule: '64 if both pass; 128 if only 128 passes; blocked if neither passes',
+      status: 'selected',
+      selectedBucketCount: 64
+    }
+  };
+  const missingHash = structuredClone(base);
+  delete missingHash.candidates[0].manifestHash;
+  assert.throws(() => verifyBrowserShardComparison(missingHash), /candidate manifest hashes/);
+  const wrongStatus = structuredClone(base);
+  wrongStatus.selection.status = 'blocked';
+  assert.throws(() => verifyBrowserShardComparison(wrongStatus), /fixed rule/);
+});
+
 test('fixture server uses loopback ephemeral URLs and explicit UTF-8 content types', async () => {
   const { withFixtureServer } = require('./browser/helpers/fixture-server');
   await withFixtureServer({

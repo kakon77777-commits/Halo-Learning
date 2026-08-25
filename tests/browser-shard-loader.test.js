@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const Shards = require('../packages/lexical-index/browser-lexical-shards');
 const BrowserLoader = require('../apps/extension/src/shared/runtime-shard-browser');
+const { canonicalJson, sha256Hex } = require('../packages/lexical-data/shared/build-utils');
 
 const ENTRIES = Object.freeze([
   Object.freeze({
@@ -56,6 +57,15 @@ async function runtimeFixture(options) {
   return { built, manifest, reads, runtime };
 }
 
+function rehashManifest(raw) {
+  const payload = { ...raw };
+  delete payload.hash;
+  return canonicalJson({
+    ...payload,
+    hash: { algorithm: 'sha256', value: sha256Hex(canonicalJson(payload)) }
+  });
+}
+
 test('a verified manifest routes and loads only the requested shard', async () => {
   const fixture = await runtimeFixture();
   const ids = fixture.runtime.requiredShardIds(['The model learns.'], 'en');
@@ -64,6 +74,34 @@ test('a verified manifest routes and loads only the requested shard', async () =
   assert.ok(fixture.reads.length > 0);
   assert.ok(fixture.reads.every((resourcePath) => resourcePath.includes('/en/')));
   assert.equal(fixture.runtime.status().residentCount, ids.length);
+});
+
+test('manifest validation requires the exact locale/bucket grid and canonical safe descriptor paths', async () => {
+  const mutations = [
+    (manifest) => {
+      manifest.shards[0] = {
+        ...manifest.shards[0], bucket: 1, id: 'en-extra', path: 'shards/en/extra.json'
+      };
+    },
+    (manifest) => { manifest.shards[0].id = 'en-wrong'; },
+    (manifest) => { manifest.shards[0].path = 'shards/en/../zh-Hant/00.json'; }
+  ];
+  for (const mutate of mutations) {
+    const raw = JSON.parse(artifacts().serializedManifest);
+    mutate(raw);
+    await assert.rejects(
+      () => BrowserLoader.loadBrowserLexicalManifest(rehashManifest(raw)),
+      { code: 'MANIFEST_INVALID' }
+    );
+  }
+});
+
+test('runtime creation rejects format-shaped manifests that did not cross the verified loader boundary', async () => {
+  const fixture = await runtimeFixture();
+  assert.throws(() => BrowserLoader.createBrowserLexicalRuntime({
+    manifest: { ...fixture.manifest },
+    readText: async () => ''
+  }), /manifest: must be verified/);
 });
 
 test('shard hash verification precedes schema validation and rejected promises are retriable', async () => {
@@ -114,6 +152,65 @@ test('pin acquisition is atomic when any requested shard is absent', async () =>
     { code: 'SHARD_NOT_RESIDENT' }
   );
   assert.equal(fixture.runtime.status().pinnedCount, 0);
+});
+
+test('oversized required shard sets fail before reads or partial cache churn', async () => {
+  const fixture = await runtimeFixture({ maxResidentShards: 1 });
+  const ids = fixture.manifest.shards.slice(0, 2).map((descriptor) => descriptor.id);
+
+  await assert.rejects(
+    () => fixture.runtime.ensureShards(ids),
+    { code: 'SHARD_SET_EXCEEDS_CACHE_LIMIT' }
+  );
+  assert.equal(fixture.reads.length, 0);
+  assert.equal(fixture.runtime.status().residentCount, 0);
+  assert.equal(fixture.runtime.status().pendingCount, 0);
+});
+
+test('deduplicated transport keeps each waiter cancellation independent', async () => {
+  const built = artifacts();
+  const manifest = await BrowserLoader.loadBrowserLexicalManifest(built.serializedManifest);
+  const descriptor = manifest.shards[0];
+  let reads = 0;
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const runtime = BrowserLoader.createBrowserLexicalRuntime({
+    manifest,
+    readText: async () => {
+      reads += 1;
+      await firstGate;
+      return built.serializedShards[descriptor.path];
+    }
+  });
+  const firstAbort = new AbortController();
+  const first = runtime.ensureShards([descriptor.id], { signal: firstAbort.signal });
+  const second = runtime.ensureShards([descriptor.id]);
+  firstAbort.abort();
+  releaseFirst();
+  await assert.rejects(() => first, { code: 'ABORTED' });
+  assert.equal((await second)[0].id, descriptor.id);
+  assert.equal(reads, 1);
+
+  runtime.clearMemoryCache();
+  let releaseSecond;
+  const secondGate = new Promise((resolve) => { releaseSecond = resolve; });
+  let secondReads = 0;
+  const laterRuntime = BrowserLoader.createBrowserLexicalRuntime({
+    manifest,
+    readText: async () => {
+      secondReads += 1;
+      await secondGate;
+      return built.serializedShards[descriptor.path];
+    }
+  });
+  const shared = laterRuntime.ensureShards([descriptor.id]);
+  const laterAbort = new AbortController();
+  const later = laterRuntime.ensureShards([descriptor.id], { signal: laterAbort.signal });
+  laterAbort.abort();
+  releaseSecond();
+  await assert.rejects(() => later, { code: 'ABORTED' });
+  assert.equal((await shared)[0].id, descriptor.id);
+  assert.equal(secondReads, 1);
 });
 
 test('unsupported language modes route no shards and status exposes no resource paths or content', async () => {
