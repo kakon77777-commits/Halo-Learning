@@ -537,10 +537,18 @@ sharded-dictionary-provider.js. HALO_ENRICH_BATCH validates:
     rootRevision: 1,
     text: 'The model learns.',
     languageMode: 'en',
-    analysisKey: 'stable hash'
+    semanticVersion: 'semantic-v3',
+    grammarVersion: 'grammar-v3',
+    profileRevision: 'profile-7',
+    lexicalVersion: 'manifest-root-1',
+    analysisKey: 'ak1:<64 lowercase hex characters>'
   }]
 }
 ~~~
+
+The worker recomputes each analysis key with the canonical
+`createAnalysisKey` implementation and rejects keys that are not bound to the
+item's text, language mode, and four version inputs.
 
 Enforce maximum 24 items, 12,000 total characters, 600 estimated tokens, and
 24 distinct shards. AbortController instances are keyed by sender tab and

@@ -1,5 +1,6 @@
 if (typeof importScripts === 'function') {
   importScripts(
+    'shared/progressive-runtime.js',
     'shared/runtime-shard-browser.js',
     'shared/dictionary-provider.js',
     'shared/sharded-dictionary-provider.js',
@@ -9,11 +10,14 @@ if (typeof importScripts === 'function') {
 }
 
 (function (root, factory) {
-  const api = factory(root);
+  const progressiveModule = typeof module === 'object' && module.exports
+    ? require('./shared/progressive-runtime')
+    : root.HaloProgressiveRuntime;
+  const api = factory(root, progressiveModule);
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.HaloSemanticService = api;
   if (!(typeof module === 'object' && module.exports)) api.initializeBrowser();
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (root) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (root, Progressive) {
   'use strict';
 
   const SCHEMA_VERSION = 1;
@@ -26,7 +30,10 @@ if (typeof importScripts === 'function') {
     distinctShards: 24
   });
   const LANGUAGE_MODES = new Set(['en', 'zh-Hant', 'both']);
-  const ANALYSIS_KEY_PATTERN = /^ak1:[a-f0-9]{64}$/;
+  if (!Progressive || typeof Progressive.createAnalysisKey !== 'function' ||
+      typeof Progressive.isAnalysisKey !== 'function') {
+    throw new Error('Canonical progressive analysis key module is unavailable');
+  }
 
   function deepFreeze(value) {
     if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -87,15 +94,35 @@ if (typeof importScripts === 'function') {
     if (!LANGUAGE_MODES.has(raw.languageMode)) {
       throw new TypeError(`items[${index}].languageMode: must be en, zh-Hant, or both`);
     }
-    if (typeof raw.analysisKey !== 'string' || !ANALYSIS_KEY_PATTERN.test(raw.analysisKey)) {
+    if (!Progressive.isAnalysisKey(raw.analysisKey)) {
       throw new TypeError(`items[${index}].analysisKey: must be a canonical analysis key`);
+    }
+    let analysisKey;
+    try {
+      analysisKey = Progressive.createAnalysisKey({
+        text: raw.text,
+        languageMode: raw.languageMode,
+        semanticVersion: raw.semanticVersion,
+        grammarVersion: raw.grammarVersion,
+        profileRevision: raw.profileRevision,
+        lexicalVersion: raw.lexicalVersion
+      });
+    } catch (_error) {
+      throw new TypeError(`items[${index}]: analysis key inputs are invalid`);
+    }
+    if (raw.analysisKey !== analysisKey) {
+      throw new TypeError(`items[${index}]: analysis key does not match its analysis inputs`);
     }
     return Object.freeze({
       rootId: raw.rootId,
       rootRevision: raw.rootRevision,
       text: raw.text,
       languageMode: raw.languageMode,
-      analysisKey: raw.analysisKey
+      semanticVersion: raw.semanticVersion,
+      grammarVersion: raw.grammarVersion,
+      profileRevision: raw.profileRevision,
+      lexicalVersion: raw.lexicalVersion,
+      analysisKey
     });
   }
 

@@ -117,16 +117,20 @@ function item(index, overrides) {
     rootRevision: 1,
     text: 'The model learns.',
     languageMode: 'en',
+    semanticVersion: 'semantic-v3',
+    grammarVersion: 'grammar-v3',
+    profileRevision: 'profile-7',
+    lexicalVersion: 'manifest-root-1',
     ...(overrides || {})
   };
   if (!value.analysisKey) {
     value.analysisKey = Progressive.createAnalysisKey({
       text: value.text,
       languageMode: value.languageMode,
-      semanticVersion: 'semantic-v3',
-      grammarVersion: 'grammar-v3',
-      profileRevision: 'profile-7',
-      lexicalVersion: 'manifest-root-1'
+      semanticVersion: value.semanticVersion,
+      grammarVersion: value.grammarVersion,
+      profileRevision: value.profileRevision,
+      lexicalVersion: value.lexicalVersion
     });
   }
   return value;
@@ -156,6 +160,10 @@ test('shard enrichment returns versioned lexical results and rejects the legacy 
   assert.equal(response.pageEpoch, 1);
   assert.equal(response.results.length, 1);
   assert.deepEqual(runtime.ensured, [['en-00']]);
+  assert.equal(
+    response.results[0].analysisKey,
+    'ak1:eff7d1990f48f139614b45eed178ed768277183780542cc8712f5afb58313858'
+  );
   assert.deepEqual(response.results[0], {
     schemaVersion: 1,
     requestId: 'request-1',
@@ -268,6 +276,35 @@ test('service boundary rejects stable-looking IDs that are not canonical analysi
   );
 });
 
+test('service boundary rejects a canonical key bound to different text before shard routing', () => {
+  let routes = 0;
+  const runtime = {
+    requiredShardIds() {
+      routes += 1;
+      return [];
+    }
+  };
+  const originalKey = item(1).analysisKey;
+
+  assert.throws(
+    () => ServiceWorker.validateEnrichmentRequest(message([
+      item(1, { text: 'Different text.', analysisKey: originalKey })
+    ]), runtime),
+    /analysis key.*match/i
+  );
+  assert.equal(routes, 0);
+});
+
+test('service boundary rejects a canonical key bound to a different semantic version', () => {
+  const originalKey = item(1).analysisKey;
+  assert.throws(
+    () => ServiceWorker.validateEnrichmentRequest(message([
+      item(1, { semanticVersion: 'semantic-v4', analysisKey: originalKey })
+    ]), fixtureRuntime()),
+    /analysis key.*match/i
+  );
+});
+
 test('cancellation is scoped by sender tab even when request IDs collide', async () => {
   const waiters = [];
   const runtime = fixtureRuntime({
@@ -306,6 +343,7 @@ test('MV3 worker source loads only candidate-independent local shard modules', (
   assert.equal(manifest.background.service_worker, 'src/service-worker.js');
   assert.equal(Object.hasOwn(manifest, 'host_permissions'), false);
   assert.match(serviceSource, /runtime-shard-browser\.js/);
+  assert.match(serviceSource, /progressive-runtime\.js/);
   assert.match(serviceSource, /sharded-dictionary-provider\.js/);
   assert.match(serviceSource, /withEnsuredShards/);
   assert.match(serviceSource, /data\/lexical-v0\.4\.0\/manifest\.json/);
