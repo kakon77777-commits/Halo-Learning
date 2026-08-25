@@ -448,6 +448,9 @@
     function ensureShards(ids, loadOptions) {
       const signal = loadOptions && loadOptions.signal;
       if (!Array.isArray(ids)) return Promise.reject(new TypeError('ids: must be an array'));
+      if (signal && signal.aborted) {
+        return Promise.reject(new BrowserShardError('ABORTED', 'Shard wait was aborted'));
+      }
       const unique = [...new Set(ids)];
       if (unique.length > maxResidentShards) {
         return Promise.reject(new BrowserShardError(

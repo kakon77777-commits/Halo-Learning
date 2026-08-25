@@ -213,6 +213,39 @@ test('deduplicated transport keeps each waiter cancellation independent', async 
   assert.equal(secondReads, 1);
 });
 
+test('a pre-aborted caller starts no transport and leaves no delayed cache or rejection side effects', async () => {
+  const built = artifacts();
+  const manifest = await BrowserLoader.loadBrowserLexicalManifest(built.serializedManifest);
+  const descriptor = manifest.shards[0];
+  const controller = new AbortController();
+  const unhandled = [];
+  let reads = 0;
+  const onUnhandled = (error) => { unhandled.push(error); };
+  const runtime = BrowserLoader.createBrowserLexicalRuntime({
+    manifest,
+    readText: async () => {
+      reads += 1;
+      throw new Error('pre-aborted transport must not start');
+    }
+  });
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    controller.abort();
+    await assert.rejects(
+      () => runtime.ensureShards([descriptor.id], { signal: controller.signal }),
+      { code: 'ABORTED' }
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads, 0);
+    assert.equal(runtime.status().pendingCount, 0);
+    assert.equal(runtime.status().residentCount, 0);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.removeListener('unhandledRejection', onUnhandled);
+  }
+});
+
 test('unsupported language modes route no shards and status exposes no resource paths or content', async () => {
   const fixture = await runtimeFixture();
   assert.deepEqual(fixture.runtime.requiredShardIds(['modèle 學習'], 'fr'), []);
