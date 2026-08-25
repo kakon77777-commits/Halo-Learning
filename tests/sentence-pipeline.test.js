@@ -55,6 +55,7 @@ function fixtureRoot(children) {
         return {
           display: node._style?.display || 'inline',
           visibility: node._style?.visibility || 'visible',
+          contentVisibility: node._style?.contentVisibility || 'visible',
           opacity: node._style?.opacity ?? '1'
         };
       }
@@ -74,6 +75,51 @@ function publicRun(run) {
     boundaryBefore: run.boundaryBefore,
     rootRevision: run.rootRevision
   };
+}
+
+function assertTwoSentenceBoundary(root, expectedBoundary, secondStart, secondEnd) {
+  const options = { getNodeId: (node) => node._id };
+  const runs = Pipeline.createTextRuns(root, options);
+  assert.equal(runs.map((run) => run.boundaryBefore + run.text).join(''), `First${expectedBoundary}Second.`);
+  assert.deepEqual(runs.map(publicRun), [
+    { nodeId: 'first', text: 'First', start: 0, end: 5, boundaryBefore: '', rootRevision: 0 },
+    {
+      nodeId: 'second',
+      text: 'Second.',
+      start: secondStart,
+      end: secondEnd,
+      boundaryBefore: expectedBoundary,
+      rootRevision: 0
+    }
+  ]);
+  const records = Pipeline.buildSentenceRecords(root, options);
+  assert.deepEqual(records, [
+    {
+      id: '0:0:5',
+      text: 'First',
+      start: 0,
+      end: 5,
+      language: 'en',
+      rootRevision: 0,
+      fragments: [{ nodeId: 'first', start: 0, end: 5 }]
+    },
+    {
+      id: `0:${secondStart}:${secondEnd}`,
+      text: 'Second.',
+      start: secondStart,
+      end: secondEnd,
+      language: 'en',
+      rootRevision: 0,
+      fragments: [{ nodeId: 'second', start: 0, end: 7 }]
+    }
+  ]);
+  for (const record of records) {
+    const rebuilt = record.fragments.map((fragment) => {
+      const run = runs.find((candidate) => candidate.nodeId === fragment.nodeId);
+      return run.node.nodeValue.slice(fragment.start, fragment.end);
+    }).join('');
+    assert.equal(rebuilt, record.text);
+  }
 }
 
 test('aggregate token spans map across nested node-local fragments without drift', () => {
@@ -258,6 +304,62 @@ test('consecutive BR elements retain deterministic hard-boundary UTF-16 offsets'
       fragments: [{ nodeId: 'second', start: 0, end: 7 }]
     }
   ]);
+});
+
+test('an empty HR preserves one hard separator with exact sentence fragments', () => {
+  assertTwoSentenceBoundary(fixtureRoot([
+    text('First', 'first'),
+    element('hr'),
+    text('Second.', 'second')
+  ]), '\n', 6, 13);
+});
+
+test('an empty block containing BR preserves both structural separators', () => {
+  assertTwoSentenceBoundary(fixtureRoot([
+    text('First', 'first'),
+    element('div', {}, [element('br')], { display: 'block' }),
+    text('Second.', 'second')
+  ]), '\n\n', 7, 14);
+});
+
+test('a filtered visible PRE still separates surrounding visible sentences', () => {
+  assertTwoSentenceBoundary(fixtureRoot([
+    text('First', 'first'),
+    element('pre', {}, [text('filtered code', 'filtered')], { display: 'block' }),
+    text('Second.', 'second')
+  ]), '\n', 6, 13);
+});
+
+test('consecutive empty boundaries retain offsets without leading or trailing phantom records', () => {
+  assertTwoSentenceBoundary(fixtureRoot([
+    element('hr'),
+    text('First', 'first'),
+    element('hr'),
+    element('hr'),
+    text('Second.', 'second'),
+    element('hr')
+  ]), '\n\n', 7, 14);
+});
+
+test('content-visibility hidden descendants are rejected before text access', () => {
+  const unreadable = text('', 'content-visibility-secret');
+  Object.defineProperty(unreadable, 'nodeValue', {
+    get() {
+      throw new Error('content-visibility hidden text was read');
+    }
+  });
+  const root = fixtureRoot([
+    text('Visible.', 'visible'),
+    element('section', {}, [unreadable], { contentVisibility: 'hidden' }),
+    text(' Still visible.', 'still-visible')
+  ]);
+  assert.deepEqual(
+    Pipeline.createTextRuns(root, {
+      getNodeId: (node) => node._id,
+      isVisible: () => true
+    }).map((run) => run.text),
+    ['Visible.', ' Still visible.']
+  );
 });
 
 test('fresh extraction reflects dynamic roots and partially hidden descendants', () => {

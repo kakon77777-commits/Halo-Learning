@@ -30,7 +30,7 @@ test('real Chromium preserves nested inline DOM while every sentence and token m
     await withFixtureServer({
       '/lesson.html': {
         contentType: 'text/html',
-        body: '<!doctype html><html lang="zh-Hant"><body><article id="lesson"><span data-level="outer">The <span data-level="inner">mo<a href="/model">del</a></span></span><em> learns.</em> <span>人工<a href="/zh">智慧</a></span><em>學習。</em><span style="display:none">HIDDEN TEXT.</span><form><label>Account password</label><input type="password" autocomplete="current-password" value="never-read"></form></article></body></html>'
+        body: '<!doctype html><html lang="zh-Hant"><body><article id="lesson"><span data-level="outer">The <span data-level="inner">mo<a href="/model">del</a></span></span><em> learns.</em> <span>人工<a href="/zh">智慧</a></span><em>學習。</em><span style="display:none">HIDDEN TEXT.</span><span style="content-visibility:hidden">CONTENT VISIBILITY HIDDEN.</span><form><label>Account password</label><input type="password" autocomplete="current-password" value="never-read"></form></article></body></html>'
       }
     }, async ({ origin }) => {
       const page = await context.newPage();
@@ -118,7 +118,9 @@ test('real Chromium preserves nested inline DOM while every sentence and token m
       assert.equal(result.nestedSpanPresent, true);
       assert.equal(result.passwordFieldPresent, true);
       assert.ok(result.dynamic.sentenceChecks.every((sentence) =>
-        !sentence.text.includes('HIDDEN') && !sentence.text.includes('password')
+        !sentence.text.includes('HIDDEN') &&
+        !sentence.text.includes('CONTENT VISIBILITY') &&
+        !sentence.text.includes('password')
       ));
       assert.ok(requests.every((url) => url.startsWith(origin)), 'fixture makes no remote requests');
     });

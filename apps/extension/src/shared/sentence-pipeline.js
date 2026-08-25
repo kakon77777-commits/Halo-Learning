@@ -13,7 +13,7 @@
     'ADDRESS', 'ARTICLE', 'ASIDE', 'BLOCKQUOTE', 'DD', 'DETAILS', 'DIALOG',
     'DIV', 'DL', 'DT', 'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM',
     'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'HEADER', 'HR', 'LI', 'MAIN',
-    'OL', 'P', 'SECTION', 'SUMMARY', 'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH',
+    'OL', 'P', 'PRE', 'SECTION', 'SUMMARY', 'TABLE', 'TBODY', 'TD', 'TFOOT', 'TH',
     'THEAD', 'TR', 'UL'
   ]);
   const SENTENCE_TERMINATORS = new Set(['.', '!', '?', '\u3002', '\uff01', '\uff1f']);
@@ -58,16 +58,25 @@
   }
 
   function styleHidesElement(element, options) {
-    if (typeof options.isVisible === 'function') return !options.isVisible(element);
+    if (typeof options.isVisible === 'function' && !options.isVisible(element)) return true;
     const view = element && element.ownerDocument && element.ownerDocument.defaultView;
     if (!view || typeof view.getComputedStyle !== 'function') return false;
     const style = view.getComputedStyle(element);
     if (!style) return false;
     const opacity = Number.parseFloat(style.opacity);
+    const contentVisibility = String(
+      style.contentVisibility ||
+      (typeof style.getPropertyValue === 'function' ? style.getPropertyValue('content-visibility') : '')
+    ).trim().toLowerCase();
     return style.display === 'none' ||
       style.visibility === 'hidden' ||
       style.visibility === 'collapse' ||
+      contentVisibility === 'hidden' ||
       (Number.isFinite(opacity) && opacity === 0);
+  }
+
+  function isStructurallyHidden(element, options) {
+    return hasAttribute(element, 'hidden') || styleHidesElement(element, options);
   }
 
   function elementHasSensitiveMarker(element) {
@@ -109,13 +118,13 @@
     return sensitive;
   }
 
-  function unsuitableElement(element, options, sensitiveCache) {
+  function unsuitableElement(element, options, sensitiveCache, structurallyHidden) {
     const tagName = String(element.tagName || '').toUpperCase();
     const namespace = String(element.namespaceURI || '').toLowerCase();
     if (FILTERED_TAGS.has(tagName) || namespace.includes('svg') || namespace.includes('mathml')) return true;
     if (tagName === 'NAV' || normalizedAttribute(element, 'role') === 'navigation') return true;
     if (normalizedAttribute(element, 'role') === 'textbox') return true;
-    if (hasAttribute(element, 'hidden') || hasAttribute(element, 'inert')) return true;
+    if (structurallyHidden || hasAttribute(element, 'inert')) return true;
     if (normalizedAttribute(element, 'aria-hidden') === 'true') return true;
     if (isEditable(element) || isHaloOwned(element)) return true;
     if (elementHasSensitiveMarker(element)) return true;
@@ -175,21 +184,28 @@
       }
       if (![1, 9, 11].includes(node.nodeType)) return;
       const isElement = node.nodeType === 1;
-      if (isElement && unsuitableElement(node, settings, sensitiveCache)) return;
       const tagName = isElement ? String(node.tagName || '').toUpperCase() : '';
+      const isBlock = isElement && BLOCK_TAGS.has(tagName);
+      const structurallyHidden = isElement && isStructurallyHidden(node, settings);
+      if (isElement && unsuitableElement(node, settings, sensitiveCache, structurallyHidden)) {
+        if (isBlock && !isRoot && !structurallyHidden) requestBoundary(true);
+        return;
+      }
       if (tagName === 'BR') {
         requestBoundary(true);
         return;
       }
 
-      const isBlock = isElement && BLOCK_TAGS.has(tagName);
       const runCountBefore = runs.length;
       const boundaryBefore = pendingBoundary;
       if (isBlock && !isRoot) requestBoundary();
       for (const child of node.childNodes || []) visit(child, false);
       if (isBlock && !isRoot) {
-        if (runs.length === runCountBefore) pendingBoundary = boundaryBefore;
-        else requestBoundary();
+        if (runs.length === runCountBefore && pendingBoundary.length === boundaryBefore.length) {
+          requestBoundary(true);
+        } else if (runs.length !== runCountBefore) {
+          requestBoundary();
+        }
       }
     }
 
