@@ -273,24 +273,91 @@ async function heapBytes(cdpSession) {
   }
 }
 
-async function restartServiceWorker(context, page, worker, fixtureText) {
+function workerIdentity(version) {
+  if (!version || typeof version.versionId !== 'string' || !version.versionId ||
+      typeof version.targetId !== 'string' || !version.targetId) {
+    return null;
+  }
+  return `${version.versionId}:${version.targetId}`;
+}
+
+function waitForWorkerVersion(session, versions, predicate, description, timeoutMs) {
+  const current = versions.find(predicate);
+  if (current) return Promise.resolve(current);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      session.off('ServiceWorker.workerVersionUpdated', onUpdate);
+      reject(new Error(`Timeout waiting for ${description} after ${timeoutMs}ms`));
+    }, timeoutMs);
+    function onUpdate() {
+      const match = versions.find(predicate);
+      if (!match) return;
+      clearTimeout(timeout);
+      session.off('ServiceWorker.workerVersionUpdated', onUpdate);
+      resolve(match);
+    }
+    session.on('ServiceWorker.workerVersionUpdated', onUpdate);
+  });
+}
+
+async function restartServiceWorker(context, page, worker, fixtureText, options) {
+  const settings = options || {};
+  const timeoutMs = settings.timeoutMs || 5_000;
+  const annotate = settings.sendAnnotation || sendAnnotation;
   const session = await context.newCDPSession(page);
   const versions = [];
   session.on('ServiceWorker.workerVersionUpdated', (event) => versions.splice(0, versions.length, ...event.versions));
   const started = performance.now();
   try {
     await session.send('ServiceWorker.enable');
-    await page.waitForTimeout(100);
-    const version = versions.find((value) => value.scriptURL === worker.url());
-    if (!version) {
+    const version = await waitForWorkerVersion(
+      session,
+      versions,
+      (value) => value.scriptURL === worker.url() && value.runningStatus === 'running',
+      'running legacy service worker',
+      timeoutMs
+    );
+    const previousWorkerIdentity = workerIdentity(version);
+    if (!previousWorkerIdentity) {
       return Object.freeze({ supported: false, restarted: false, durationMs: performance.now() - started });
     }
     await session.send('ServiceWorker.stopWorker', { versionId: version.versionId });
+    await waitForWorkerVersion(
+      session,
+      versions,
+      (value) => workerIdentity(value) === previousWorkerIdentity && value.runningStatus === 'stopped',
+      'stopped legacy service worker',
+      timeoutMs
+    );
+    const trigger = Promise.resolve()
+      .then(() => annotate(page, fixtureText))
+      .catch(() => null);
     try {
-      await sendAnnotation(page, fixtureText);
-      return Object.freeze({ supported: true, restarted: true, durationMs: performance.now() - started });
+      const restartedVersion = await waitForWorkerVersion(
+        session,
+        versions,
+        (value) => value.scriptURL === worker.url() && value.runningStatus === 'running' &&
+          workerIdentity(value) !== null && workerIdentity(value) !== previousWorkerIdentity,
+        'distinct restarted service worker',
+        timeoutMs
+      );
+      await trigger;
+      await annotate(page, fixtureText);
+      return Object.freeze({
+        supported: true,
+        restarted: true,
+        durationMs: performance.now() - started,
+        previousWorkerIdentity,
+        restartedWorkerIdentity: workerIdentity(restartedVersion)
+      });
     } catch {
-      return Object.freeze({ supported: true, restarted: false, durationMs: performance.now() - started });
+      return Object.freeze({
+        supported: true,
+        restarted: false,
+        durationMs: performance.now() - started,
+        previousWorkerIdentity,
+        restartedWorkerIdentity: null
+      });
     }
   } catch {
     return Object.freeze({ supported: false, restarted: false, durationMs: performance.now() - started });
@@ -417,8 +484,18 @@ function requireProfile(condition, message) {
 }
 
 function validRestartMeasurement(restart) {
-  return restart && typeof restart === 'object' && typeof restart.supported === 'boolean' &&
-    typeof restart.restarted === 'boolean' && Number.isFinite(restart.durationMs) && restart.durationMs >= 0;
+  return restart && typeof restart === 'object' && restart.supported === true && restart.restarted === true &&
+    Number.isFinite(restart.durationMs) && restart.durationMs >= 0 &&
+    typeof restart.previousWorkerIdentity === 'string' && Boolean(restart.previousWorkerIdentity) &&
+    typeof restart.restartedWorkerIdentity === 'string' && Boolean(restart.restartedWorkerIdentity) &&
+    restart.previousWorkerIdentity !== restart.restartedWorkerIdentity;
+}
+
+function exactConditionTopology(samples, browserContexts, condition) {
+  if (!Array.isArray(samples) || samples.length !== browserContexts) return false;
+  const indexes = samples.map((sample) => sample && sample.contextIndex).sort((left, right) => left - right);
+  return samples.every((sample) => sample && sample.condition === condition) &&
+    indexes.every((value, index) => value === index);
 }
 
 function verifyBrowserRuntimeProfile(report) {
@@ -438,12 +515,13 @@ function verifyBrowserRuntimeProfile(report) {
   const conditions = report.conditions;
   requireProfile(conditions && conditions.cold && conditions.warm && conditions.serviceWorkerRestart,
     'cold, warm, and service-worker-restart conditions are required');
+  requireProfile(Object.keys(conditions).sort().join(',') === 'cold,serviceWorkerRestart,warm',
+    'condition topology is invalid');
   requireProfile(Number.isInteger(conditions.cold.browserContexts) && conditions.cold.browserContexts >= 5,
     'at least five cold browser contexts are required');
-  requireProfile(Array.isArray(conditions.cold.samples) &&
-    conditions.cold.samples.length >= conditions.cold.browserContexts, 'cold samples are incomplete');
+  requireProfile(exactConditionTopology(conditions.cold.samples, conditions.cold.browserContexts, 'cold'),
+    'condition topology is invalid');
   for (const sample of conditions.cold.samples) {
-    requireProfile(sample.condition === 'cold', 'cold samples must identify their condition');
     const measurements = assertCompleteMeasurements(sample.measurements || {});
     requireProfile(Number.isInteger(measurements.compressedBytes) && measurements.compressedBytes > 0,
       'compressedBytes must be a positive integer');
@@ -457,25 +535,28 @@ function verifyBrowserRuntimeProfile(report) {
     'heapPeakBytes must be a non-negative integer or unknown');
     const restart = measurements.serviceWorkerRestart;
     requireProfile(validRestartMeasurement(restart),
-    'serviceWorkerRestart is invalid');
+    'successful service-worker restart is required for canonical evidence');
   }
 
   requireProfile(Number.isInteger(conditions.warm.annotationsPerContext) &&
     conditions.warm.annotationsPerContext >= 20, 'at least twenty warm annotations per context are required');
-  requireProfile(Array.isArray(conditions.warm.samples) &&
-    conditions.warm.samples.length >= conditions.cold.browserContexts, 'warm context samples are incomplete');
+  requireProfile(exactConditionTopology(conditions.warm.samples, conditions.cold.browserContexts, 'warm'),
+    'condition topology is invalid');
   for (const sample of conditions.warm.samples) {
-    requireProfile(sample.condition === 'warm' && Array.isArray(sample.samplesMs) && sample.samplesMs.length >= 20,
-      'each context requires twenty raw warm annotation samples');
+    requireProfile(Array.isArray(sample.samplesMs) &&
+      sample.samplesMs.length >= conditions.warm.annotationsPerContext,
+    'raw warm annotation samples must satisfy annotationsPerContext');
     requireProfile(sample.samplesMs.every((value) => Number.isFinite(value) && value >= 0),
       'warm annotation timings must be non-negative numbers');
   }
-  requireProfile(Array.isArray(conditions.serviceWorkerRestart.samples) &&
-    conditions.serviceWorkerRestart.samples.length >= conditions.cold.browserContexts,
-  'service-worker-restart samples are incomplete');
+  requireProfile(exactConditionTopology(
+    conditions.serviceWorkerRestart.samples,
+    conditions.cold.browserContexts,
+    'service-worker-restart'
+  ), 'condition topology is invalid');
   for (const sample of conditions.serviceWorkerRestart.samples) {
-    requireProfile(sample.condition === 'service-worker-restart' && Number.isInteger(sample.contextIndex) &&
-      validRestartMeasurement(sample.result), 'service-worker-restart sample is invalid');
+    requireProfile(validRestartMeasurement(sample.result),
+      'successful service-worker restart is required for canonical evidence');
   }
   return true;
 }
@@ -542,6 +623,7 @@ module.exports = Object.freeze({
   prepareLegacyExtension,
   profileLegacyRuntime,
   readZipEntrySizes,
+  restartServiceWorker,
   runBrowserProfile,
   runLegacyColdContext,
   verifyBrowserRuntimeProfile
