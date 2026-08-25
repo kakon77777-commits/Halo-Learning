@@ -86,6 +86,78 @@
     return Object.freeze({ roots: Object.freeze(roots), removedRoots: Object.freeze(removedRoots) });
   }
 
+  function createRendererMutationSanitizer() {
+    const privateNodes = new Set();
+    const operations = [];
+
+    function trackNode(node) {
+      if (node) privateNodes.add(node);
+      return node;
+    }
+
+    function expect(operation) {
+      if (!operation || !['childList', 'characterData', 'attributes'].includes(operation.type) || !operation.target) {
+        throw new TypeError('renderer mutation operation: must have a supported type and target');
+      }
+      operations.push({
+        ...operation,
+        addedNodes: new Set(Array.from(operation.addedNodes || [])),
+        removedNodes: new Set(Array.from(operation.removedNodes || [])),
+        consumed: false
+      });
+      return operation;
+    }
+
+    function matchingOperation(record) {
+      return operations.find((operation) => {
+        if (operation.consumed || operation.type !== record.type || operation.target !== record.target) return false;
+        if (record.type === 'attributes' && operation.attributeName !== record.attributeName) return false;
+        if (Object.prototype.hasOwnProperty.call(operation, 'oldValue') && operation.oldValue !== record.oldValue) return false;
+        return true;
+      }) || null;
+    }
+
+    function sanitize(record) {
+      if (!record) return null;
+      if (record.type === 'characterData' || record.type === 'attributes') {
+        const operation = matchingOperation(record);
+        if (!operation) return record;
+        operation.consumed = true;
+        return null;
+      }
+      if (record.type !== 'childList') return record;
+      const matching = operations.filter((operation) =>
+        !operation.consumed && operation.type === 'childList' && operation.target === record.target
+      );
+      const addedNodes = Array.from(record.addedNodes || []).filter((node) => {
+        if (privateNodes.has(node)) return false;
+        const operation = matching.find((candidate) => candidate.addedNodes.has(node));
+        if (!operation) return true;
+        operation.addedNodes.delete(node);
+        return false;
+      });
+      const removedNodes = Array.from(record.removedNodes || []).filter((node) => {
+        if (privateNodes.has(node)) return false;
+        const operation = matching.find((candidate) => candidate.removedNodes.has(node));
+        if (!operation) return true;
+        operation.removedNodes.delete(node);
+        return false;
+      });
+      for (const operation of matching) {
+        if (!operation.addedNodes.size && !operation.removedNodes.size) operation.consumed = true;
+      }
+      if (!addedNodes.length && !removedNodes.length) return null;
+      return {
+        type: record.type,
+        target: record.target,
+        addedNodes,
+        removedNodes
+      };
+    }
+
+    return Object.freeze({ trackNode, expect, sanitize });
+  }
+
   function createDynamicDomController(options) {
     const settings = options || {};
     const MutationObserverClass = settings.MutationObserver || root.MutationObserver;
@@ -104,6 +176,9 @@
           ? root.queueMicrotask.bind(root)
           : (callback) => Promise.resolve().then(callback));
     const isHaloOwned = typeof settings.isHaloOwned === 'function' ? settings.isHaloOwned : defaultIsHaloOwned;
+    const scopedRendererSanitizer = typeof settings.sanitizeRendererRecord === 'function'
+      ? settings.sanitizeRendererRecord
+      : null;
     const onRootsInvalidated = typeof settings.onRootsInvalidated === 'function'
       ? settings.onRootsInvalidated
       : () => {};
@@ -189,6 +264,7 @@
     }
 
     function sanitizeRendererRecord(record) {
+      if (scopedRendererSanitizer) return scopedRendererSanitizer(record);
       if (!record || isHaloOwned(record.target)) return null;
       if (record.type !== 'childList') return record;
       const addedNodes = Array.from(record.addedNodes || []).filter((node) => !isHaloOwned(node));
@@ -293,7 +369,9 @@
         subtree: true,
         childList: true,
         characterData: true,
+        characterDataOldValue: true,
         attributes: true,
+        attributeOldValue: true,
         attributeFilter: [
           'class', 'title',
           'data-halo-owned', 'data-halo-run', 'data-halo-root', 'data-halo-original',
@@ -466,6 +544,7 @@
   return Object.freeze({
     classifyMutation,
     coalesceMutations,
+    createRendererMutationSanitizer,
     createDynamicDomController
   });
 });

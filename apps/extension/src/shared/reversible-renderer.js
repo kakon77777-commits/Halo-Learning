@@ -287,34 +287,39 @@
     });
   }
 
-  function setOrRemove(element, name, value) {
-    if (value === null || value === undefined || value === '') element.removeAttribute(name);
-    else element.setAttribute(name, String(value));
+  function setOrRemove(element, name, value, mutations) {
+    if (value === null || value === undefined || value === '') mutations.removeAttribute(element, name);
+    else mutations.setAttribute(element, name, String(value));
   }
 
-  function applyProjection(wrapper, request, fragment) {
+  function applyProjection(wrapper, request, fragment, mutationMethods) {
+    const mutations = mutationMethods || {
+      setAttribute: (element, name, value) => element.setAttribute(name, value),
+      removeAttribute: (element, name) => element.removeAttribute(name),
+      setClassName: (element, value) => { element.className = value; }
+    };
     const projection = fragment.projection;
-    wrapper.setAttribute('data-halo-owned', OWNED_TOKEN);
-    wrapper.setAttribute('data-halo-run', request.runId);
-    wrapper.setAttribute('data-halo-root', request.rootId);
-    wrapper.setAttribute('data-halo-original', fragment.text);
-    wrapper.setAttribute('data-halo-node', fragment.nodeId);
-    wrapper.setAttribute('data-halo-start', String(fragment.start));
-    wrapper.setAttribute('data-halo-end', String(fragment.end));
-    wrapper.setAttribute('data-halo-index', String(fragment.boundaryIndex));
-    wrapper.setAttribute('data-halo-boundary', fragment.boundaryKey);
-    wrapper.setAttribute('data-halo-revision', String(request.rootRevision));
-    wrapper.setAttribute('data-halo-carrier', projection.carrier);
-    setOrRemove(wrapper, 'data-halo-pos', projection.label || projection.pos);
-    setOrRemove(wrapper, 'data-halo-meta', projection.metaLabel);
-    setOrRemove(wrapper, 'data-halo-gloss', projection.glossHint);
-    setOrRemove(wrapper, 'data-halo-confidence', projection.confidence);
-    setOrRemove(wrapper, 'title', projection.glossHint);
+    mutations.setAttribute(wrapper, 'data-halo-owned', OWNED_TOKEN);
+    mutations.setAttribute(wrapper, 'data-halo-run', request.runId);
+    mutations.setAttribute(wrapper, 'data-halo-root', request.rootId);
+    mutations.setAttribute(wrapper, 'data-halo-original', fragment.text);
+    mutations.setAttribute(wrapper, 'data-halo-node', fragment.nodeId);
+    mutations.setAttribute(wrapper, 'data-halo-start', String(fragment.start));
+    mutations.setAttribute(wrapper, 'data-halo-end', String(fragment.end));
+    mutations.setAttribute(wrapper, 'data-halo-index', String(fragment.boundaryIndex));
+    mutations.setAttribute(wrapper, 'data-halo-boundary', fragment.boundaryKey);
+    mutations.setAttribute(wrapper, 'data-halo-revision', String(request.rootRevision));
+    mutations.setAttribute(wrapper, 'data-halo-carrier', projection.carrier);
+    setOrRemove(wrapper, 'data-halo-pos', projection.label || projection.pos, mutations);
+    setOrRemove(wrapper, 'data-halo-meta', projection.metaLabel, mutations);
+    setOrRemove(wrapper, 'data-halo-gloss', projection.glossHint, mutations);
+    setOrRemove(wrapper, 'data-halo-confidence', projection.confidence, mutations);
+    setOrRemove(wrapper, 'title', projection.glossHint, mutations);
     const classes = ['halo-token', 'halo-noncolor-marker'];
     if (projection.label || projection.pos) classes.push(`halo-label-${projection.labelPosition}`);
     if (projection.metaLabel) classes.push('halo-has-meta');
     classes.push(...projection.classes);
-    wrapper.className = classes.join(' ');
+    mutations.setClassName(wrapper, classes.join(' '));
   }
 
   function createCorePanel(document) {
@@ -386,6 +391,7 @@
       ? settings.suppressMutations
       : (callback) => callback();
     const trackOwnedNode = typeof settings.trackOwnedNode === 'function' ? settings.trackOwnedNode : () => {};
+    const trackMutation = typeof settings.trackMutation === 'function' ? settings.trackMutation : () => {};
     const renderState = createRenderState(Object.prototype.hasOwnProperty.call(settings, 'WeakRef')
       ? { WeakRef: settings.WeakRef }
       : {});
@@ -399,6 +405,54 @@
     function track(node) {
       if (node) trackOwnedNode(node);
       return node;
+    }
+
+    function expectMutation(operation) {
+      trackMutation(Object.freeze(operation));
+    }
+
+    function trackedSetAttribute(element, name, value) {
+      expectMutation({
+        type: 'attributes',
+        target: element,
+        attributeName: String(name).toLowerCase(),
+        oldValue: element.getAttribute(name)
+      });
+      element.setAttribute(name, value);
+    }
+
+    function trackedRemoveAttribute(element, name) {
+      if (!element.hasAttribute(name)) return;
+      expectMutation({
+        type: 'attributes',
+        target: element,
+        attributeName: String(name).toLowerCase(),
+        oldValue: element.getAttribute(name)
+      });
+      element.removeAttribute(name);
+    }
+
+    const trackedProjectionMutations = Object.freeze({
+      setAttribute: trackedSetAttribute,
+      removeAttribute: trackedRemoveAttribute,
+      setClassName(element, value) {
+        trackedSetAttribute(element, 'class', value);
+      }
+    });
+
+    function expectChildList(target, addedNodes, removedNodes) {
+      expectMutation({
+        type: 'childList',
+        target,
+        addedNodes: Object.freeze(Array.from(addedNodes || [])),
+        removedNodes: Object.freeze(Array.from(removedNodes || []))
+      });
+    }
+
+    function trackedNodeValue(node, value) {
+      if (node.nodeValue === value) return;
+      expectMutation({ type: 'characterData', target: node, oldValue: node.nodeValue });
+      node.nodeValue = value;
     }
 
     function rootFor(entry) {
@@ -437,8 +491,8 @@
       const names = typeof record.node.getAttributeNames === 'function'
         ? record.node.getAttributeNames()
         : attributeEntries(record.node).map((entry) => entry[0]);
-      for (const name of names) record.node.removeAttribute(name);
-      for (const [name, value] of record.entries) record.node.setAttribute(name, value);
+      for (const name of names) trackedRemoveAttribute(record.node, name);
+      for (const [name, value] of record.entries) trackedSetAttribute(record.node, name, value);
     }
 
     function restoreSubtree(snapshot) {
@@ -446,24 +500,23 @@
         const wanted = record.children;
         for (const child of Array.from(record.node.childNodes || [])) {
           if (wanted.includes(child)) continue;
-          track(record.node);
-          track(child);
+          expectChildList(record.node, [], [child]);
           record.node.removeChild(child);
         }
         for (let index = 0; index < wanted.length; index += 1) {
           const child = wanted[index];
           if (record.node.childNodes[index] === child) continue;
-          track(record.node);
-          track(child);
+          if (child.parentNode && child.parentNode !== record.node) {
+            expectChildList(child.parentNode, [], [child]);
+          }
+          expectChildList(record.node, [child], child.parentNode === record.node ? [child] : []);
           record.node.insertBefore(child, record.node.childNodes[index] || null);
         }
       }
       for (const record of snapshot.textValues) {
-        track(record.node);
-        record.node.nodeValue = record.value;
+        trackedNodeValue(record.node, record.value);
       }
       for (const record of snapshot.attributes) {
-        track(record.node);
         restoreAttributes(record);
       }
     }
@@ -478,30 +531,58 @@
       } catch (error) {
         if (entered) {
           let restored = false;
+          const rollbackErrors = [];
           const restore = () => {
             rollback();
             restored = true;
           };
           try {
             suppressMutations(restore);
-          } catch (_rollbackError) {
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
             if (!restored) {
               try {
                 restore();
-              } catch (_directRollbackError) {
-                // Preserve the initiating failure. The rollback is best-effort
-                // when the host keeps throwing from fundamental DOM APIs.
+              } catch (directRollbackError) {
+                if (directRollbackError !== rollbackError) rollbackErrors.push(directRollbackError);
               }
             }
+          }
+          if (rollbackErrors.length) {
+            throw new AggregateError(
+              [error, ...rollbackErrors],
+              `${error && error.message ? error.message : 'renderer mutation failed'}; rollback failed`,
+              { cause: error }
+            );
           }
         }
         throw error;
       }
     }
 
-    function mutateRootAtomically(renderRoot, mutate) {
-      const snapshot = captureSubtree(renderRoot);
-      return runSuppressedTransaction(mutate, () => restoreSubtree(snapshot));
+    function snapshotRoots(renderRoot, entries) {
+      const candidates = [];
+      if (renderRoot) candidates.push(renderRoot);
+      for (const entry of Array.from(entries || [])) {
+        for (const wrapper of ownedWrappers(entry)) candidates.push(wrapper.parentNode || wrapper);
+      }
+      const roots = [];
+      for (const candidate of candidates) {
+        if (!candidate || roots.some((current) => current === candidate ||
+            (typeof current.contains === 'function' && current.contains(candidate)))) continue;
+        for (let index = roots.length - 1; index >= 0; index -= 1) {
+          if (typeof candidate.contains === 'function' && candidate.contains(roots[index])) roots.splice(index, 1);
+        }
+        roots.push(candidate);
+      }
+      return roots.map(captureSubtree);
+    }
+
+    function mutateRootAtomically(renderRoot, mutate, entries) {
+      const snapshots = snapshotRoots(renderRoot, entries);
+      return runSuppressedTransaction(mutate, () => {
+        for (const snapshot of snapshots) restoreSubtree(snapshot);
+      });
     }
 
     function ownedWrappers(entry) {
@@ -525,8 +606,7 @@
           metadata && children[0].nodeValue === metadata.original;
         parents.set(parent, (parents.get(parent) ?? true) && cleanOwnership);
         track(wrapper);
-        track(parent);
-        for (const child of children) track(child);
+        expectChildList(parent, children, [wrapper]);
         if (typeof wrapper.replaceWith === 'function') wrapper.replaceWith(...children);
         else {
           for (const child of children) parent.insertBefore(child, wrapper);
@@ -536,12 +616,73 @@
       if (normalizeParents) {
         for (const [parent, safeToNormalize] of parents) {
           if (!safeToNormalize || typeof parent.normalize !== 'function') continue;
-          for (const child of Array.from(parent.childNodes || [])) track(child);
+          expectNormalization(parent);
           parent.normalize();
-          for (const child of Array.from(parent.childNodes || [])) track(child);
         }
       }
       return wrappers.length;
+    }
+
+    function expectNormalization(parent) {
+      const visit = (container) => {
+        let group = [];
+        const flush = () => {
+          if (!group.length) return;
+          const nonempty = group.filter((node) => node.nodeValue !== '');
+          const survivor = nonempty[0] || null;
+          const removed = group.filter((node) => node !== survivor);
+          if (removed.length) expectChildList(container, [], removed);
+          if (survivor) {
+            let accumulated = survivor.nodeValue;
+            let seenSurvivor = false;
+            for (const node of group) {
+              if (node === survivor) {
+                seenSurvivor = true;
+                continue;
+              }
+              if (!seenSurvivor || node.nodeValue === '') continue;
+              expectMutation({ type: 'characterData', target: survivor, oldValue: accumulated });
+              accumulated += node.nodeValue;
+            }
+          }
+          group = [];
+        };
+        for (const child of Array.from(container.childNodes || [])) {
+          if (child.nodeType === 3) {
+            group.push(child);
+            continue;
+          }
+          flush();
+          if (child.nodeType === 1) visit(child);
+        }
+        flush();
+      };
+      visit(parent);
+    }
+
+    function scrubWrapper(wrapper) {
+      for (const name of attributeEntries(wrapper).map((entry) => entry[0])) {
+        if (name === 'title' || name.startsWith('data-halo-')) trackedRemoveAttribute(wrapper, name);
+      }
+      const retainedClasses = String(wrapper.className || '').split(/\s+/)
+        .filter(Boolean)
+        .filter((name) => !name.startsWith('halo-'));
+      if (retainedClasses.length) trackedSetAttribute(wrapper, 'class', retainedClasses.join(' '));
+      else trackedRemoveAttribute(wrapper, 'class');
+    }
+
+    function revokeWrappers(wrappers) {
+      for (const wrapper of wrappers) {
+        wrapperCapabilities.delete(wrapper);
+        wrapperMetadata.delete(wrapper);
+      }
+    }
+
+    function cleanupEntry(entry, normalizeParents) {
+      const wrappers = ownedWrappers(entry);
+      unwrapEntry(entry, normalizeParents);
+      for (const wrapper of wrappers) scrubWrapper(wrapper);
+      return wrappers;
     }
 
     function preparedOperations(request) {
@@ -569,12 +710,29 @@
         if (!node.parentNode || node.nodeValue.slice(fragment.start, fragment.end) !== fragment.text) {
           throw new Error(`render fragment became stale: ${fragment.nodeId}`);
         }
-        track(node);
-        const suffix = track(node.splitText(fragment.end));
-        const marked = track(node.splitText(fragment.start));
-        track(marked.parentNode);
+        const suffix = splitTextTracked(node, fragment.end);
+        const marked = splitTextTracked(node, fragment.start);
+        expectChildList(marked.parentNode, [operation.wrapper], [marked]);
         marked.parentNode.replaceChild(operation.wrapper, marked);
-        track(suffix);
+      }
+    }
+
+    function splitTextTracked(node, offset) {
+      const parent = node.parentNode;
+      const childrenBefore = parent ? new Set(Array.from(parent.childNodes || [])) : null;
+      expectMutation({ type: 'characterData', target: node, oldValue: node.nodeValue });
+      let split;
+      try {
+        split = node.splitText(offset);
+        return split;
+      } finally {
+        if (parent && childrenBefore) {
+          for (const child of Array.from(parent.childNodes || [])) {
+            if (childrenBefore.has(child)) continue;
+            track(child);
+            expectChildList(parent, [child], []);
+          }
+        }
       }
     }
 
@@ -612,7 +770,12 @@
         .sort((left, right) => left.fragment.boundaryIndex - right.fragment.boundaryIndex)
         .map((operation) => operation.wrapper);
       const nextEntry = prepareRecord(request, wrappers);
-      mutateRootAtomically(request.root, () => applyPrepared(prepared));
+      try {
+        mutateRootAtomically(request.root, () => applyPrepared(prepared));
+      } catch (error) {
+        revokeWrappers(wrappers);
+        throw error;
+      }
       renderState.commit(nextEntry);
       lastAction = 'applied';
       return frozenResult({ action: 'applied', rootId: request.rootId, wrappers: request.fragments.length });
@@ -646,10 +809,9 @@
       mutateRootAtomically(request.root, () => {
         for (const fragment of request.fragments) {
           const wrapper = byIndex.get(String(fragment.boundaryIndex));
-          track(wrapper);
-          applyProjection(wrapper, request, fragment);
+          applyProjection(wrapper, request, fragment, trackedProjectionMutations);
         }
-      });
+      }, [entry]);
       for (const fragment of request.fragments) {
         const wrapper = byIndex.get(String(fragment.boundaryIndex));
         wrapperMetadata.set(wrapper, {
@@ -678,10 +840,17 @@
         .sort((left, right) => left.fragment.boundaryIndex - right.fragment.boundaryIndex)
         .map((operation) => operation.wrapper);
       const nextEntry = prepareRecord(request, wrappers);
-      mutateRootAtomically(request.root, () => {
-        unwrapEntry(entry, false);
-        applyPrepared(prepared);
-      });
+      const oldWrappers = ownedWrappers(entry);
+      try {
+        mutateRootAtomically(request.root, () => {
+          cleanupEntry(entry, false);
+          applyPrepared(prepared);
+        }, [entry]);
+      } catch (error) {
+        revokeWrappers(wrappers);
+        throw error;
+      }
+      revokeWrappers(oldWrappers);
       renderState.commit(nextEntry);
       lastAction = 'rebuilt';
       return frozenResult({ action: 'rebuilt', rootId: request.rootId, wrappers: request.fragments.length });
@@ -724,11 +893,12 @@
       if (!entry) return frozenResult({ action: 'noop', rootId: key, wrappers: 0 });
       let removed = 0;
       const renderRoot = rootFor(entry);
-      if (renderRoot) {
-        mutateRootAtomically(renderRoot, () => {
-          removed = unwrapEntry(entry, true);
-        });
-      }
+      let wrappers = [];
+      mutateRootAtomically(renderRoot, () => {
+        wrappers = cleanupEntry(entry, true);
+        removed = wrappers.length;
+      }, [entry]);
+      revokeWrappers(wrappers);
       renderState.remove(key);
       lastAction = 'removed';
       return frozenResult({ action: 'removed', rootId: key, wrappers: removed });
@@ -749,7 +919,7 @@
       if (!location.parent) {
         if (node.parentNode) {
           track(node);
-          track(node.parentNode);
+          expectChildList(node.parentNode, [], [node]);
           node.parentNode.removeChild(node);
         }
         return;
@@ -757,14 +927,15 @@
       const reference = location.parent.childNodes[location.index] || null;
       if (node.parentNode === location.parent && reference === node) return;
       track(node);
-      track(location.parent);
+      if (node.parentNode && node.parentNode !== location.parent) expectChildList(node.parentNode, [], [node]);
+      expectChildList(location.parent, [node], node.parentNode === location.parent ? [node] : []);
       location.parent.insertBefore(node, reference);
     }
 
     function removePanelHost(parts) {
       if (!parts || !parts.host || !parts.host.parentNode) return;
       track(parts.host);
-      track(parts.host.parentNode);
+      expectChildList(parts.host.parentNode, [], [parts.host]);
       parts.host.parentNode.removeChild(parts.host);
     }
 
@@ -786,26 +957,30 @@
 
     function removeAll() {
       const entries = [...renderState.values()];
-      const snapshots = [];
-      const seenRoots = new Set();
-      for (const entry of entries) {
-        const renderRoot = rootFor(entry);
-        if (!renderRoot || seenRoots.has(renderRoot)) continue;
-        seenRoots.add(renderRoot);
+      const renderRoots = entries.map(rootFor).filter(Boolean);
+      const snapshots = snapshotRoots(null, entries);
+      for (const renderRoot of renderRoots) {
+        if (snapshots.some((snapshot) => snapshot.parents.some((record) => record.node === renderRoot))) continue;
         snapshots.push(captureSubtree(renderRoot));
       }
       const closingParts = panelOpen ? panelParts : null;
       const panelLocation = closingParts ? nodeLocation(closingParts.host) : null;
       let wrappers = 0;
+      const releasedWrappers = [];
       if (entries.length || closingParts) {
         runSuppressedTransaction(() => {
-          for (const entry of entries) wrappers += unwrapEntry(entry, true);
+          for (const entry of entries) {
+            const cleaned = cleanupEntry(entry, true);
+            wrappers += cleaned.length;
+            releasedWrappers.push(...cleaned);
+          }
           if (closingParts) removePanelHost(closingParts);
         }, () => {
           for (const snapshot of snapshots) restoreSubtree(snapshot);
           if (panelLocation) restoreNodeLocation(panelLocation);
         });
       }
+      revokeWrappers(releasedWrappers);
       for (const entry of entries) renderState.remove(entry.rootId);
       if (closingParts) {
         panelParts = null;
@@ -837,7 +1012,7 @@
       let position;
       runSuppressedTransaction(() => {
         track(nextParts.host);
-        track(container);
+        expectChildList(container, [nextParts.host], []);
         container.appendChild(nextParts.host);
         const rect = nextParts.panel.getBoundingClientRect();
         position = clampPanelPosition(requestedPosition, viewport, rect, 8);
@@ -867,7 +1042,11 @@
       });
     }
 
-    return Object.freeze({ apply, reconcile, removeRoot, removeAll, openPanel, closePanel, status });
+    function ownsToken(element) {
+      return Boolean(element && wrapperCapabilities.has(element) && wrapperMetadata.has(element));
+    }
+
+    return Object.freeze({ apply, reconcile, removeRoot, removeAll, openPanel, closePanel, status, ownsToken });
   }
 
   return Object.freeze({

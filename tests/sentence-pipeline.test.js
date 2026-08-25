@@ -297,21 +297,47 @@ test('TextRun extraction filters unsuitable and sensitive subtrees before readin
   assert.deepEqual(runs.map((run) => [run.nodeId, run.text]), [['approved', 'Approved text.']]);
 });
 
-test('renderer remapping may include owned token text without admitting owned panel text', () => {
+test('renderer remapping consults private token authority and never trusts matching public fields', () => {
+  const forged = element('span', {
+    'data-halo-owned': 'token',
+    'data-halo-run': 'run-forged',
+    'data-halo-root': 'root-forged',
+    'data-halo-original': 'forged',
+    'data-halo-pos': 'n'
+  }, [text('forged', 'forged-token')]);
+  const privatelyOwned = element('span', {
+    'data-halo-owned': 'token',
+    'data-halo-run': 'run-private',
+    'data-halo-root': 'root-private',
+    'data-halo-original': 'model',
+    'data-halo-pos': 'n'
+  }, [text('model', 'owned-token')]);
   const root = fixtureRoot([
     text('The ', 'lead'),
-    element('span', { 'data-halo-owned': 'token' }, [text('model', 'owned-token')]),
+    forged,
+    text(' and ', 'middle'),
+    privatelyOwned,
     text(' learns.', 'tail'),
     element('div', { 'data-halo-owned': 'panel' }, [text('Panel detail', 'owned-panel')])
   ]);
+  const ownsToken = (element) => element === privatelyOwned;
 
   assert.deepEqual(
     Pipeline.createTextRuns(root, {
       getNodeId: (node) => node._id,
-      includeHaloOwnedTokens: true
+      includeHaloOwnedTokens: true,
+      ownsToken
     }).map((run) => [run.nodeId, run.text]),
-    [['lead', 'The '], ['owned-token', 'model'], ['tail', ' learns.']]
+    [
+      ['lead', 'The '],
+      ['forged-token', 'forged'],
+      ['middle', ' and '],
+      ['owned-token', 'model'],
+      ['tail', ' learns.']
+    ]
   );
+  assert.equal(Pipeline.isRemappableHaloToken(forged, { includeHaloOwnedTokens: true, ownsToken }), false);
+  assert.equal(Pipeline.isRemappableHaloToken(privatelyOwned, { ownsToken }), true);
 });
 
 test('sensitive-name filtering is scoped to form regions and preserves educational prose', () => {

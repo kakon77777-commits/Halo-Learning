@@ -126,6 +126,21 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       for (const script of scripts) await page.addScriptTag({ path: script });
 
       await page.evaluate(async () => {
+        const initial = document.getElementById('initial');
+        const nativeReplaceChild = initial.replaceChild;
+        let injected = false;
+        initial.replaceChild = function (next, previous) {
+          const result = nativeReplaceChild.call(this, next, previous);
+          if (!injected) {
+            injected = true;
+            const legitimate = document.createElement('span');
+            legitimate.id = 'renderer-side-effect';
+            legitimate.textContent = ' Legitimate side effect.';
+            this.appendChild(legitimate);
+            this.setAttribute('data-page-render-side-effect', 'retained');
+          }
+          return result;
+        };
         const listener = __haloDynamic.listeners[0];
         await new Promise((resolve) => listener({
           type: 'HALO_APPLY_MARKING',
@@ -133,6 +148,11 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
         }, {}, resolve));
       });
       await page.waitForSelector('#initial [data-halo-owned="token"]');
+      await page.waitForFunction(() =>
+        __haloDynamic.semanticRequests.flatMap((request) => request.items)
+          .some((item) => item.text === 'Legitimate side effect.') &&
+        document.getElementById('initial').getAttribute('data-page-render-side-effect') === 'retained'
+      );
 
       const initialModelPasses = await page.evaluate(() =>
         __haloDynamic.semanticRequests.flatMap((request) => request.items)
@@ -293,7 +313,8 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           thirdPartyPreserved: document.getElementById('third-party-token-child') === __haloDynamic.thirdParty,
           wrappersAfterCleanup: document.querySelectorAll('[data-halo-owned="token"]').length,
           historyRestored: history.pushState === __haloDynamic.originalPushState &&
-            history.replaceState === __haloDynamic.originalReplaceState
+            history.replaceState === __haloDynamic.originalReplaceState,
+          rendererSideEffectObserved: itemTexts.includes('Legitimate side effect.')
         };
       });
 
@@ -321,6 +342,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       assert.deepEqual(result.epochTwoTexts, ['The history-first route starts.']);
       assert.equal(result.nestedWrappers, 0);
       assert.equal(result.thirdPartyPreserved, true);
+      assert.equal(result.rendererSideEffectObserved, true);
       assert.equal(result.wrappersAfterCleanup, 0);
       assert.equal(result.historyRestored, true);
     });

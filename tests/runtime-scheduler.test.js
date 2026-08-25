@@ -465,6 +465,56 @@ test('dynamic root refresh cancels stale work and enqueues one incremented visib
   assert.deepEqual(observer.unobserved, [paragraph, paragraph]);
 });
 
+test('released discovery roots delete revision and identity state under bounded churn and ID reuse', () => {
+  const cancelled = [];
+  class FixtureIntersectionObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  const document = {
+    body: candidate('body'),
+    documentElement: candidate('html'),
+    elementsFromPoint: () => [],
+    createTreeWalker: () => ({ nextNode: () => null })
+  };
+  const discovery = Content.createViewportDiscovery({
+    document,
+    NodeFilter: { SHOW_ELEMENT: 1 },
+    IntersectionObserver: FixtureIntersectionObserver,
+    scheduler: {
+      enqueue: () => true,
+      cancelRoot: (rootId) => { cancelled.push(rootId); return 1; },
+      flush: () => Promise.resolve()
+    },
+    budgets: { timeSliceMs: 8, viewportBufferPx: 1200 },
+    makeWork: () => null,
+    innerWidth: 1000,
+    innerHeight: 800,
+    requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
+    cancelIdleCallback: () => {},
+    clock: { now: () => 0 }
+  });
+
+  for (let index = 0; index < 40; index += 1) {
+    const transientRoot = candidate(`transient-${index}`);
+    assert.equal(discovery.isRootRevisionCurrent(transientRoot, 1), true);
+    assert.equal(discovery.status().trackedRootRevisions, 1);
+    assert.equal(discovery.releaseRoots([transientRoot]), 1);
+    assert.equal(discovery.status().trackedRootRevisions, 0);
+  }
+
+  const first = candidate('reused-id');
+  assert.equal(discovery.isRootRevisionCurrent(first, 1), true);
+  discovery.invalidateRoots([first]);
+  assert.equal(discovery.isRootRevisionCurrent(first, 2), true);
+  discovery.releaseRoots([first]);
+  const replacement = candidate('reused-id');
+  assert.equal(discovery.isRootRevisionCurrent(replacement, 1), true);
+  assert.equal(discovery.status().trackedRootRevisions, 1);
+  assert.ok(cancelled.includes('reused-id'));
+});
+
 test('enrichment items recompute canonical keys from every semantic input', () => {
   const records = [
     { id: '1:0:17', text: 'The model learns.', language: 'en', rootRevision: 1 },
@@ -730,13 +780,117 @@ test('private discovery identity resolves live descendants and detached removal 
   );
 });
 
-test('transient renderer ownership ignores public markers outside an active mutation scope', () => {
+test('transient renderer ownership is direct and never expands to page descendants', () => {
   const publicToken = { nodeType: 1, dataset: { haloOwned: 'token' }, parentNode: null };
   const child = { nodeType: 3, parentNode: publicToken };
 
   assert.equal(Content.isTransientRendererOwned(publicToken, null), false);
-  assert.equal(Content.isTransientRendererOwned(child, new Set([publicToken])), true);
+  assert.equal(Content.isTransientRendererOwned(publicToken, new Set([publicToken])), true);
+  assert.equal(Content.isTransientRendererOwned(child, new Set([publicToken])), false);
   assert.equal(Content.isTransientRendererOwned(publicToken, new Set()), false);
+});
+
+test('content eligibility uses private renderer authority instead of public token fields', () => {
+  const token = {
+    nodeType: 1,
+    tagName: 'SPAN',
+    getAttribute(name) {
+      return ({
+        'data-halo-owned': 'token',
+        'data-halo-root': 'forged-root',
+        'data-halo-run': 'forged-run',
+        'data-halo-original': 'model'
+      })[name] ?? null;
+    }
+  };
+  const parent = {
+    nodeType: 1,
+    tagName: 'SPAN',
+    closest(selector) {
+      return selector.includes('data-halo-owned="token"') ? token : null;
+    }
+  };
+  const node = { nodeType: 3, nodeValue: 'model', parentElement: parent };
+
+  assert.equal(Content.eligibleTextNode(node, {
+    rendererRootId: 'real-root',
+    ownsToken: () => false,
+    isVisible: () => true
+  }), true, 'a forged all-public-marker token remains ordinary page content');
+  assert.equal(Content.eligibleTextNode(node, {
+    rendererRootId: 'real-root',
+    ownsToken: (element) => element === token,
+    isVisible: () => true
+  }), false, 'a private token cannot remap under a different canonical renderer root');
+  token.getAttribute = (name) => name === 'data-halo-root' ? 'real-root' :
+    (name === 'data-halo-owned' ? 'token' : 'private');
+  assert.equal(Content.eligibleTextNode(node, {
+    rendererRootId: 'real-root',
+    ownsToken: (element) => element === token,
+    isVisible: () => true
+  }), true, 'the renderer private capability admits legitimate same-root remapping');
+});
+
+test('content invalidation cancels first and survives renderer cleanup failure through refresh', () => {
+  const changedRoot = candidate('changed-root');
+  const detachedRoot = candidate('detached-root');
+  detachedRoot.isConnected = false;
+  const calls = [];
+  const errors = [];
+  const discovery = {
+    rootsWithin(values) {
+      return Array.from(values || []);
+    },
+    rootIdsWithin(values) {
+      return Array.from(values || []).map((root) => root.id);
+    },
+    invalidateRoots(values) {
+      calls.push(`invalidate:${values.map((root) => root.id).join(',')}`);
+      return values.length;
+    },
+    releaseRoots(values) {
+      calls.push(`release:${Array.from(values || []).map((root) => root.id).join(',')}`);
+      return Array.from(values || []).length;
+    },
+    refreshRoots(values, options) {
+      calls.push(`refresh:${values.map((root) => root.id).join(',')}:${options.alreadyInvalidated}`);
+      return values.length;
+    }
+  };
+  const runtime = {
+    epoch: 4,
+    discovery,
+    pendingChangedRoots: new Set(),
+    rendererRootsByContentRoot: new Map([
+      ['changed-root', new Set(['changed-root:w0'])],
+      ['detached-root', new Set(['detached-root:w0'])]
+    ])
+  };
+  const renderer = {
+    removeRoot(rootId) {
+      calls.push(`remove:${rootId}`);
+      if (rootId === 'changed-root:w0') throw new Error('renderer cleanup failed');
+      return { action: 'removed' };
+    }
+  };
+
+  assert.doesNotThrow(() => Content.invalidateRuntimeRoots(runtime, renderer, [changedRoot], [detachedRoot], {
+    onError: (error, metadata) => errors.push([error.message, metadata.phase, metadata.rootId])
+  }));
+
+  assert.deepEqual(calls, [
+    'invalidate:changed-root',
+    'remove:changed-root:w0',
+    'remove:detached-root:w0',
+    'release:detached-root'
+  ]);
+  assert.deepEqual(errors, [['renderer cleanup failed', 'renderer-root-cleanup', 'changed-root:w0']]);
+  assert.deepEqual([...runtime.pendingChangedRoots], [changedRoot]);
+  assert.equal(runtime.rendererRootsByContentRoot.size, 0);
+
+  assert.equal(Content.refreshInvalidatedRuntimeRoots(runtime, []), 1);
+  assert.deepEqual(calls.at(-1), 'refresh:changed-root:true');
+  assert.equal(runtime.pendingChangedRoots.size, 0);
 });
 
 test('runtime teardown detaches first and attempts every cleanup stage after independent failures', () => {

@@ -166,6 +166,89 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
           rootCount: renderer.status().rootCount
         };
 
+        const transactionRoot = document.createElement('p');
+        transactionRoot.textContent = 'model';
+        const movedDestination = document.createElement('aside');
+        movedDestination.append('Before ', ' after');
+        document.body.append(transactionRoot, movedDestination);
+        const transactionalRenderer = HaloReversibleRenderer.createReversibleRenderer({ document });
+        const transactionText = transactionRoot.firstChild;
+        transactionalRenderer.apply({
+          schemaVersion: 1,
+          runId: 'transaction-run',
+          rootId: 'transaction-root',
+          rootRevision: 1,
+          analysisKey: 'transaction-analysis',
+          root: transactionRoot,
+          fragments: [markedFragment(transactionText, 'transaction-text', 0, 5, 'n')]
+        });
+        const movedWrapper = transactionRoot.querySelector('[data-halo-owned="token"]');
+        const forgedLookalike = movedWrapper.cloneNode(true);
+        forgedLookalike.textContent = 'forged';
+        transactionRoot.appendChild(forgedLookalike);
+        movedDestination.insertBefore(movedWrapper, movedDestination.lastChild);
+        const destinationChildren = [...movedDestination.childNodes];
+        const originalNormalize = movedDestination.normalize;
+        movedDestination.normalize = function () {
+          originalNormalize.call(this);
+          throw new Error('browser moved normalize failed');
+        };
+        let rollbackMessage = null;
+        try {
+          transactionalRenderer.removeRoot('transaction-root');
+        } catch (error) {
+          rollbackMessage = error.message;
+        }
+        movedDestination.normalize = originalNormalize;
+        const movedRollback = {
+          message: rollbackMessage,
+          exactChildren: destinationChildren.every((node, index) => movedDestination.childNodes[index] === node),
+          stillOwned: transactionalRenderer.ownsToken(movedWrapper),
+          forgedOwned: transactionalRenderer.ownsToken(forgedLookalike),
+          rootCount: transactionalRenderer.status().rootCount
+        };
+        transactionalRenderer.removeAll();
+
+        const detachedRoot = document.createElement('p');
+        detachedRoot.textContent = 'model';
+        document.body.appendChild(detachedRoot);
+        const detachedRenderer = HaloReversibleRenderer.createReversibleRenderer({ document });
+        detachedRenderer.apply({
+          schemaVersion: 1,
+          runId: 'detached-run',
+          rootId: 'detached-root',
+          rootRevision: 1,
+          analysisKey: 'detached-analysis',
+          root: detachedRoot,
+          fragments: [markedFragment(detachedRoot.firstChild, 'detached-text', 0, 5, 'n')]
+        });
+        const detachedWrapper = detachedRoot.querySelector('[data-halo-owned="token"]');
+        const detachedText = detachedWrapper.firstChild;
+        const thirdParty = document.createElement('i');
+        thirdParty.textContent = '!';
+        detachedWrapper.appendChild(thirdParty);
+        detachedRoot.removeChild(detachedWrapper);
+        detachedRenderer.removeRoot('detached-root');
+        detachedRoot.appendChild(detachedWrapper);
+        detachedRenderer.apply({
+          schemaVersion: 1,
+          runId: 'detached-reapply',
+          rootId: 'detached-root',
+          rootRevision: 1,
+          analysisKey: 'detached-reanalysis',
+          root: detachedRoot,
+          fragments: [markedFragment(detachedText, 'detached-text-reused', 0, 5, 'n')]
+        });
+        const parentlessCleanup = {
+          outerOwned: detachedRenderer.ownsToken(detachedWrapper),
+          outerHaloAttributes: detachedWrapper.getAttributeNames().filter((name) => name.startsWith('data-halo-')),
+          privateTokens: [...detachedRoot.querySelectorAll('[data-halo-owned="token"]')]
+            .filter((element) => detachedRenderer.ownsToken(element)).length,
+          nestedTokens: detachedRoot.querySelectorAll('[data-halo-owned="token"] [data-halo-owned="token"]').length,
+          text: detachedRoot.textContent
+        };
+        detachedRenderer.removeAll();
+
         return {
           applied: applied.action,
           sourceText,
@@ -174,7 +257,9 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
           applyRemoveApply,
           mutationApply,
           panelResult,
-          routeCleanup
+          routeCleanup,
+          movedRollback,
+          parentlessCleanup
         };
       });
 
@@ -216,6 +301,20 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
         panelHosts: 0,
         text: 'The model studies.',
         rootCount: 0
+      });
+      assert.deepEqual(result.movedRollback, {
+        message: 'browser moved normalize failed',
+        exactChildren: true,
+        stillOwned: true,
+        forgedOwned: false,
+        rootCount: 1
+      });
+      assert.deepEqual(result.parentlessCleanup, {
+        outerOwned: false,
+        outerHaloAttributes: [],
+        privateTokens: 1,
+        nestedTokens: 0,
+        text: 'model!'
       });
       assert.ok(requests.every((url) => url.startsWith(origin)), 'renderer makes no remote request');
     });

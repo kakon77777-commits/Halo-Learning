@@ -192,6 +192,8 @@ test('external token text, children, and semantic attributes invalidate synchron
   const observer = MutationObserver.instances[0];
 
   assert.equal(observer.options.attributes, true);
+  assert.equal(observer.options.attributeOldValue, true);
+  assert.equal(observer.options.characterDataOldValue, true);
   assert.ok(observer.options.attributeFilter.includes('data-halo-pos'));
   assert.ok(observer.options.attributeFilter.includes('data-halo-owned'));
   observer.emit([{ type: 'characterData', target: tokenText }]);
@@ -199,6 +201,114 @@ test('external token text, children, and semantic attributes invalidate synchron
   observer.emit([{ type: 'attributes', target: token, attributeName: 'data-halo-pos' }]);
 
   assert.deepEqual(invalidated, [[token], [inserted], [token]]);
+});
+
+test('operation-scoped sanitation subtracts only private nodes and exact renderer records', () => {
+  const sanitizer = Dynamic.createRendererMutationSanitizer();
+  const article = element('article');
+  const halo = element('halo', { parent: article, owned: true });
+  const legitimate = element('legitimate', { parent: article });
+  const pageText = textNode(article);
+  const token = element('token', { parent: article, owned: true });
+  sanitizer.trackNode(halo);
+  sanitizer.expect({ type: 'characterData', target: pageText, oldValue: 'before' });
+  sanitizer.expect({ type: 'attributes', target: token, attributeName: 'data-halo-pos', oldValue: 'n' });
+
+  assert.deepEqual(sanitizer.sanitize(mutation({
+    target: article,
+    addedNodes: [halo, legitimate]
+  })), {
+    type: 'childList',
+    target: article,
+    addedNodes: [legitimate],
+    removedNodes: []
+  });
+  assert.equal(sanitizer.sanitize({
+    type: 'characterData',
+    target: pageText,
+    oldValue: 'before'
+  }), null);
+  assert.equal(sanitizer.sanitize({
+    type: 'attributes',
+    target: token,
+    attributeName: 'data-halo-pos',
+    oldValue: 'n'
+  }), null);
+  assert.deepEqual(sanitizer.sanitize({
+    type: 'attributes',
+    target: article,
+    attributeName: 'class',
+    oldValue: 'before'
+  }), {
+    type: 'attributes',
+    target: article,
+    attributeName: 'class',
+    oldValue: 'before'
+  });
+  assert.deepEqual(sanitizer.sanitize({
+    type: 'characterData',
+    target: pageText,
+    oldValue: 'third-party-value'
+  }), {
+    type: 'characterData',
+    target: pageText,
+    oldValue: 'third-party-value'
+  }, 'an expected record is consumed once and cannot hide a later page change');
+});
+
+test('renderer suppression preserves monkey-patched page side effects while renderer-only records stay silent', () => {
+  const clock = fakeClock();
+  const invalidated = [];
+  const changed = [];
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  let scope = null;
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    sanitizeRendererRecord: (record) => scope ? scope.sanitize(record) : record,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onRootsInvalidated: (roots) => invalidated.push(roots),
+    onRootsChanged: (roots) => changed.push(roots)
+  });
+  controller.observe({ body: element('body') });
+  const observer = MutationObserver.instances[0];
+  const article = element('article');
+  const halo = element('halo', { parent: article, owned: true });
+  const legitimateSibling = element('legitimate-sibling', { parent: article });
+  const legitimateText = textNode(article);
+
+  scope = Dynamic.createRendererMutationSanitizer();
+  scope.trackNode(halo);
+  scope.expect({ type: 'characterData', target: legitimateText, oldValue: 'renderer-old' });
+  controller.suppressRendererMutations(() => {
+    observer.records.push(
+      mutation({ target: article, addedNodes: [halo, legitimateSibling] }),
+      { type: 'characterData', target: legitimateText, oldValue: 'renderer-old' },
+      { type: 'characterData', target: legitimateText, oldValue: 'page-old' },
+      { type: 'attributes', target: article, attributeName: 'class', oldValue: 'page-before' }
+    );
+  });
+  scope = null;
+
+  assert.deepEqual(invalidated, [[article]]);
+  assert.deepEqual(changed, []);
+  clock.tick(80);
+  assert.deepEqual(changed, [[article]]);
+
+  scope = Dynamic.createRendererMutationSanitizer();
+  scope.trackNode(halo);
+  scope.expect({ type: 'characterData', target: legitimateText, oldValue: 'renderer-only' });
+  controller.suppressRendererMutations(() => {
+    observer.records.push(
+      mutation({ target: article, addedNodes: [halo] }),
+      { type: 'characterData', target: legitimateText, oldValue: 'renderer-only' }
+    );
+  });
+  scope = null;
+  clock.tick(300);
+  assert.equal(invalidated.length, 1);
+  assert.equal(changed.length, 1);
 });
 
 test('coalescing keeps independent inserted roots and folds nested redraw records', () => {

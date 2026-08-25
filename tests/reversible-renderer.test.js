@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const Renderer = require('../apps/extension/src/shared/reversible-renderer');
+const Dynamic = require('../apps/extension/src/shared/dynamic-dom-controller');
 
 class FakeNode {
   constructor(nodeType, ownerDocument) {
@@ -843,4 +844,234 @@ test('a fragment inside another root private wrapper is rejected before nesting'
   assert.equal(dom.article.querySelector('[data-halo-owned="token"]'), wrapper);
   assert.equal(renderer.status().rootCount, 1);
   assert.equal(dom.article.textContent, 'The model learns.');
+});
+
+test('removeRoot rolls back a privately owned wrapper moved outside its render root', () => {
+  const dom = fixture();
+  const aside = dom.document.createElement('aside');
+  const before = dom.document.createTextNode('Before ');
+  const after = dom.document.createTextNode(' after');
+  aside.append(before, after);
+  dom.document.body.appendChild(aside);
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  aside.insertBefore(wrapper, after);
+  const asideChildrenBefore = [...aside.childNodes];
+  const statusBefore = renderer.status();
+  const originalNormalize = aside.normalize;
+  aside.normalize = function () {
+    originalNormalize.call(this);
+    throw new Error('moved destination normalize failed');
+  };
+
+  assert.throws(() => renderer.removeRoot('root-1'), /moved destination normalize failed/);
+
+  aside.normalize = originalNormalize;
+  assert.deepEqual(aside.childNodes, asideChildrenBefore);
+  assert.equal(wrapper.parentNode, aside);
+  assert.equal(renderer.ownsToken(wrapper), true);
+  assert.deepEqual(renderer.status(), statusBefore);
+  assert.equal(renderer.removeAll().wrappers, 1);
+  assert.equal(renderer.ownsToken(wrapper), false);
+  assert.equal(aside.textContent, 'Before model after');
+});
+
+test('removeAll restores every distinct moved-wrapper destination when a later destination fails', () => {
+  const dom = fixture();
+  const firstAside = dom.document.createElement('aside');
+  const secondAside = dom.document.createElement('aside');
+  firstAside.append(dom.document.createTextNode('First '), dom.document.createTextNode('.'));
+  secondAside.append(dom.document.createTextNode('Second '), dom.document.createTextNode('.'));
+  dom.document.body.append(firstAside, secondAside);
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, {
+    fragments: [
+      fragment(dom.model, 'model-node', 0, 5),
+      fragment(dom.learns, 'learn-node', 1, 7, { pos: 'v', label: 'v' })
+    ]
+  }));
+  const wrappers = dom.article.querySelectorAll('[data-halo-owned="token"]');
+  firstAside.insertBefore(wrappers[0], firstAside.childNodes[1]);
+  secondAside.insertBefore(wrappers[1], secondAside.childNodes[1]);
+  const firstBefore = [...firstAside.childNodes];
+  const secondBefore = [...secondAside.childNodes];
+  const originalNormalize = secondAside.normalize;
+  secondAside.normalize = function () {
+    originalNormalize.call(this);
+    throw new Error('second moved destination failed');
+  };
+
+  assert.throws(() => renderer.removeAll(), /second moved destination failed/);
+
+  secondAside.normalize = originalNormalize;
+  assert.deepEqual(firstAside.childNodes, firstBefore);
+  assert.deepEqual(secondAside.childNodes, secondBefore);
+  assert.equal(renderer.ownsToken(wrappers[0]), true);
+  assert.equal(renderer.ownsToken(wrappers[1]), true);
+  assert.equal(renderer.status().rootCount, 1);
+  assert.equal(renderer.removeAll().wrappers, 2);
+  assert.equal(firstAside.textContent, 'First model.');
+  assert.equal(secondAside.textContent, 'Second learns.');
+});
+
+test('rollback reports both failures and retains private cleanup authority', () => {
+  const dom = fixture();
+  const aside = dom.document.createElement('aside');
+  aside.append(dom.document.createTextNode('Before '), dom.document.createTextNode(' after'));
+  dom.document.body.appendChild(aside);
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  aside.insertBefore(wrapper, aside.childNodes[1]);
+  const originalNormalize = aside.normalize;
+  const originalInsertBefore = aside.insertBefore;
+  aside.normalize = function () {
+    originalNormalize.call(this);
+    throw new Error('initiating normalize failure');
+  };
+  aside.insertBefore = function () {
+    throw new Error('rollback insertion failure');
+  };
+
+  let failure;
+  try {
+    renderer.removeRoot('root-1');
+  } catch (error) {
+    failure = error;
+  }
+
+  aside.normalize = originalNormalize;
+  aside.insertBefore = originalInsertBefore;
+  assert.ok(failure instanceof AggregateError);
+  assert.match(failure.errors[0].message, /initiating normalize failure/);
+  assert.ok(failure.errors.some((error) => /rollback insertion failure/.test(error.message)));
+  assert.equal(renderer.ownsToken(wrapper), true);
+  assert.equal(renderer.status().rootCount, 1);
+  assert.doesNotThrow(() => renderer.removeAll());
+  assert.equal(renderer.ownsToken(wrapper), false);
+  assert.equal(renderer.status().rootCount, 0);
+  assert.equal(aside.textContent, 'Before model after');
+});
+
+test('parentless removal scrubs public markers and revokes private authority before root reuse', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const ownedText = wrapper.childNodes[0];
+  const thirdParty = dom.document.createElement('i');
+  thirdParty.textContent = '!';
+  wrapper.appendChild(thirdParty);
+  wrapper.setAttribute('data-halo-extra', 'forged-semantic-field');
+  wrapper.setAttribute('data-page-id', 'keep-me');
+  wrapper.setAttribute('title', 'Halo title');
+  wrapper.className += ' page-class halo-extra-class';
+  dom.link.removeChild(wrapper);
+
+  const removed = renderer.removeRoot('root-1');
+
+  assert.equal(removed.wrappers, 1);
+  assert.equal(renderer.ownsToken(wrapper), false);
+  assert.equal(renderer.status().rootCount, 0);
+  assert.equal(wrapper.getAttributeNames().some((name) => name.startsWith('data-halo-')), false);
+  assert.equal(wrapper.hasAttribute('title'), false);
+  assert.equal(wrapper.className, 'page-class');
+  assert.equal(wrapper.getAttribute('data-page-id'), 'keep-me');
+  assert.deepEqual(wrapper.childNodes, [ownedText, thirdParty]);
+  assert.equal(wrapper.textContent, 'model!');
+
+  dom.link.appendChild(wrapper);
+  renderer.apply(request(dom.article, {
+    runId: 'run-reused',
+    analysisKey: 'analysis-reused',
+    fragments: [fragment(ownedText, 'reused-text', 0, 5)]
+  }));
+  assert.equal(renderer.ownsToken(wrapper), false);
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"]').length, 1);
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"] [data-halo-owned="token"]').length, 0);
+  renderer.removeAll();
+  assert.equal(dom.article.textContent, 'The model! learns.');
+});
+
+test('renderer mutation tracking admits only private nodes and exact page-node operations', () => {
+  const dom = fixture();
+  const pageNodes = new Set([
+    dom.document.body, dom.article, dom.lead, dom.link, dom.model, dom.emphasis, dom.learns
+  ]);
+  const sanitizer = Dynamic.createRendererMutationSanitizer();
+  const tracked = [];
+  const operations = [];
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    trackOwnedNode(node) {
+      assert.equal(pageNodes.has(node), false, 'page nodes must never receive transient private authority');
+      tracked.push(node);
+      sanitizer.trackNode(node);
+    },
+    trackMutation(operation) {
+      operations.push(operation);
+      sanitizer.expect(operation);
+    }
+  });
+
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+
+  assert.equal(tracked.includes(wrapper), true);
+  assert.equal(operations.some((operation) =>
+    operation.type === 'characterData' && operation.target === dom.model && operation.oldValue === 'model'
+  ), true);
+  assert.equal(operations.some((operation) =>
+    operation.type === 'childList' && operation.target === dom.link &&
+      operation.addedNodes.includes(wrapper)
+  ), true);
+  assert.equal(sanitizer.sanitize({
+    type: 'characterData',
+    target: dom.model,
+    oldValue: 'model'
+  }), null);
+  assert.deepEqual(sanitizer.sanitize({
+    type: 'attributes',
+    target: dom.link,
+    attributeName: 'class',
+    oldValue: 'page-class'
+  }), {
+    type: 'attributes',
+    target: dom.link,
+    attributeName: 'class',
+    oldValue: 'page-class'
+  });
+});
+
+test('cleanup operation tracking does not grant transient authority to third-party children or touched parents', () => {
+  const dom = fixture();
+  let active = false;
+  const forbidden = new Set([dom.article, dom.link, dom.model]);
+  const sanitizer = Dynamic.createRendererMutationSanitizer();
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    suppressMutations(callback) {
+      active = true;
+      try {
+        return callback();
+      } finally {
+        active = false;
+      }
+    },
+    trackOwnedNode(node) {
+      if (active) assert.equal(forbidden.has(node), false, 'cleanup must not own page or third-party nodes');
+      sanitizer.trackNode(node);
+    },
+    trackMutation: (operation) => sanitizer.expect(operation)
+  });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const thirdParty = dom.document.createElement('i');
+  thirdParty.textContent = '!';
+  wrapper.appendChild(thirdParty);
+  forbidden.add(thirdParty);
+
+  assert.doesNotThrow(() => renderer.removeRoot('root-1'));
+  assert.equal(thirdParty.parentNode, dom.link);
 });
