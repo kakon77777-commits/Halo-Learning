@@ -3,16 +3,29 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const Contracts = require('../packages/contracts/semantic-contracts');
 const Progressive = require('../apps/extension/src/shared/progressive-runtime');
 
 const GENERATED_AT = '2026-08-26T08:00:00.000Z';
 
-function annotationSet(label) {
+function annotationSet(label, text) {
+  const sourceText = text || 'The model learns.';
   return Object.freeze({
     schemaVersion: 1,
     setId: `annotation-set:${label}`,
+    languageMode: 'en',
+    textLength: sourceText.length,
+    algorithm: Object.freeze({ id: 'fixture-semantic', version: '1.0.0' }),
     generatedAt: GENERATED_AT,
-    tokens: Object.freeze([])
+    providerRefs: Object.freeze([
+      Object.freeze({ id: 'fixture-provider', version: '1.0.0', status: 'verified' })
+    ]),
+    tokens: Object.freeze([]),
+    diagnostics: Object.freeze({
+      fallbackActivated: false,
+      unavailableCapabilities: Object.freeze([]),
+      warnings: Object.freeze([])
+    })
   });
 }
 
@@ -23,9 +36,10 @@ function fixtureOptions(overrides) {
       annotateText: (text) => annotationSet(`bootstrap:${text}`)
     },
     enrichBatch: settings.enrichBatch || (async (request) => ({
-      annotationSet: annotationSet(`lexical:${request.text}`),
+      annotationSet: annotationSet(`lexical:${request.text}`, request.text),
       lexicalVersion: request.lexicalVersion
     })),
+    validateAnnotationSet: Contracts.normalizeAnnotationSet,
     semanticVersion: 'semantic-v3',
     grammarVersion: 'grammar-v3',
     initialPageEpoch: 1,
@@ -70,6 +84,12 @@ test('analysis key changes for every semantic input version and is stable for id
   const second = Progressive.createAnalysisKey({ ...input });
 
   assert.equal(first, second);
+  assert.equal(first, 'ak1:eff7d1990f48f139614b45eed178ed768277183780542cc8712f5afb58313858');
+  assert.match(first, /^ak1:[a-f0-9]{64}$/);
+  assert.notEqual(
+    Progressive.createAnalysisKey({ ...input, profileRevision: 7 }),
+    Progressive.createAnalysisKey({ ...input, profileRevision: '7' })
+  );
   for (const [field, value] of [
     ['text', 'The model learns!'],
     ['languageMode', 'both'],
@@ -80,6 +100,83 @@ test('analysis key changes for every semantic input version and is stable for id
   ]) {
     assert.notEqual(Progressive.createAnalysisKey({ ...input, [field]: value }), first, field);
   }
+});
+
+test('completed lexical reconciliation makes a late bootstrap non-projectable', async () => {
+  let resolveBootstrap;
+  let resolveLexical;
+  const orderedRuntime = Progressive.createProgressiveSemanticRuntime({
+    ...fixtureOptions({
+      enrichBatch: (request) => new Promise((resolve) => {
+        resolveLexical = () => resolve({
+          annotationSet: annotationSet(`lexical:${request.text}`, request.text),
+          lexicalVersion: request.lexicalVersion
+        });
+      })
+    }),
+    bootstrapEngine: {
+      annotateText: (text) => new Promise((resolve) => {
+        resolveBootstrap = () => resolve(annotationSet(`bootstrap:${text}`, text));
+      })
+    }
+  });
+  const request = fixtureRequest('root-order', 1);
+  const pendingBootstrap = orderedRuntime.bootstrap(request);
+  const pendingLexical = orderedRuntime.enrich(request);
+
+  resolveLexical();
+  assert.equal((await pendingLexical).phase, 'lexical');
+  resolveBootstrap();
+  const lateBootstrap = await pendingBootstrap;
+
+  assert.equal(lateBootstrap.status, 'stale');
+  assert.equal(Object.hasOwn(lateBootstrap, 'annotationSet'), false);
+});
+
+test('validated request fields are snapshotted before asynchronous dispatch', async () => {
+  let dispatched;
+  let resolveEnrichment;
+  const runtime = Progressive.createProgressiveSemanticRuntime(fixtureOptions({
+    enrichBatch: (request) => new Promise((resolve) => {
+      dispatched = request;
+      resolveEnrichment = () => resolve({
+        annotationSet: annotationSet(`lexical:${request.text}`, request.text),
+        lexicalVersion: request.lexicalVersion
+      });
+    })
+  }));
+  const request = fixtureRequest('root-snapshot', 1);
+  const expected = { ...request };
+  const pending = runtime.enrich(request);
+  request.requestId = 'mutated-request';
+  request.pageEpoch = 99;
+  request.rootId = 'mutated-root';
+  request.rootRevision = 99;
+  request.analysisKey = 'ak1:'.concat('0'.repeat(64));
+
+  assert.equal(Object.isFrozen(dispatched), true);
+  resolveEnrichment();
+  const result = await pending;
+
+  assert.equal(result.phase, 'lexical');
+  assert.equal(result.requestId, expected.requestId);
+  assert.equal(result.pageEpoch, expected.pageEpoch);
+  assert.equal(result.rootId, expected.rootId);
+  assert.equal(result.rootRevision, expected.rootRevision);
+  assert.equal(result.analysisKey, expected.analysisKey);
+});
+
+test('malformed annotation engine output is invalid and never projectable', async () => {
+  const runtime = Progressive.createProgressiveSemanticRuntime(fixtureOptions({
+    enrichBatch: async (request) => ({
+      annotationSet: { schemaVersion: 1, generatedAt: GENERATED_AT, tokens: [] },
+      lexicalVersion: request.lexicalVersion
+    })
+  }));
+  const result = await runtime.enrich(fixtureRequest('root-malformed', 1));
+
+  assert.equal(result.status, 'invalid');
+  assert.equal(Object.hasOwn(result, 'annotationSet'), false);
 });
 
 test('one analysis revision permits one bootstrap and one lexical reconciliation', async () => {

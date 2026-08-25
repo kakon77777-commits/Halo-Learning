@@ -499,6 +499,34 @@
       }
     }
 
+    async function withEnsuredShards(ids, loadOptions, callback) {
+      if (!Array.isArray(ids) || typeof callback !== 'function') {
+        throw new TypeError('ids and callback are required');
+      }
+      const signal = loadOptions && loadOptions.signal;
+      if (signal && signal.aborted) throw new BrowserShardError('ABORTED', 'Shard wait was aborted');
+      const unique = [...new Set(ids)];
+      if (unique.length > maxResidentShards) {
+        throw new BrowserShardError('SHARD_SET_EXCEEDS_CACHE_LIMIT', 'Pinned shard set exceeds the cache limit');
+      }
+      for (const id of unique) {
+        if (!descriptors.has(id)) throw new BrowserShardError('SHARD_NOT_DECLARED', 'Shard ID is absent from manifest');
+      }
+      for (const id of unique) pinCounts.set(id, (pinCounts.get(id) || 0) + 1);
+      try {
+        const shards = await Promise.all(unique.map((id) => waitForCaller(load(id), signal)));
+        for (const id of unique) touch(id);
+        return await callback(Object.freeze(shards));
+      } finally {
+        for (const id of unique) {
+          const next = (pinCounts.get(id) || 1) - 1;
+          if (next > 0) pinCounts.set(id, next);
+          else pinCounts.delete(id);
+        }
+        evict();
+      }
+    }
+
     function status() {
       return deepFreeze({
         manifestFormat: MANIFEST_FORMAT,
@@ -525,7 +553,14 @@
       return cleared;
     }
 
-    return Object.freeze({ requiredShardIds, ensureShards, withPinnedShards, status, clearMemoryCache });
+    return Object.freeze({
+      requiredShardIds,
+      ensureShards,
+      withPinnedShards,
+      withEnsuredShards,
+      status,
+      clearMemoryCache
+    });
   }
 
   return Object.freeze({

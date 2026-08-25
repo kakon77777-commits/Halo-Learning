@@ -26,6 +26,7 @@ if (typeof importScripts === 'function') {
     distinctShards: 24
   });
   const LANGUAGE_MODES = new Set(['en', 'zh-Hant', 'both']);
+  const ANALYSIS_KEY_PATTERN = /^ak1:[a-f0-9]{64}$/;
 
   function deepFreeze(value) {
     if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -86,8 +87,8 @@ if (typeof importScripts === 'function') {
     if (!LANGUAGE_MODES.has(raw.languageMode)) {
       throw new TypeError(`items[${index}].languageMode: must be en, zh-Hant, or both`);
     }
-    if (!validStableId(raw.analysisKey)) {
-      throw new TypeError(`items[${index}].analysisKey: must be a stable hash`);
+    if (typeof raw.analysisKey !== 'string' || !ANALYSIS_KEY_PATTERN.test(raw.analysisKey)) {
+      throw new TypeError(`items[${index}].analysisKey: must be a canonical analysis key`);
     }
     return Object.freeze({
       rootId: raw.rootId,
@@ -315,23 +316,28 @@ if (typeof importScripts === 'function') {
         if (controller.signal.aborted) return cancelledResponse(validated);
         if (!context.runtime) return bootstrapResponse(validated, context, generatedAt);
         try {
-          await context.runtime.ensureShards(validated.shardIds, { signal: controller.signal });
-          if (controller.signal.aborted) return cancelledResponse(validated);
-          return context.runtime.withPinnedShards(validated.shardIds, (pinnedShards) => {
-            if (controller.signal.aborted) return cancelledResponse(validated);
-            const provider = settings.shardedProviderModule.createShardedDictionaryProvider({
-              runtime: context.runtime,
-              pinnedShards,
-              bootstrapProvider: context.bootstrapProvider
-            });
-            return deepFreeze({
-              schemaVersion: SCHEMA_VERSION,
-              requestId: validated.requestId,
-              pageEpoch: validated.pageEpoch,
-              results: annotate(validated, provider, 'lexical', context.lexicalVersion, generatedAt),
-              status: sanitizedStatus(provider)
-            });
-          });
+          if (typeof context.runtime.withEnsuredShards !== 'function') {
+            throw new TypeError('runtime.withEnsuredShards: is required');
+          }
+          return await context.runtime.withEnsuredShards(
+            validated.shardIds,
+            { signal: controller.signal },
+            (pinnedShards) => {
+              if (controller.signal.aborted) return cancelledResponse(validated);
+              const provider = settings.shardedProviderModule.createShardedDictionaryProvider({
+                runtime: context.runtime,
+                pinnedShards,
+                bootstrapProvider: context.bootstrapProvider
+              });
+              return deepFreeze({
+                schemaVersion: SCHEMA_VERSION,
+                requestId: validated.requestId,
+                pageEpoch: validated.pageEpoch,
+                results: annotate(validated, provider, 'lexical', context.lexicalVersion, generatedAt),
+                status: sanitizedStatus(provider)
+              });
+            }
+          );
         } catch (error) {
           if (controller.signal.aborted || stableFailureCode(error, '') === 'ABORTED') {
             return cancelledResponse(validated);

@@ -142,6 +142,44 @@ test('bounded LRU evicts unpinned shards but preserves a shard pinned by an acti
   assert.equal(fixture.runtime.status().residentCount, 1);
 });
 
+test('atomic ensure-and-pin survives concurrent disjoint loads at the cache boundary', async () => {
+  const built = artifacts();
+  const manifest = await BrowserLoader.loadBrowserLexicalManifest(built.serializedManifest);
+  const descriptors = manifest.shards.slice(0, 2);
+  const releases = new Map();
+  const callbackReleases = [];
+  const entered = [];
+  const runtime = BrowserLoader.createBrowserLexicalRuntime({
+    manifest,
+    maxResidentShards: 1,
+    readText: (resourcePath) => new Promise((resolve) => {
+      releases.set(resourcePath, () => resolve(built.serializedShards[resourcePath]));
+    })
+  });
+  const run = (descriptor) => runtime.withEnsuredShards(
+    [descriptor.id],
+    {},
+    async (pinned) => {
+      entered.push(pinned[0].id);
+      await new Promise((resolve) => callbackReleases.push(resolve));
+      return pinned[0].id;
+    }
+  );
+
+  const first = run(descriptors[0]);
+  const second = run(descriptors[1]);
+  while (releases.size < 2) await new Promise((resolve) => setImmediate(resolve));
+  for (const descriptor of descriptors) releases.get(descriptor.path)();
+  while (entered.length < 2) await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(runtime.status().pinnedCount, 2);
+  assert.equal(runtime.status().residentCount, 2);
+  callbackReleases.splice(0).forEach((release) => release());
+  assert.deepEqual(await Promise.all([first, second]), descriptors.map((value) => value.id));
+  assert.equal(runtime.status().pinnedCount, 0);
+  assert.equal(runtime.status().residentCount, 1);
+});
+
 test('pin acquisition is atomic when any requested shard is absent', async () => {
   const fixture = await runtimeFixture();
   const first = fixture.manifest.shards[0];

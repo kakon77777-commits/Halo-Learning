@@ -10,6 +10,7 @@ const Dictionary = require('../apps/extension/src/shared/dictionary-provider');
 const Semantic = require('../apps/extension/src/shared/semantic-annotations');
 const Grammar = require('../apps/extension/src/shared/grammar-annotations');
 const ShardedProvider = require('../apps/extension/src/shared/sharded-dictionary-provider');
+const Progressive = require('../apps/extension/src/shared/progressive-runtime');
 const ServiceWorker = require('../apps/extension/src/service-worker');
 
 const extensionRoot = path.join(__dirname, '..', 'apps', 'extension');
@@ -71,11 +72,17 @@ function fixtureRuntime(options) {
       return languageMode === 'en' || languageMode === 'both' ? ['en-00'] : [];
     },
     async ensureShards(ids, loadOptions) {
+      if (settings.rejectLegacy) throw new Error('non-atomic shard loading is forbidden');
       ensured.push([...ids]);
       if (typeof settings.ensureShards === 'function') return settings.ensureShards(ids, loadOptions);
       return Object.freeze([lexicalShard()]);
     },
     withPinnedShards(_ids, callback) {
+      return callback(Object.freeze([lexicalShard()]));
+    },
+    async withEnsuredShards(ids, loadOptions, callback) {
+      ensured.push([...ids]);
+      if (typeof settings.ensureShards === 'function') await settings.ensureShards(ids, loadOptions);
       return callback(Object.freeze([lexicalShard()]));
     },
     status() {
@@ -105,14 +112,24 @@ function serviceFor(runtime, overrides) {
 }
 
 function item(index, overrides) {
-  return {
+  const value = {
     rootId: `root-${index}`,
     rootRevision: 1,
     text: 'The model learns.',
     languageMode: 'en',
-    analysisKey: `analysis-${index}`,
     ...(overrides || {})
   };
+  if (!value.analysisKey) {
+    value.analysisKey = Progressive.createAnalysisKey({
+      text: value.text,
+      languageMode: value.languageMode,
+      semanticVersion: 'semantic-v3',
+      grammarVersion: 'grammar-v3',
+      profileRevision: 'profile-7',
+      lexicalVersion: 'manifest-root-1'
+    });
+  }
+  return value;
 }
 
 function message(items, overrides) {
@@ -126,7 +143,7 @@ function message(items, overrides) {
 }
 
 test('shard enrichment returns versioned lexical results and rejects the legacy whole-index message', async () => {
-  const runtime = fixtureRuntime();
+  const runtime = fixtureRuntime({ rejectLegacy: true });
   const service = serviceFor(runtime);
   const response = await service.handleMessage(message([item(1)]), { tab: { id: 7 } });
   const ignored = await service.handleMessage({
@@ -145,7 +162,7 @@ test('shard enrichment returns versioned lexical results and rejects the legacy 
     pageEpoch: 1,
     rootId: 'root-1',
     rootRevision: 1,
-    analysisKey: 'analysis-1',
+    analysisKey: item(1).analysisKey,
     phase: 'lexical',
     annotationSet: response.results[0].annotationSet,
     lexicalVersion: 'manifest-root-1',
@@ -243,6 +260,14 @@ test('enrichment validation enforces all four exact batch bounds', () => {
   }), /shard limit/i);
 });
 
+test('service boundary rejects stable-looking IDs that are not canonical analysis keys', () => {
+  const runtime = fixtureRuntime();
+  assert.throws(
+    () => ServiceWorker.validateEnrichmentRequest(message([item(1, { analysisKey: 'analysis-1' })]), runtime),
+    /canonical analysis key/i
+  );
+});
+
 test('cancellation is scoped by sender tab even when request IDs collide', async () => {
   const waiters = [];
   const runtime = fixtureRuntime({
@@ -282,6 +307,7 @@ test('MV3 worker source loads only candidate-independent local shard modules', (
   assert.equal(Object.hasOwn(manifest, 'host_permissions'), false);
   assert.match(serviceSource, /runtime-shard-browser\.js/);
   assert.match(serviceSource, /sharded-dictionary-provider\.js/);
+  assert.match(serviceSource, /withEnsuredShards/);
   assert.match(serviceSource, /data\/lexical-v0\.4\.0\/manifest\.json/);
   assert.doesNotMatch(serviceSource, /lexical-runtime-index\.json/);
   assert.doesNotMatch(serviceSource, /runtime-index-browser\.js/);
