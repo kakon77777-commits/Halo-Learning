@@ -643,22 +643,14 @@
         let group = [];
         const flush = () => {
           if (!group.length) return;
-          const nonempty = group.filter((node) => node.nodeValue !== '');
-          const survivor = nonempty[0] || null;
-          const removed = group.filter((node) => node !== survivor);
-          if (removed.length) expectChildList(container, [], removed);
-          if (survivor) {
-            let accumulated = survivor.nodeValue;
-            let seenSurvivor = false;
-            for (const node of group) {
-              if (node === survivor) {
-                seenSurvivor = true;
-                continue;
-              }
-              if (!seenSurvivor || node.nodeValue === '') continue;
-              expectMutation({ type: 'characterData', target: survivor, oldValue: accumulated });
-              accumulated += node.nodeValue;
-            }
+          const survivorIndex = group.findIndex((node) => node.nodeValue !== '');
+          if (survivorIndex < 0) {
+            for (const node of group) expectChildList(container, [], [node]);
+          } else {
+            for (const node of group.slice(0, survivorIndex)) expectChildList(container, [], [node]);
+            const survivor = group[survivorIndex];
+            expectMutation({ type: 'characterData', target: survivor, oldValue: survivor.nodeValue });
+            for (const node of group.slice(survivorIndex + 1)) expectChildList(container, [], [node]);
           }
           group = [];
         };

@@ -97,20 +97,26 @@ class FakeNode {
   }
 
   normalize() {
-    for (const child of [...this.childNodes]) {
-      if (child.nodeType !== 3) child.normalize();
-    }
-    for (let index = this.childNodes.length - 1; index >= 0; index -= 1) {
+    for (let index = 0; index < this.childNodes.length;) {
       const child = this.childNodes[index];
-      if (child.nodeType === 3 && child.nodeValue === '') this.removeChild(child);
-    }
-    for (let index = this.childNodes.length - 1; index > 0; index -= 1) {
-      const child = this.childNodes[index];
-      const previous = this.childNodes[index - 1];
-      if (child.nodeType === 3 && previous.nodeType === 3) {
-        previous.nodeValue += child.nodeValue;
-        this.removeChild(child);
+      if (child.nodeType !== 3) {
+        child.normalize();
+        index += 1;
+        continue;
       }
+      if (child.nodeValue === '') {
+        this.removeChild(child);
+        continue;
+      }
+      const following = [];
+      for (let nextIndex = index + 1;
+        nextIndex < this.childNodes.length && this.childNodes[nextIndex].nodeType === 3;
+        nextIndex += 1) {
+        following.push(this.childNodes[nextIndex]);
+      }
+      child.nodeValue += following.map((node) => node.nodeValue).join('');
+      for (const node of following) this.removeChild(node);
+      index += 1;
     }
   }
 
@@ -153,6 +159,17 @@ class FakeText extends FakeNode {
     this.nodeValue = this.nodeValue.slice(0, offset);
     if (this.parentNode) this.parentNode.insertBefore(suffix, this.parentNode.childNodes[this.parentNode.childNodes.indexOf(this) + 1] || null);
     return suffix;
+  }
+}
+
+class FakeComment extends FakeNode {
+  constructor(value, document) {
+    super(8, document);
+    this.nodeValue = String(value);
+  }
+
+  get textContent() {
+    return this.nodeValue;
   }
 }
 
@@ -263,6 +280,10 @@ class FakeDocument extends FakeNode {
 
   createTextNode(value) {
     return new FakeText(value, this);
+  }
+
+  createComment(value) {
+    return new FakeComment(value, this);
   }
 
   createDocumentFragment() {
@@ -1201,6 +1222,140 @@ test('renderer mutation tracking admits only private nodes and exact page-node o
     attributeName: 'class',
     oldValue: 'page-class'
   });
+});
+
+test('normalization descriptors consume the DOM Standard record topology without self-invalidation', () => {
+  const dom = fixture();
+  const mutationPhases = [];
+  let activePhase = null;
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    suppressMutations(callback) {
+      const phase = {
+        sanitizer: Dynamic.createRendererMutationSanitizer(),
+        operations: []
+      };
+      activePhase = phase;
+      try {
+        return callback();
+      } finally {
+        mutationPhases.push(phase);
+        activePhase = null;
+      }
+    },
+    trackMutation(operation) {
+      if (!activePhase) return;
+      activePhase.operations.push(operation);
+      activePhase.sanitizer.expect(operation);
+    }
+  });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.link.querySelector('[data-halo-owned="token"]');
+  const ownedText = wrapper.childNodes[0];
+  const leadingEmpty = dom.document.createTextNode('');
+  const first = dom.document.createTextNode('A');
+  const middleEmpty = dom.document.createTextNode('');
+  const following = dom.document.createTextNode('B');
+  const firstBoundary = dom.document.createComment('first boundary');
+  const second = dom.document.createTextNode('C');
+  const secondFollowing = dom.document.createTextNode('D');
+  const nested = dom.document.createElement('span');
+  const nestedFirst = dom.document.createTextNode('E');
+  const nestedEmpty = dom.document.createTextNode('');
+  const nestedFollowing = dom.document.createTextNode('F');
+  nested.append(nestedFirst, nestedEmpty, nestedFollowing);
+  const trailingEmpty = dom.document.createTextNode('');
+  const secondBoundary = dom.document.createComment('second boundary');
+  const standalone = dom.document.createTextNode('S');
+  dom.link.insertBefore(leadingEmpty, wrapper);
+  dom.link.insertBefore(first, wrapper);
+  dom.link.insertBefore(middleEmpty, wrapper);
+  dom.link.append(
+    following,
+    firstBoundary,
+    second,
+    secondFollowing,
+    nested,
+    trailingEmpty,
+    secondBoundary,
+    standalone
+  );
+
+  renderer.removeRoot('root-1');
+
+  const removalPhase = mutationPhases[mutationPhases.length - 1];
+  const textNodes = new Set([
+    leadingEmpty,
+    first,
+    middleEmpty,
+    ownedText,
+    following,
+    second,
+    secondFollowing,
+    nestedFirst,
+    nestedEmpty,
+    nestedFollowing,
+    trailingEmpty,
+    standalone
+  ]);
+  const containers = new Set([dom.link, nested]);
+  const normalizationOperations = removalPhase.operations.filter((operation) =>
+    (operation.type === 'characterData' && textNodes.has(operation.target)) ||
+    (operation.type === 'childList' && containers.has(operation.target) &&
+      operation.addedNodes.length === 0 && operation.removedNodes.length > 0 &&
+      operation.removedNodes.every((node) => textNodes.has(node)))
+  );
+  const childRemoval = (target, node) => ({
+    type: 'childList',
+    target,
+    addedNodes: [],
+    removedNodes: [node]
+  });
+  const characterChange = (target, oldValue) => ({ type: 'characterData', target, oldValue });
+  const normativeRecords = [
+    childRemoval(dom.link, leadingEmpty),
+    characterChange(first, 'A'),
+    childRemoval(dom.link, middleEmpty),
+    childRemoval(dom.link, ownedText),
+    childRemoval(dom.link, following),
+    characterChange(second, 'C'),
+    childRemoval(dom.link, secondFollowing),
+    characterChange(nestedFirst, 'E'),
+    childRemoval(nested, nestedEmpty),
+    childRemoval(nested, nestedFollowing),
+    childRemoval(dom.link, trailingEmpty),
+    characterChange(standalone, 'S')
+  ];
+
+  const exactSanitizer = Dynamic.createRendererMutationSanitizer();
+  for (const operation of normalizationOperations) exactSanitizer.expect(operation);
+  const retainedRendererRecords = normativeRecords
+    .map((record) => exactSanitizer.sanitize(record))
+    .filter(Boolean);
+  assert.equal(retainedRendererRecords.length, 0, 'renderer-only normative records are fully consumed');
+  assert.deepEqual(Dynamic.coalesceMutations(retainedRendererRecords), {
+    roots: [],
+    removedRoots: []
+  });
+  assert.equal(exactSanitizer.status().pendingOperations, 0);
+
+  const mixedSanitizer = Dynamic.createRendererMutationSanitizer();
+  for (const operation of normalizationOperations) mixedSanitizer.expect(operation);
+  const legitimateExtra = dom.document.createElement('strong');
+  const mixedRecords = normativeRecords.map((record, index) => index === 0
+    ? { ...record, addedNodes: [legitimateExtra] }
+    : record);
+  const retainedMixedRecords = mixedRecords
+    .map((record) => mixedSanitizer.sanitize(record))
+    .filter(Boolean);
+  assert.deepEqual(retainedMixedRecords, [{
+    type: 'childList',
+    target: dom.link,
+    addedNodes: [legitimateExtra],
+    removedNodes: []
+  }]);
+  assert.deepEqual(Dynamic.coalesceMutations(retainedMixedRecords).roots, [legitimateExtra]);
+  assert.equal(mixedSanitizer.status().pendingOperations, 0);
 });
 
 test('cleanup operation tracking does not grant transient authority to third-party children or touched parents', () => {

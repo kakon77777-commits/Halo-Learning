@@ -10,6 +10,7 @@ const { withFixtureServer } = require('./helpers/fixture-server');
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 const extensionRoot = path.join(repositoryRoot, 'apps', 'extension');
 const rendererPath = path.join(extensionRoot, 'src', 'shared', 'reversible-renderer.js');
+const dynamicDomPath = path.join(extensionRoot, 'src', 'shared', 'dynamic-dom-controller.js');
 
 test('real Chromium verifies all renderer lifecycle sequences and isolated clamped panel', async () => {
   const executable = resolveChromiumExecutable({
@@ -36,6 +37,7 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
       const requests = [];
       page.on('request', (request) => requests.push(request.url()));
       await page.goto(origin + '/renderer.html');
+      await page.addScriptTag({ path: dynamicDomPath });
       await page.addScriptTag({ path: rendererPath });
 
       const result = await page.evaluate(() => {
@@ -374,6 +376,87 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
         journalRenderer.removeAll();
         journalRoot.remove();
 
+        const normalizationRoot = document.createElement('p');
+        normalizationRoot.textContent = 'model';
+        document.body.appendChild(normalizationRoot);
+        const retainedNormalizationRecords = [];
+        const pendingNormalizationDescriptors = [];
+        let normalizationScope = null;
+        const normalizationObserver = new MutationObserver(() => {});
+        normalizationObserver.observe(normalizationRoot, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+          characterDataOldValue: true,
+          attributes: true,
+          attributeOldValue: true
+        });
+        const normalizationRenderer = HaloReversibleRenderer.createReversibleRenderer({
+          document,
+          suppressMutations(callback) {
+            normalizationObserver.takeRecords();
+            normalizationScope = HaloDynamicDomController.createRendererMutationSanitizer();
+            try {
+              return callback();
+            } finally {
+              retainedNormalizationRecords.push(...normalizationObserver.takeRecords()
+                .map((record) => normalizationScope.sanitize(record))
+                .filter(Boolean));
+              pendingNormalizationDescriptors.push(normalizationScope.status().pendingOperations);
+              normalizationScope = null;
+            }
+          },
+          trackMutation(operation) {
+            if (normalizationScope) normalizationScope.expect(operation);
+          }
+        });
+        normalizationRenderer.apply({
+          schemaVersion: 1,
+          runId: 'normalization-run',
+          rootId: 'normalization-root',
+          rootRevision: 1,
+          analysisKey: 'normalization-analysis',
+          root: normalizationRoot,
+          fragments: [markedFragment(normalizationRoot.firstChild, 'normalization-text', 0, 5, 'n')]
+        });
+        const normalizationWrapper = normalizationRoot.querySelector('[data-halo-owned="token"]');
+        const normalizationNested = document.createElement('span');
+        normalizationNested.append(
+          document.createTextNode('E'),
+          document.createTextNode(''),
+          document.createTextNode('F')
+        );
+        normalizationRoot.insertBefore(document.createTextNode(''), normalizationWrapper);
+        normalizationRoot.insertBefore(document.createTextNode('A'), normalizationWrapper);
+        normalizationRoot.insertBefore(document.createTextNode(''), normalizationWrapper);
+        normalizationRoot.append(
+          document.createTextNode('B'),
+          document.createComment('first boundary'),
+          document.createTextNode('C'),
+          document.createTextNode('D'),
+          normalizationNested,
+          document.createTextNode(''),
+          document.createComment('second boundary'),
+          document.createTextNode('S')
+        );
+        normalizationObserver.takeRecords();
+        retainedNormalizationRecords.length = 0;
+        pendingNormalizationDescriptors.length = 0;
+        normalizationRenderer.removeRoot('normalization-root');
+        const normalizationIsolation = {
+          retainedRecords: retainedNormalizationRecords.length,
+          pendingDescriptors: pendingNormalizationDescriptors,
+          text: normalizationRoot.textContent,
+          childShape: [...normalizationRoot.childNodes].map((node) =>
+            node.nodeType === Node.TEXT_NODE
+              ? `text:${node.nodeValue}`
+              : node.nodeType === Node.COMMENT_NODE
+                ? `comment:${node.nodeValue}`
+                : `${node.nodeName}:${node.textContent}`)
+        };
+        normalizationObserver.disconnect();
+        normalizationRoot.remove();
+
         return {
           applied: applied.action,
           sourceText,
@@ -388,7 +471,8 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
           privateOwnerBinding,
           weakRefPreparation,
           hookPreparation,
-          journalPreparation
+          journalPreparation,
+          normalizationIsolation
         };
       });
 
@@ -471,6 +555,19 @@ test('real Chromium verifies all renderer lifecycle sequences and isolated clamp
         priorOwned: true,
         text: 'model',
         rootCount: 1
+      });
+      assert.deepEqual(result.normalizationIsolation, {
+        retainedRecords: 0,
+        pendingDescriptors: [0],
+        text: 'AmodelBCDEFS',
+        childShape: [
+          'text:AmodelB',
+          'comment:first boundary',
+          'text:CD',
+          'SPAN:EF',
+          'comment:second boundary',
+          'text:S'
+        ]
       });
       assert.ok(requests.every((url) => url.startsWith(origin)), 'renderer makes no remote request');
     });
