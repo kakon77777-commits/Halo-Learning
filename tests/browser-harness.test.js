@@ -45,6 +45,37 @@ test('missing Chromium fails explicitly instead of skipping browser gates', () =
   }), /Chromium executable is required/);
 });
 
+test('browser shard comparison applies the fixed 64-first selection rule without rounding', () => {
+  const { selectShardCandidate } = require('../scripts/profile-browser-runtime');
+  const passing64 = { bucketCount: 64, allBlockingPassed: true };
+  const passing128 = { bucketCount: 128, allBlockingPassed: true };
+  const failing64 = { bucketCount: 64, allBlockingPassed: false };
+
+  assert.deepEqual(selectShardCandidate([passing64, passing128]), {
+    rule: '64 if both pass; 128 if only 128 passes; blocked if neither passes',
+    status: 'selected',
+    selectedBucketCount: 64
+  });
+  assert.equal(selectShardCandidate([failing64, passing128]).selectedBucketCount, 128);
+  assert.deepEqual(selectShardCandidate([failing64, { ...passing128, allBlockingPassed: false }]), {
+    rule: '64 if both pass; 128 if only 128 passes; blocked if neither passes',
+    status: 'blocked',
+    selectedBucketCount: null
+  });
+});
+
+test('comparison command fixes candidate order and routes evidence to the v0.4 shard path', () => {
+  const { DEFAULT_COMPARISON_PATH, parseCommandLine } = require('../scripts/profile-browser-runtime');
+  const command = parseCommandLine(['--compare-buckets', '64,128', '--write']);
+  assert.equal(command.profileKind, 'shard-comparison');
+  assert.deepEqual(command.bucketCounts, [64, 128]);
+  assert.equal(command.outputPath, DEFAULT_COMPARISON_PATH);
+  assert.throws(
+    () => parseCommandLine(['--compare-buckets', '128,64', '--write']),
+    /exactly 64,128/
+  );
+});
+
 test('fixture server uses loopback ephemeral URLs and explicit UTF-8 content types', async () => {
   const { withFixtureServer } = require('./browser/helpers/fixture-server');
   await withFixtureServer({

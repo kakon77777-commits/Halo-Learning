@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { performance } = require('node:perf_hooks');
+const zlib = require('node:zlib');
 const {
   launchExtension,
   resolveChromiumExecutable
@@ -42,7 +43,21 @@ const TIMING_METRICS = Object.freeze([
 ]);
 const DEFAULT_ARCHIVE_PATH = path.join(__dirname, '..', 'dist', 'halo-learning-magic-hand-v0.3.0.zip');
 const DEFAULT_EVIDENCE_PATH = path.join(__dirname, '..', 'docs', 'validation', 'v0.4.0-browser-baseline.json');
+const DEFAULT_COMPARISON_PATH = path.join(
+  __dirname,
+  '..',
+  'docs',
+  'validation',
+  'v0.4.0-browser-shard-comparison.json'
+);
+const DEFAULT_SHARD_ADR_PATH = path.join(__dirname, '..', 'docs', 'adr', 'ADR-009-browser-lexical-sharding.md');
 const DEFAULT_FIXTURE_TEXT = 'The students were learning models while 老師幫助學生學習。';
+const SHARD_COMPARISON_BUDGETS = Object.freeze({
+  coldRequiredShardsP95Ms: 300,
+  warmLookupP95Ms: 100,
+  longTaskMaxMs: 50
+});
+const SHARD_SELECTION_RULE = '64 if both pass; 128 if only 128 passes; blocked if neither passes';
 
 function assertCompleteMeasurements(measurements) {
   for (const name of REQUIRED_METRICS) {
@@ -561,14 +576,355 @@ function verifyBrowserRuntimeProfile(report) {
   return true;
 }
 
+function percentile(values, percentileValue) {
+  if (!Array.isArray(values) || values.length === 0 ||
+      values.some((value) => !Number.isFinite(value) || value < 0)) {
+    throw new TypeError('percentile values must be non-empty non-negative browser measurements');
+  }
+  const sorted = values.slice().sort((left, right) => left - right);
+  return sorted[Math.max(0, Math.ceil(percentileValue * sorted.length) - 1)];
+}
+
+function evaluateShardCandidate(candidate) {
+  const coldValues = candidate.conditions.cold.samples.map((sample) => sample.durationMs);
+  const warmValues = candidate.conditions.warm.samples.flatMap((sample) => sample.samplesMs);
+  const longTaskValues = candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs);
+  const measurements = Object.freeze({
+    coldRequiredShardsP95Ms: percentile(coldValues, 0.95),
+    warmLookupP95Ms: percentile(warmValues, 0.95),
+    longTaskMaxMs: longTaskValues.length ? Math.max(...longTaskValues) : 0
+  });
+  const gates = Object.freeze({
+    coldRequiredShards: measurements.coldRequiredShardsP95Ms < SHARD_COMPARISON_BUDGETS.coldRequiredShardsP95Ms,
+    warmLookup: measurements.warmLookupP95Ms < SHARD_COMPARISON_BUDGETS.warmLookupP95Ms,
+    longTask: measurements.longTaskMaxMs < SHARD_COMPARISON_BUDGETS.longTaskMaxMs
+  });
+  return Object.freeze({
+    ...candidate,
+    measurements,
+    budgets: SHARD_COMPARISON_BUDGETS,
+    gates,
+    allBlockingPassed: Object.values(gates).every(Boolean)
+  });
+}
+
+function selectShardCandidate(candidates) {
+  if (!Array.isArray(candidates) || candidates.length !== 2 ||
+      candidates[0].bucketCount !== 64 || candidates[1].bucketCount !== 128) {
+    throw new TypeError('shard candidates must be ordered exactly 64,128');
+  }
+  const selectedBucketCount = candidates[0].allBlockingPassed
+    ? 64
+    : (candidates[1].allBlockingPassed ? 128 : null);
+  return Object.freeze({
+    rule: SHARD_SELECTION_RULE,
+    status: selectedBucketCount === null ? 'blocked' : 'selected',
+    selectedBucketCount
+  });
+}
+
+function writeTreeFiles(rootPath, files) {
+  for (const [relativePath, content] of Object.entries(files)) {
+    const target = path.join(rootPath, ...relativePath.split('/'));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  }
+}
+
+function prepareShardCandidateExtension(artifacts, temporaryRoot) {
+  const extensionRoot = path.join(temporaryRoot, `extension-${artifacts.manifest.bucketCount}`);
+  const dataFiles = Object.fromEntries(Object.entries(artifacts.files).map(([name, content]) => [`data/${name}`, content]));
+  writeTreeFiles(extensionRoot, dataFiles);
+  const sharedRoot = path.join(extensionRoot, 'src', 'shared');
+  fs.mkdirSync(sharedRoot, { recursive: true });
+  fs.copyFileSync(
+    path.join(__dirname, '..', 'apps', 'extension', 'src', 'shared', 'runtime-shard-browser.js'),
+    path.join(sharedRoot, 'runtime-shard-browser.js')
+  );
+  fs.writeFileSync(path.join(extensionRoot, 'service-worker.js'), "'use strict';\n");
+  fs.writeFileSync(path.join(extensionRoot, 'profile.html'), [
+    '<!doctype html>',
+    '<meta charset="utf-8">',
+    '<title>Halo shard comparison</title>',
+    '<script src="src/shared/runtime-shard-browser.js"></script>'
+  ].join('\n'));
+  fs.writeFileSync(path.join(extensionRoot, 'manifest.json'), `${JSON.stringify({
+    manifest_version: 3,
+    name: `Halo lexical shard candidate ${artifacts.manifest.bucketCount}`,
+    version: '0.4.0',
+    background: { service_worker: 'service-worker.js' }
+  }, null, 2)}\n`);
+  return extensionRoot;
+}
+
+async function runShardColdContext(options) {
+  const context = await launchExtension({
+    extensionRoot: options.extensionRoot,
+    userDataDir: options.userDataDir,
+    headless: true,
+    executablePath: options.executablePath
+  });
+  try {
+    const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', { timeout: 15_000 });
+    const extensionId = new URL(worker.url()).hostname;
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${extensionId}/profile.html`);
+    const cdpSession = await context.newCDPSession(page);
+    const versionInfo = await cdpSession.send('Browser.getVersion');
+    await cdpSession.detach().catch(() => {});
+    const browserVersion = `Chromium ${String(versionInfo.product || '').split('/').pop()}`;
+    const sample = await page.evaluate(async ({ fixtureText, warmAnnotations }) => {
+      const longTasks = [];
+      let observer = null;
+      if (typeof PerformanceObserver === 'function' &&
+          PerformanceObserver.supportedEntryTypes && PerformanceObserver.supportedEntryTypes.includes('longtask')) {
+        observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) longTasks.push(entry.duration);
+        });
+        observer.observe({ type: 'longtask', buffered: true });
+      }
+      const coldStarted = performance.now();
+      const manifestResponse = await fetch(chrome.runtime.getURL('data/manifest.json'), { cache: 'no-store' });
+      if (!manifestResponse.ok) throw new Error('candidate manifest fetch failed');
+      const manifest = await globalThis.HaloRuntimeShardBrowser.loadBrowserLexicalManifest(await manifestResponse.text());
+      const runtime = globalThis.HaloRuntimeShardBrowser.createBrowserLexicalRuntime({
+        manifest,
+        readText: async (resourcePath, loadOptions) => {
+          const response = await fetch(chrome.runtime.getURL(`data/${resourcePath}`), {
+            cache: 'no-store',
+            signal: loadOptions && loadOptions.signal
+          });
+          if (!response.ok) throw new Error('candidate shard fetch failed');
+          return response.text();
+        }
+      });
+      const ids = runtime.requiredShardIds([fixtureText], 'both');
+      await runtime.ensureShards(ids);
+      const coldDurationMs = performance.now() - coldStarted;
+      function lookupFixture(shards) {
+        let evidenceCount = 0;
+        for (const shard of shards) {
+          evidenceCount += shard.lookup('models', 'en').length;
+          evidenceCount += shard.lookupMorphology('learning', 'en').length;
+          const match = shard.longestMatch('學生學習', 0, 'zh-Hant');
+          if (match) evidenceCount += match.entries.length;
+        }
+        return evidenceCount;
+      }
+      const warmSamplesMs = [];
+      let evidenceCount = 0;
+      for (let index = 0; index < warmAnnotations; index += 1) {
+        const started = performance.now();
+        evidenceCount += runtime.withPinnedShards(ids, lookupFixture);
+        warmSamplesMs.push(performance.now() - started);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (observer) observer.disconnect();
+      return {
+        coldDurationMs,
+        warmSamplesMs,
+        longTaskDurationsMs: longTasks,
+        requiredShardCount: ids.length,
+        evidenceCount,
+        residentShardCount: runtime.status().residentCount
+      };
+    }, { fixtureText: options.fixtureText, warmAnnotations: options.warmAnnotations });
+    return { browserVersion, ...sample };
+  } finally {
+    await context.close();
+  }
+}
+
+function candidateSizes(artifacts) {
+  const shardContents = Object.entries(artifacts.files).filter(([name]) => name.startsWith('shards/'));
+  return Object.freeze({
+    manifestBytes: Buffer.byteLength(artifacts.files['manifest.json']),
+    totalShardBytes: shardContents.reduce((total, [, content]) => total + Buffer.byteLength(content), 0),
+    totalShardGzipBytes: shardContents.reduce((total, [, content]) => total + zlib.gzipSync(content).length, 0),
+    maximumShardBytes: Math.max(...shardContents.map(([, content]) => Buffer.byteLength(content)))
+  });
+}
+
+async function profileShardCandidate(options) {
+  const coldContexts = options.coldContexts === undefined ? 5 : options.coldContexts;
+  const warmAnnotations = options.warmAnnotations === undefined ? 20 : options.warmAnnotations;
+  if (!Number.isInteger(coldContexts) || coldContexts < 5 ||
+      !Number.isInteger(warmAnnotations) || warmAnnotations < 20) {
+    throw new Error('shard comparison requires at least five cold contexts and twenty warm lookups per context');
+  }
+  const coldSamples = [];
+  const warmSamples = [];
+  const longTaskSamples = [];
+  let browserVersion = null;
+  for (let contextIndex = 0; contextIndex < coldContexts; contextIndex += 1) {
+    const sample = await options.runColdContext({ contextIndex, warmAnnotations });
+    if (browserVersion && browserVersion !== sample.browserVersion) throw new Error('browser version changed between candidates');
+    browserVersion = sample.browserVersion;
+    if (!Array.isArray(sample.warmSamplesMs) || sample.warmSamplesMs.length < warmAnnotations ||
+        !Array.isArray(sample.longTaskDurationsMs) || !Number.isFinite(sample.coldDurationMs)) {
+      throw new Error('browser shard comparison sample is incomplete');
+    }
+    coldSamples.push(Object.freeze({
+      condition: 'cold',
+      contextIndex,
+      durationMs: sample.coldDurationMs,
+      requiredShardCount: sample.requiredShardCount,
+      residentShardCount: sample.residentShardCount
+    }));
+    warmSamples.push(Object.freeze({
+      condition: 'warm',
+      contextIndex,
+      samplesMs: Object.freeze(sample.warmSamplesMs.slice())
+    }));
+    longTaskSamples.push(Object.freeze({
+      condition: 'long-tasks',
+      contextIndex,
+      durationsMs: Object.freeze(sample.longTaskDurationsMs.slice())
+    }));
+  }
+  return evaluateShardCandidate(Object.freeze({
+    bucketCount: options.artifacts.manifest.bucketCount,
+    manifestHash: options.artifacts.manifest.hash,
+    manifestRootHash: options.artifacts.manifest.rootHash,
+    shardCount: options.artifacts.manifest.shards.length,
+    sizes: candidateSizes(options.artifacts),
+    browserVersion,
+    conditions: Object.freeze({
+      cold: Object.freeze({ browserContexts: coldContexts, samples: Object.freeze(coldSamples) }),
+      warm: Object.freeze({ annotationsPerContext: warmAnnotations, samples: Object.freeze(warmSamples) }),
+      longTasks: Object.freeze({ samples: Object.freeze(longTaskSamples) })
+    })
+  }));
+}
+
+async function runShardComparison(options) {
+  const settings = options || {};
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-browser-shard-comparison-'));
+  try {
+    const { buildBrowserRuntimeArtifacts } = require('./build-browser-lexical-runtime');
+    const candidates = [];
+    let browserVersion = null;
+    for (const bucketCount of [64, 128]) {
+      const artifacts = buildBrowserRuntimeArtifacts({
+        englishDir: path.join(__dirname, '..', 'data', 'corpora', 'princeton-wordnet-3.0'),
+        chineseDir: path.join(__dirname, '..', 'data', 'corpora', 'cc-cedict-v1-2026-08-24'),
+        builtAt: '2026-08-25T00:00:00.000Z',
+        bucketCount
+      });
+      const extensionRoot = prepareShardCandidateExtension(artifacts, temporaryRoot);
+      const candidate = await profileShardCandidate({
+        artifacts,
+        runColdContext: ({ contextIndex, warmAnnotations }) => runShardColdContext({
+          contextIndex,
+          executablePath: settings.executablePath,
+          extensionRoot,
+          fixtureText: settings.fixtureText || DEFAULT_FIXTURE_TEXT,
+          userDataDir: path.join(temporaryRoot, `user-data-${bucketCount}-${contextIndex}`),
+          warmAnnotations
+        })
+      });
+      if (browserVersion && browserVersion !== candidate.browserVersion) throw new Error('browser version changed between candidates');
+      browserVersion = candidate.browserVersion;
+      candidates.push(candidate);
+    }
+    const selection = selectShardCandidate(candidates);
+    return Object.freeze({
+      schemaVersion: 1,
+      comparisonFormat: 'BrowserLexicalShardComparison/v1',
+      generatedAt: (settings.now || (() => new Date().toISOString()))(),
+      browser: Object.freeze({ name: 'Chromium', version: browserVersion }),
+      host: hostClasses(),
+      fixture: Object.freeze({
+        id: 'bilingual-required-shards-v1',
+        text: settings.fixtureText || DEFAULT_FIXTURE_TEXT,
+        languageMode: 'both'
+      }),
+      candidates: Object.freeze(candidates),
+      selection
+    });
+  } finally {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+function verifyBrowserShardComparison(report) {
+  requireProfile(report && report.schemaVersion === 1 &&
+    report.comparisonFormat === 'BrowserLexicalShardComparison/v1', 'shard comparison format is unsupported');
+  requireProfile(report.browser && report.browser.name === 'Chromium' &&
+    typeof report.browser.version === 'string' && report.browser.version.includes('Chromium'),
+  'actual Chromium version is required');
+  requireProfile(Array.isArray(report.candidates) && report.candidates.length === 2 &&
+    report.candidates[0].bucketCount === 64 && report.candidates[1].bucketCount === 128,
+  'shard candidates must be ordered exactly 64,128');
+  for (const candidate of report.candidates) {
+    requireProfile(candidate.conditions && candidate.conditions.cold.browserContexts >= 5 &&
+      candidate.conditions.cold.samples.length === candidate.conditions.cold.browserContexts,
+    'candidate cold browser samples are incomplete');
+    requireProfile(candidate.conditions.warm.annotationsPerContext >= 20 &&
+      candidate.conditions.warm.samples.length === candidate.conditions.cold.browserContexts &&
+      candidate.conditions.warm.samples.every((sample) =>
+        sample.samplesMs.length >= candidate.conditions.warm.annotationsPerContext),
+    'candidate warm browser samples are incomplete');
+    const evaluated = evaluateShardCandidate(candidate);
+    requireProfile(JSON.stringify(evaluated.measurements) === JSON.stringify(candidate.measurements) &&
+      JSON.stringify(evaluated.gates) === JSON.stringify(candidate.gates) &&
+      evaluated.allBlockingPassed === candidate.allBlockingPassed,
+    'candidate gates do not match raw browser samples');
+  }
+  requireProfile(JSON.stringify(selectShardCandidate(report.candidates)) === JSON.stringify(report.selection),
+    'shard selection does not match the fixed rule');
+  return true;
+}
+
+function writeShardSelectionAdr(adrPath, comparison) {
+  const selected = comparison && comparison.selection && comparison.selection.selectedBucketCount;
+  if (![64, 128].includes(selected)) throw new Error('refusing to write ADR without a passing browser-selected candidate');
+  const content = `# ADR-009: Browser lexical sharding\n\n` +
+    `- Status: Accepted\n- Date: ${comparison.generatedAt.slice(0, 10)}\n\n` +
+    `Real Chromium comparison evidence selected ${selected} buckets per language. ` +
+    `Node diagnostics were not used as browser evidence.\n\n` +
+    '```javascript\n' +
+    'const decision = Object.freeze({\n' +
+    '  candidates: Object.freeze([64, 128]),\n' +
+    `  selected: ${selected},\n` +
+    `  rule: '${SHARD_SELECTION_RULE}',\n` +
+    "  browserProfile: 'docs/validation/v0.4.0-browser-baseline.json',\n" +
+    "  comparisonEvidence: 'docs/validation/v0.4.0-browser-shard-comparison.json',\n" +
+    "  manifestFormat: 'halo-browser-lexical-manifest-v1',\n" +
+    "  shardFormat: 'halo-browser-lexical-shard-v1'\n" +
+    '});\n```\n';
+  const parent = path.dirname(adrPath);
+  fs.mkdirSync(parent, { recursive: true });
+  const temporaryPath = `${adrPath}.tmp-${process.pid}`;
+  try {
+    fs.writeFileSync(temporaryPath, content, { flag: 'wx' });
+    fs.renameSync(temporaryPath, adrPath);
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.rmSync(temporaryPath);
+  }
+}
+
 function parseCommandLine(args) {
   const modes = ['--write', '--verify'].filter((mode) => args.includes(mode));
   if (modes.length !== 1) throw new Error('Use exactly one of --write or --verify');
   const outputIndex = args.indexOf('--output');
   if (outputIndex >= 0 && !args[outputIndex + 1]) throw new Error('--output requires a path');
+  const comparisonIndex = args.indexOf('--compare-buckets');
+  const profileKind = comparisonIndex >= 0 ? 'shard-comparison' : 'legacy-baseline';
+  let bucketCounts = null;
+  if (comparisonIndex >= 0) {
+    if (args[comparisonIndex + 1] !== '64,128') {
+      throw new Error('--compare-buckets must be exactly 64,128');
+    }
+    bucketCounts = Object.freeze([64, 128]);
+  }
   return Object.freeze({
     mode: modes[0],
-    outputPath: outputIndex >= 0 ? path.resolve(args[outputIndex + 1]) : DEFAULT_EVIDENCE_PATH
+    profileKind,
+    bucketCounts,
+    outputPath: outputIndex >= 0
+      ? path.resolve(args[outputIndex + 1])
+      : (profileKind === 'shard-comparison' ? DEFAULT_COMPARISON_PATH : DEFAULT_EVIDENCE_PATH)
   });
 }
 
@@ -588,8 +944,13 @@ async function main(args) {
   const command = parseCommandLine(args);
   if (command.mode === '--verify') {
     const report = JSON.parse(fs.readFileSync(command.outputPath, 'utf8'));
-    verifyBrowserRuntimeProfile(report);
-    process.stdout.write(`Verified BrowserRuntimeProfile/v1: ${command.outputPath}\n`);
+    if (command.profileKind === 'shard-comparison') {
+      verifyBrowserShardComparison(report);
+      process.stdout.write(`Verified BrowserLexicalShardComparison/v1: ${command.outputPath}\n`);
+    } else {
+      verifyBrowserRuntimeProfile(report);
+      process.stdout.write(`Verified BrowserRuntimeProfile/v1: ${command.outputPath}\n`);
+    }
     return;
   }
 
@@ -599,10 +960,20 @@ async function main(args) {
     exists: fs.existsSync,
     playwrightExecutable: chromium.executablePath()
   });
-  const report = await runBrowserProfile({ executablePath: executable.path });
-  verifyBrowserRuntimeProfile(report);
-  writeEvidence(command.outputPath, report);
-  process.stdout.write(`Wrote BrowserRuntimeProfile/v1 from ${executable.source} Chromium: ${command.outputPath}\n`);
+  if (command.profileKind === 'shard-comparison') {
+    const comparison = await runShardComparison({ executablePath: executable.path });
+    verifyBrowserShardComparison(comparison);
+    writeEvidence(command.outputPath, comparison);
+    writeShardSelectionAdr(DEFAULT_SHARD_ADR_PATH, comparison);
+    process.stdout.write(
+      `Wrote BrowserLexicalShardComparison/v1 from ${executable.source} Chromium: ${command.outputPath}\n`
+    );
+  } else {
+    const report = await runBrowserProfile({ executablePath: executable.path });
+    verifyBrowserRuntimeProfile(report);
+    writeEvidence(command.outputPath, report);
+    process.stdout.write(`Wrote BrowserRuntimeProfile/v1 from ${executable.source} Chromium: ${command.outputPath}\n`);
+  }
 }
 
 if (require.main === module) {
@@ -613,18 +984,30 @@ if (require.main === module) {
 }
 
 module.exports = Object.freeze({
+  DEFAULT_COMPARISON_PATH,
   DEFAULT_EVIDENCE_PATH,
+  DEFAULT_SHARD_ADR_PATH,
   LEGACY_INDEX_HASH,
   REQUIRED_METRICS,
+  SHARD_COMPARISON_BUDGETS,
   assertCompleteMeasurements,
+  evaluateShardCandidate,
   instrumentLegacyRuntimeSource,
   main,
   parseCommandLine,
+  percentile,
   prepareLegacyExtension,
+  prepareShardCandidateExtension,
+  profileShardCandidate,
   profileLegacyRuntime,
   readZipEntrySizes,
   restartServiceWorker,
   runBrowserProfile,
   runLegacyColdContext,
+  runShardColdContext,
+  runShardComparison,
+  selectShardCandidate,
+  verifyBrowserShardComparison,
+  writeShardSelectionAdr,
   verifyBrowserRuntimeProfile
 });
