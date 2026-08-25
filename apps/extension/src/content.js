@@ -24,6 +24,33 @@
     return contentRoot;
   }
 
+  function isTransientRendererOwned(node, ownedNodes) {
+    if (!ownedNodes || typeof ownedNodes.has !== 'function') return false;
+    for (let current = node; current; current = current.parentNode || current.parentElement) {
+      if (ownedNodes.has(current)) return true;
+    }
+    return false;
+  }
+
+  function rendererRootIdsForInvalidation(discovery, roots, removedRoots, rendererRootsByContentRoot) {
+    if (!discovery || typeof discovery.rootIdsWithin !== 'function') return Object.freeze([]);
+    const contentRootIds = discovery.rootIdsWithin([
+      ...Array.from(roots || []),
+      ...Array.from(removedRoots || [])
+    ]);
+    const rendererRootIds = [];
+    const seen = new Set();
+    for (const contentRootId of contentRootIds) {
+      const workIds = rendererRootsByContentRoot && rendererRootsByContentRoot.get(contentRootId);
+      for (const workId of workIds || []) {
+        if (seen.has(workId)) continue;
+        seen.add(workId);
+        rendererRootIds.push(workId);
+      }
+    }
+    return Object.freeze(rendererRootIds);
+  }
+
   function normalizedViewportBuffer(value) {
     const number = Number(value);
     if (!Number.isFinite(number)) return 1200;
@@ -482,6 +509,34 @@
       return released.size;
     }
 
+    function rootIdsWithin(values) {
+      const ids = [];
+      const seen = new Set();
+      for (const value of Array.from(values || [])) {
+        for (const contentRoot of contentRootsWithin(value)) {
+          if (!rootIds.has(contentRoot)) continue;
+          const rootId = rootIds.get(contentRoot);
+          if (seen.has(rootId)) continue;
+          seen.add(rootId);
+          ids.push(rootId);
+        }
+      }
+      return Object.freeze(ids);
+    }
+
+    function rootsWithin(values) {
+      const roots = [];
+      const seen = new Set();
+      for (const value of Array.from(values || [])) {
+        for (const contentRoot of contentRootsWithin(value)) {
+          if (seen.has(contentRoot)) continue;
+          seen.add(contentRoot);
+          roots.push(contentRoot);
+        }
+      }
+      return Object.freeze(roots);
+    }
+
     function disconnect() {
       disconnected = true;
       observer.disconnect();
@@ -503,6 +558,8 @@
       invalidateRoots,
       refreshRoots,
       releaseRoots,
+      rootIdsWithin,
+      rootsWithin,
       isRootRevisionCurrent,
       disconnect,
       status
@@ -547,28 +604,6 @@
     if (element.closest('[contenteditable="true"], [contenteditable=""], [role="textbox"]')) return true;
     if (element.closest('nav, [aria-hidden="true"]')) return true;
     return false;
-  }
-
-  function rendererRootIdsWithin(values) {
-    const rootIds = [];
-    const seen = new Set();
-    function consider(wrapper) {
-      if (!wrapper || typeof wrapper.getAttribute !== 'function' ||
-          wrapper.getAttribute('data-halo-owned') !== 'token') return;
-      const rootId = wrapper.getAttribute('data-halo-root');
-      if (typeof rootId !== 'string' || !rootId || seen.has(rootId)) return;
-      seen.add(rootId);
-      rootIds.push(rootId);
-    }
-    for (const value of Array.from(values || [])) {
-      const element = value && value.nodeType === 1 ? value : value && value.parentElement;
-      if (!element) continue;
-      const scanRoot = canonicalContentRoot(element) || element;
-      consider(scanRoot);
-      if (typeof scanRoot.querySelectorAll !== 'function') continue;
-      for (const wrapper of scanRoot.querySelectorAll('[data-halo-owned="token"]')) consider(wrapper);
-    }
-    return Object.freeze(rootIds);
   }
 
   function bootstrapAnnotationSets(texts, settings, Dictionary, Semantic, generatedAt) {
@@ -663,13 +698,7 @@
     }
 
     function isRendererOwned(node) {
-      if (rendererOwnedNodes && rendererOwnedNodes.has(node)) return true;
-      const element = node && node.nodeType === 1 ? node : node && (node.parentElement || node.parentNode);
-      if (!element) return false;
-      if (rendererOwnedNodes && rendererOwnedNodes.has(element)) return true;
-      if (element.dataset && ['token', 'panel'].includes(element.dataset.haloOwned)) return true;
-      return typeof element.closest === 'function' &&
-        Boolean(element.closest('[data-halo-owned="token"], [data-halo-owned="panel"]'));
+      return isTransientRendererOwned(node, rendererOwnedNodes);
     }
 
     function isVisible(element) {
@@ -823,6 +852,12 @@
             root: payload.element,
             fragments: renderFragments
           });
+          if (activeRuntime && activeRuntime.rendererRootsByContentRoot) {
+            if (!activeRuntime.rendererRootsByContentRoot.has(work.rootId)) {
+              activeRuntime.rendererRootsByContentRoot.set(work.rootId, new Set());
+            }
+            activeRuntime.rendererRootsByContentRoot.get(work.rootId).add(work.id);
+          }
           if (rendered.action !== 'duplicate') markedTokens += rendered.wrappers;
         }
       }
@@ -902,7 +937,13 @@
           pipeline: Pipeline
         })
       });
-      activeRuntime = { scheduler, discovery, epoch };
+      activeRuntime = {
+        scheduler,
+        discovery,
+        epoch,
+        rendererRootsByContentRoot: new Map(),
+        pendingChangedRoots: new Set()
+      };
       lastStatus = Object.freeze({ ...emptyStatus(), queuedRoots: 0 });
       discovery.start();
       await scheduler.flush();
@@ -943,15 +984,31 @@
           isHaloOwned: isRendererOwned,
           onRootsInvalidated: (roots, metadata) => {
             if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
+            const changedContentRoots = activeRuntime.discovery.rootsWithin(roots);
+            const removedContentRoots = activeRuntime.discovery.rootsWithin(metadata.removedRoots);
+            const affectedContentRoots = [...changedContentRoots, ...removedContentRoots];
+            const affectedContentRootIds = activeRuntime.discovery.rootIdsWithin(affectedContentRoots);
+            for (const contentRoot of changedContentRoots) activeRuntime.pendingChangedRoots.add(contentRoot);
             if (activeRenderer) {
-              for (const rootId of rendererRootIdsWithin(roots)) activeRenderer.removeRoot(rootId);
+              for (const rootId of rendererRootIdsForInvalidation(
+                activeRuntime.discovery,
+                affectedContentRoots,
+                [],
+                activeRuntime.rendererRootsByContentRoot
+              )) activeRenderer.removeRoot(rootId);
+            }
+            for (const contentRootId of affectedContentRootIds) {
+              activeRuntime.rendererRootsByContentRoot.delete(contentRootId);
             }
             activeRuntime.discovery.releaseRoots(metadata.removedRoots);
-            activeRuntime.discovery.invalidateRoots(roots);
+            activeRuntime.discovery.invalidateRoots(changedContentRoots);
           },
           onRootsChanged: (roots, metadata) => {
             if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
-            activeRuntime.discovery.refreshRoots(roots, { alreadyInvalidated: true });
+            const changedContentRoots = activeRuntime.discovery.rootsWithin(roots);
+            const refreshRoots = [...activeRuntime.pendingChangedRoots, ...changedContentRoots];
+            activeRuntime.pendingChangedRoots.clear();
+            activeRuntime.discovery.refreshRoots(refreshRoots, { alreadyInvalidated: true });
           },
           onRouteCleanup: ({ epoch }) => {
             const runtime = activeRuntime && activeRuntime.epoch === epoch ? activeRuntime : null;
@@ -1015,7 +1072,8 @@
     buildEnrichmentItems,
     validateEnrichmentResponse,
     rootWorkIsCurrent,
-    rendererRootIdsWithin,
+    rendererRootIdsForInvalidation,
+    isTransientRendererOwned,
     cleanupRuntime,
     buildRootWork,
     createViewportDiscovery

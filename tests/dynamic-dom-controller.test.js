@@ -32,6 +32,14 @@ function textNode(parent) {
   return { nodeType: 3, parentElement: parent, parentNode: parent, isConnected: true };
 }
 
+function isPrivatelyOwned(node) {
+  const elementNode = node && node.nodeType === 1 ? node : node && (node.parentElement || node.parentNode);
+  for (let current = elementNode; current; current = current.parentElement) {
+    if (current.owned) return true;
+  }
+  return false;
+}
+
 function mutation(overrides) {
   return {
     type: 'childList',
@@ -151,7 +159,7 @@ test('Halo-owned mutations never become article work', () => {
   assert.deepEqual(result.roots, []);
 });
 
-test('final token and panel ownership markers never become article work', () => {
+test('public token and panel markers are not permanent observer authority', () => {
   for (const ownership of ['token', 'panel']) {
     const owned = {
       nodeType: 1,
@@ -160,9 +168,37 @@ test('final token and panel ownership markers never become article work', () => 
       closest: () => null
     };
     const result = Dynamic.classifyMutation(mutation({ target: owned, addedNodes: [owned] }));
-    assert.deepEqual(result.roots, [], ownership);
-    assert.equal(result.ignored, true, ownership);
+    assert.deepEqual(result.roots, [owned], ownership);
+    assert.equal(result.ignored, false, ownership);
   }
+});
+
+test('external token text, children, and semantic attributes invalidate synchronously', () => {
+  const clock = fakeClock();
+  const invalidated = [];
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  const token = element('token');
+  token.dataset = { haloOwned: 'token' };
+  const tokenText = textNode(token);
+  const inserted = element('third-party', { parent: token });
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onRootsInvalidated: (roots) => invalidated.push(roots)
+  });
+  controller.observe({ body: element('body') });
+  const observer = MutationObserver.instances[0];
+
+  assert.equal(observer.options.attributes, true);
+  assert.ok(observer.options.attributeFilter.includes('data-halo-pos'));
+  assert.ok(observer.options.attributeFilter.includes('data-halo-owned'));
+  observer.emit([{ type: 'characterData', target: tokenText }]);
+  observer.emit([mutation({ target: token, addedNodes: [inserted] })]);
+  observer.emit([{ type: 'attributes', target: token, attributeName: 'data-halo-pos' }]);
+
+  assert.deepEqual(invalidated, [[token], [inserted], [token]]);
 });
 
 test('coalescing keeps independent inserted roots and folds nested redraw records', () => {
@@ -262,6 +298,7 @@ test('renderer suppression preserves non-Halo records before and during a throwi
   const MutationObserver = observerFixture(calls);
   const controller = Dynamic.createDynamicDomController({
     MutationObserver,
+    isHaloOwned: isPrivatelyOwned,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
     onRootsChanged: (roots) => changed.push(roots)
@@ -301,6 +338,7 @@ test('renderer suppression filters Halo nodes but preserves a legitimate sibling
   const MutationObserver = observerFixture(calls);
   const controller = Dynamic.createDynamicDomController({
     MutationObserver,
+    isHaloOwned: isPrivatelyOwned,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
     onRootsChanged: (roots) => changed.push(roots)
@@ -324,6 +362,7 @@ test('renderer suppression preserves target context and detached roots from a mi
   const MutationObserver = observerFixture(calls);
   const controller = Dynamic.createDynamicDomController({
     MutationObserver,
+    isHaloOwned: isPrivatelyOwned,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
     onRootsChanged: (roots, metadata) => changed.push({ roots, removedRoots: metadata.removedRoots })
@@ -351,6 +390,7 @@ test('renderer suppression ignores Halo-only and nested target-owned mutations',
   const MutationObserver = observerFixture(calls);
   const controller = Dynamic.createDynamicDomController({
     MutationObserver,
+    isHaloOwned: isPrivatelyOwned,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
     onRootsChanged: (roots) => changed.push(roots)

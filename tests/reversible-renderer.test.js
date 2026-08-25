@@ -199,6 +199,10 @@ class FakeElement extends FakeNode {
     return this.attributes.get(String(name).toLowerCase()) ?? null;
   }
 
+  getAttributeNames() {
+    return [...this.attributes.keys()];
+  }
+
   hasAttribute(name) {
     return this.attributes.has(String(name).toLowerCase());
   }
@@ -575,4 +579,268 @@ test('core panel uses an isolated dialog, literal text, fixed clamped positionin
   assert.equal(host.parentNode, null);
   assert.deepEqual(renderer.status().panel, { open: false, closeReason: 'route-cleanup' });
   assert.equal(renderer.closePanel('again').action, 'noop');
+});
+
+function assertOriginalFixtureStructure(dom) {
+  assert.deepEqual(dom.article.childNodes, [dom.lead, dom.link, dom.emphasis]);
+  assert.deepEqual(dom.link.childNodes, [dom.model]);
+  assert.deepEqual(dom.emphasis.childNodes, [dom.learns]);
+  assert.equal(dom.lead.nodeValue, 'The ');
+  assert.equal(dom.model.nodeValue, 'model');
+  assert.equal(dom.learns.nodeValue, ' learns.');
+  assert.equal(dom.article.textContent, 'The model learns.');
+}
+
+test('apply rolls back earlier nodes when a later split or replacement throws', () => {
+  for (const fault of ['split', 'replace']) {
+    const dom = fixture();
+    const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+    const originalSplit = dom.model.splitText;
+    const originalReplace = dom.link.replaceChild;
+    if (fault === 'split') {
+      dom.model.splitText = () => { throw new Error('second-node split failed'); };
+    } else {
+      dom.link.replaceChild = () => { throw new Error('second-node replace failed'); };
+    }
+
+    assert.throws(() => renderer.apply(request(dom.article, {
+      fragments: [
+        fragment(dom.model, 'model-node', 0, 5),
+        fragment(dom.learns, 'learn-node', 1, 7, { pos: 'v', label: 'v' })
+      ]
+    })), new RegExp(`second-node ${fault} failed`));
+
+    dom.model.splitText = originalSplit;
+    dom.link.replaceChild = originalReplace;
+    assertOriginalFixtureStructure(dom);
+    assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"]').length, 0);
+    assert.equal(renderer.status().rootCount, 0);
+    assert.equal(renderer.status().lastAction, 'idle');
+    assert.deepEqual(renderer.removeAll(), { action: 'removed-all', wrappers: 0 });
+  }
+});
+
+test('apply rolls back when mutation suppression throws after running the callback', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({
+    document: dom.document,
+    suppressMutations(callback) {
+      callback();
+      throw new Error('suppression failed after callback');
+    }
+  });
+
+  assert.throws(() => renderer.apply(request(dom.article, {
+    fragments: [fragment(dom.model, 'model-node', 0, 5)]
+  })), /suppression failed after callback/);
+
+  assertOriginalFixtureStructure(dom);
+  assert.equal(renderer.status().rootCount, 0);
+  assert.equal(renderer.status().lastAction, 'idle');
+});
+
+test('in-place reconcile restores every projection attribute when an update throws', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const ownedText = wrapper.childNodes[0];
+  const attributesBefore = [...wrapper.attributes.entries()];
+  const statusBefore = renderer.status();
+  const originalSetAttribute = wrapper.setAttribute;
+  let failed = false;
+  wrapper.setAttribute = function (name, value) {
+    if (name === 'data-halo-meta' && !failed) {
+      failed = true;
+      throw new Error('projection attribute failed');
+    }
+    return originalSetAttribute.call(this, name, value);
+  };
+
+  assert.throws(() => renderer.reconcile(request(dom.article, {
+    runId: 'run-2',
+    analysisKey: 'analysis-2',
+    fragments: [fragmentWithBoundary(ownedText, 'model-node-v2', 0, 5, 'model-node:0:5', {
+      pos: 'v', label: 'verb', metaLabel: 'present'
+    })]
+  })), /projection attribute failed/);
+
+  wrapper.setAttribute = originalSetAttribute;
+  assert.deepEqual([...wrapper.attributes.entries()], attributesBefore);
+  assert.deepEqual(renderer.status(), statusBefore);
+  assert.equal(dom.article.querySelector('[data-halo-owned="token"]'), wrapper);
+  assert.equal(dom.article.textContent, 'The model learns.');
+  assert.equal(renderer.removeAll().wrappers, 1);
+});
+
+test('rebuild reconcile restores the prior wrapper and state when the new split fails', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, {
+    fragments: [fragment(dom.learns, 'learn-node', 1, 7, { pos: 'v', label: 'v' })]
+  }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const ownedText = wrapper.childNodes[0];
+  const attributesBefore = [...wrapper.attributes.entries()];
+  const statusBefore = renderer.status();
+  const originalSplit = ownedText.splitText;
+  ownedText.splitText = () => { throw new Error('rebuild split failed'); };
+
+  assert.throws(() => renderer.reconcile(request(dom.article, {
+    runId: 'run-2',
+    analysisKey: 'analysis-2',
+    fragments: [fragment(ownedText, 'learn-node-v2', 0, 5, { pos: 'v', label: 'verb' })]
+  })), /rebuild split failed/);
+
+  ownedText.splitText = originalSplit;
+  assert.equal(dom.article.querySelector('[data-halo-owned="token"]'), wrapper);
+  assert.deepEqual(wrapper.childNodes, [ownedText]);
+  assert.deepEqual([...wrapper.attributes.entries()], attributesBefore);
+  assert.deepEqual(renderer.status(), statusBefore);
+  assert.equal(dom.article.textContent, 'The model learns.');
+});
+
+test('removeRoot restores wrappers, text-node identity, and state when normalization throws', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const ownedText = wrapper.childNodes[0];
+  const statusBefore = renderer.status();
+  const originalNormalize = dom.link.normalize;
+  dom.link.normalize = function () {
+    originalNormalize.call(this);
+    throw new Error('normalize failed');
+  };
+
+  assert.throws(() => renderer.removeRoot('root-1'), /normalize failed/);
+
+  dom.link.normalize = originalNormalize;
+  assert.equal(wrapper.parentNode, dom.link);
+  assert.deepEqual(wrapper.childNodes, [ownedText]);
+  assert.deepEqual(renderer.status(), statusBefore);
+  assert.equal(dom.article.textContent, 'The model learns.');
+  assert.equal(renderer.removeAll().wrappers, 1);
+});
+
+test('openPanel preserves the prior panel and leaves no artifact when preparation or append fails', () => {
+  for (const fault of ['anchor', 'append', 'attachShadow']) {
+    const dom = fixture();
+    const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+    renderer.openPanel({ title: 'Original', body: 'Stable', status: 'Ready', anchor: { x: 20, y: 20 } });
+    const originalHost = dom.document.body.querySelector('[data-halo-owned="panel"]');
+    const statusBefore = renderer.status();
+    const originalAppend = dom.document.body.appendChild;
+    const originalCreate = dom.document.createElement;
+    let model = { title: 'Replacement', anchor: { x: 30, y: 30 } };
+    if (fault === 'anchor') {
+      model = {
+        title: 'Replacement',
+        anchor: { get x() { throw new Error('anchor getter failed'); }, y: 30 }
+      };
+    } else if (fault === 'append') {
+      dom.document.body.appendChild = function (node) {
+        originalAppend.call(this, node);
+        throw new Error('append failed after insertion');
+      };
+    } else {
+      dom.document.createElement = function (name) {
+        const element = originalCreate.call(this, name);
+        if (String(name).toLowerCase() === 'div') {
+          element.attachShadow = () => { throw new Error('attachShadow failed'); };
+        }
+        return element;
+      };
+    }
+
+    assert.throws(() => renderer.openPanel(model), new RegExp(`${fault === 'anchor' ? 'anchor getter' : fault} failed`));
+
+    dom.document.body.appendChild = originalAppend;
+    dom.document.createElement = originalCreate;
+    assert.deepEqual(dom.document.body.querySelectorAll('[data-halo-owned="panel"]'), [originalHost]);
+    assert.equal(originalHost.parentNode, dom.document.body);
+    assert.equal(originalHost.shadowRoot.querySelector('.halo-core-body').textContent, 'Stable');
+    assert.deepEqual(renderer.status(), statusBefore);
+    renderer.removeAll();
+  }
+});
+
+test('cleanup works without WeakRef and survives temporary root detachment', () => {
+  const savedWeakRef = globalThis.WeakRef;
+  let noWeakRenderer;
+  const withoutWeakRef = fixture();
+  try {
+    globalThis.WeakRef = undefined;
+    noWeakRenderer = Renderer.createReversibleRenderer({ document: withoutWeakRef.document });
+  } finally {
+    globalThis.WeakRef = savedWeakRef;
+  }
+  noWeakRenderer.apply(request(withoutWeakRef.article, {
+    fragments: [fragment(withoutWeakRef.model, 'model-node', 0, 5)]
+  }));
+  assert.equal(noWeakRenderer.removeAll().wrappers, 1);
+  assert.equal(withoutWeakRef.article.querySelectorAll('[data-halo-owned="token"]').length, 0);
+
+  const detached = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: detached.document });
+  renderer.apply(request(detached.article, { fragments: [fragment(detached.model, 'model-node', 0, 5)] }));
+  detached.document.body.removeChild(detached.article);
+  assert.equal(renderer.status().rootCount, 1);
+  detached.document.body.appendChild(detached.article);
+  assert.equal(renderer.removeAll().wrappers, 1);
+  assert.deepEqual(detached.article.childNodes, [detached.lead, detached.link, detached.emphasis]);
+  assert.equal(detached.link.textContent, 'model');
+  assert.equal(detached.emphasis.textContent, ' learns.');
+  assert.equal(detached.article.textContent, 'The model learns.');
+});
+
+test('private ownership ignores forged markers and survives public marker tampering', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, { fragments: [fragment(dom.model, 'model-node', 0, 5)] }));
+  const owned = dom.article.querySelector('[data-halo-owned="token"]');
+  const forged = dom.document.createElement('span');
+  for (const [name, value] of owned.attributes) forged.setAttribute(name, value);
+  forged.textContent = 'forged';
+  dom.article.appendChild(forged);
+  const thirdParty = dom.document.createElement('i');
+  thirdParty.textContent = '!';
+  owned.appendChild(thirdParty);
+  owned.setAttribute('data-halo-owned', 'tampered');
+  owned.setAttribute('data-halo-run', 'forged-run');
+  owned.setAttribute('data-halo-root', 'forged-root');
+  owned.setAttribute('data-halo-original', 'forged-original');
+  owned.className = 'page-changed';
+
+  const result = renderer.removeRoot('root-1');
+
+  assert.equal(result.wrappers, 1);
+  assert.equal(owned.parentNode, null);
+  assert.equal(thirdParty.parentNode, dom.link);
+  assert.equal(forged.parentNode, dom.article);
+  assert.equal(forged.getAttribute('data-halo-owned'), 'token');
+  assert.equal(renderer.status().rootCount, 0);
+});
+
+test('a fragment inside another root private wrapper is rejected before nesting', () => {
+  const dom = fixture();
+  const renderer = Renderer.createReversibleRenderer({ document: dom.document });
+  renderer.apply(request(dom.article, {
+    rootId: 'root-one',
+    fragments: [fragment(dom.model, 'model-node', 0, 5)]
+  }));
+  const wrapper = dom.article.querySelector('[data-halo-owned="token"]');
+  const ownedText = wrapper.childNodes[0];
+
+  assert.throws(() => renderer.apply(request(dom.article, {
+    rootId: 'root-two',
+    runId: 'run-two',
+    analysisKey: 'analysis-two',
+    fragments: [fragment(ownedText, 'foreign-owned-text', 0, 5)]
+  })), /another renderer root/);
+
+  assert.equal(dom.article.querySelectorAll('[data-halo-owned="token"] [data-halo-owned="token"]').length, 0);
+  assert.equal(dom.article.querySelector('[data-halo-owned="token"]'), wrapper);
+  assert.equal(renderer.status().rootCount, 1);
+  assert.equal(dom.article.textContent, 'The model learns.');
 });

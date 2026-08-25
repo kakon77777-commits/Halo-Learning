@@ -669,50 +669,74 @@ test('same-element replacement invalidates pending root work before projection',
   assert.equal(Content.rootWorkIsCurrent(work, discovery), false);
 });
 
-test('external root invalidation identifies only exact renderer-owned roots for pre-remap cleanup', () => {
-  const wrapper = (ownership, rootId) => ({
-    getAttribute(name) {
-      if (name === 'data-halo-owned') return ownership;
-      if (name === 'data-halo-root') return rootId;
-      return null;
-    }
-  });
-  const affected = {
+test('private discovery identity resolves live descendants and detached removal metadata', () => {
+  const paragraph = candidate('lesson-root');
+  const cancelled = [];
+  const mutatedDescendant = {
     nodeType: 1,
+    isConnected: true,
     matches: () => false,
-    querySelectorAll: () => [
-      wrapper('token', 'lesson:w0'),
-      wrapper('token', 'lesson:w1'),
-      wrapper('token', 'lesson:w0'),
-      wrapper('article-author', 'forged-root')
-    ]
+    closest: () => paragraph
   };
+  class FixtureIntersectionObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  const discovery = Content.createViewportDiscovery({
+    document: {
+      body: candidate('body'),
+      documentElement: candidate('html'),
+      elementsFromPoint: () => [paragraph],
+      createTreeWalker: () => ({ nextNode: () => null })
+    },
+    NodeFilter: { SHOW_ELEMENT: 1 },
+    IntersectionObserver: FixtureIntersectionObserver,
+    scheduler: {
+      enqueue: () => true,
+      cancelRoot: (rootId) => { cancelled.push(rootId); return 1; },
+      flush: () => Promise.resolve()
+    },
+    budgets: { timeSliceMs: 8, viewportBufferPx: 1200 },
+    makeWork: (_element, _visible, metadata) => ({
+      id: metadata.rootId,
+      rootId: metadata.rootId,
+      rootRevision: metadata.rootRevision
+    }),
+    innerWidth: 1000,
+    innerHeight: 800,
+    requestIdleCallback: (callback) => { callback({ didTimeout: false, timeRemaining: () => 50 }); return 1; },
+    cancelIdleCallback: () => {},
+    clock: { now: () => 0 }
+  });
+  discovery.start();
+  const rendererRoots = new Map([
+    ['lesson-root', new Set(['lesson-root:w0', 'lesson-root:w1'])]
+  ]);
 
-  assert.deepEqual(Content.rendererRootIdsWithin([affected]), ['lesson:w0', 'lesson:w1']);
+  assert.deepEqual(
+    Content.rendererRootIdsForInvalidation(discovery, [mutatedDescendant], [], rendererRoots),
+    ['lesson-root:w0', 'lesson-root:w1']
+  );
+  const canonicalRoots = discovery.rootsWithin([mutatedDescendant]);
+  mutatedDescendant.closest = () => null;
+  mutatedDescendant.isConnected = false;
+  discovery.invalidateRoots(canonicalRoots);
+  assert.deepEqual(cancelled, ['lesson-root']);
+  paragraph.isConnected = false;
+  assert.deepEqual(
+    Content.rendererRootIdsForInvalidation(discovery, [], [paragraph], rendererRoots),
+    ['lesson-root:w0', 'lesson-root:w1']
+  );
 });
 
-test('external invalidation scans the canonical content root for wrappers beside a mutated sibling', () => {
-  const staleWrapper = {
-    getAttribute(name) {
-      if (name === 'data-halo-owned') return 'token';
-      if (name === 'data-halo-root') return 'lesson-root';
-      return null;
-    }
-  };
-  const paragraph = {
-    nodeType: 1,
-    matches: () => true,
-    querySelector: () => null,
-    querySelectorAll: () => [staleWrapper]
-  };
-  const mutatedSibling = {
-    nodeType: 1,
-    matches: () => false,
-    closest: () => paragraph,
-    querySelectorAll: () => []
-  };
+test('transient renderer ownership ignores public markers outside an active mutation scope', () => {
+  const publicToken = { nodeType: 1, dataset: { haloOwned: 'token' }, parentNode: null };
+  const child = { nodeType: 3, parentNode: publicToken };
 
-  assert.deepEqual(Content.rendererRootIdsWithin([mutatedSibling]), ['lesson-root']);
+  assert.equal(Content.isTransientRendererOwned(publicToken, null), false);
+  assert.equal(Content.isTransientRendererOwned(child, new Set([publicToken])), true);
+  assert.equal(Content.isTransientRendererOwned(publicToken, new Set()), false);
 });
 
 test('runtime teardown detaches first and attempts every cleanup stage after independent failures', () => {

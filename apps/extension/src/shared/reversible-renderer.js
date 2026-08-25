@@ -81,18 +81,26 @@
 
   function createRenderState(options) {
     const settings = options || {};
-    const WeakRefClass = settings.WeakRef || root.WeakRef;
+    const WeakRefClass = Object.prototype.hasOwnProperty.call(settings, 'WeakRef')
+      ? settings.WeakRef
+      : root.WeakRef;
     const entries = new Map();
+
+    function reference(value) {
+      if (!value) return null;
+      if (typeof WeakRefClass === 'function') return new WeakRefClass(value);
+      return { deref: () => value };
+    }
 
     function prune() {
       for (const [rootId, entry] of entries) {
         if (!entry.rootRef) continue;
         const node = entry.rootRef.deref();
-        if (!node || node.isConnected === false) entries.delete(rootId);
+        if (!node) entries.delete(rootId);
       }
     }
 
-    function record(value) {
+    function prepare(value) {
       if (!value || typeof value !== 'object') throw new TypeError('render state record: must be an object');
       const rootId = nonemptyString(value.rootId, 'rootId', 256);
       if (!Number.isSafeInteger(value.rootRevision) || value.rootRevision < 0) {
@@ -101,18 +109,28 @@
       const analysisKey = nonemptyString(value.analysisKey, 'analysisKey', 512);
       const runId = value.runId === undefined ? '' : String(value.runId);
       const wrappers = Number.isSafeInteger(value.wrappers) && value.wrappers >= 0 ? value.wrappers : 0;
-      const rootRef = value.root && typeof WeakRefClass === 'function' ? new WeakRefClass(value.root) : null;
-      const entry = {
+      const wrapperNodes = Array.isArray(value.wrapperNodes) ? value.wrapperNodes : [];
+      return {
         rootId,
         rootRevision: value.rootRevision,
         analysisKey,
         runId,
         wrappers,
         boundarySignature: typeof value.boundarySignature === 'string' ? value.boundarySignature : '',
-        rootRef
+        rootRef: reference(value.root),
+        wrapperRefs: wrapperNodes.map(reference)
       };
-      entries.set(rootId, entry);
+    }
+
+    function commit(entry) {
+      if (!entry || typeof entry !== 'object') throw new TypeError('render state entry: must be an object');
+      entries.set(entry.rootId, entry);
       return entry;
+    }
+
+    function record(value) {
+      const entry = prepare(value);
+      return commit(entry);
     }
 
     function classify(value) {
@@ -152,7 +170,7 @@
       })));
     }
 
-    return Object.freeze({ record, classify, lookup, remove, values, status });
+    return Object.freeze({ prepare, commit, record, classify, lookup, remove, values, status });
   }
 
   function projectionFor(raw, index) {
@@ -368,7 +386,11 @@
       ? settings.suppressMutations
       : (callback) => callback();
     const trackOwnedNode = typeof settings.trackOwnedNode === 'function' ? settings.trackOwnedNode : () => {};
-    const renderState = createRenderState({ WeakRef: settings.WeakRef });
+    const renderState = createRenderState(Object.prototype.hasOwnProperty.call(settings, 'WeakRef')
+      ? { WeakRef: settings.WeakRef }
+      : {});
+    const wrapperCapabilities = new WeakSet();
+    const wrapperMetadata = new WeakMap();
     let panelParts = null;
     let panelOpen = false;
     let panelCloseReason = null;
@@ -383,13 +405,112 @@
       return entry && entry.rootRef ? entry.rootRef.deref() : null;
     }
 
-    function ownedWrappers(entry) {
-      const renderRoot = rootFor(entry);
-      if (!renderRoot || typeof renderRoot.querySelectorAll !== 'function') return [];
-      return Array.from(renderRoot.querySelectorAll('[data-halo-owned="token"]')).filter((wrapper) =>
-        wrapper.getAttribute('data-halo-run') === entry.runId &&
-        wrapper.getAttribute('data-halo-root') === entry.rootId
+    function attributeEntries(element) {
+      if (!element || element.nodeType !== 1) return [];
+      if (typeof element.getAttributeNames === 'function') {
+        return element.getAttributeNames().map((name) => [name, element.getAttribute(name)]);
+      }
+      return Array.from(element.attributes || []).map((attribute) =>
+        Array.isArray(attribute) ? [attribute[0], attribute[1]] : [attribute.name, attribute.value]
       );
+    }
+
+    function captureSubtree(renderRoot) {
+      const parents = [];
+      const textValues = [];
+      const attributes = [];
+      const visit = (node) => {
+        if (!node) return;
+        if (node.nodeType === 3) textValues.push({ node, value: node.nodeValue });
+        if (node.nodeType === 1 && wrapperCapabilities.has(node)) {
+          attributes.push({ node, entries: attributeEntries(node) });
+        }
+        if (!node.childNodes) return;
+        parents.push({ node, children: Array.from(node.childNodes) });
+        for (const child of Array.from(node.childNodes)) visit(child);
+      };
+      visit(renderRoot);
+      return { parents, textValues, attributes };
+    }
+
+    function restoreAttributes(record) {
+      const names = typeof record.node.getAttributeNames === 'function'
+        ? record.node.getAttributeNames()
+        : attributeEntries(record.node).map((entry) => entry[0]);
+      for (const name of names) record.node.removeAttribute(name);
+      for (const [name, value] of record.entries) record.node.setAttribute(name, value);
+    }
+
+    function restoreSubtree(snapshot) {
+      for (const record of snapshot.parents) {
+        const wanted = record.children;
+        for (const child of Array.from(record.node.childNodes || [])) {
+          if (wanted.includes(child)) continue;
+          track(record.node);
+          track(child);
+          record.node.removeChild(child);
+        }
+        for (let index = 0; index < wanted.length; index += 1) {
+          const child = wanted[index];
+          if (record.node.childNodes[index] === child) continue;
+          track(record.node);
+          track(child);
+          record.node.insertBefore(child, record.node.childNodes[index] || null);
+        }
+      }
+      for (const record of snapshot.textValues) {
+        track(record.node);
+        record.node.nodeValue = record.value;
+      }
+      for (const record of snapshot.attributes) {
+        track(record.node);
+        restoreAttributes(record);
+      }
+    }
+
+    function runSuppressedTransaction(mutate, rollback) {
+      let entered = false;
+      try {
+        return suppressMutations(() => {
+          entered = true;
+          return mutate();
+        });
+      } catch (error) {
+        if (entered) {
+          let restored = false;
+          const restore = () => {
+            rollback();
+            restored = true;
+          };
+          try {
+            suppressMutations(restore);
+          } catch (_rollbackError) {
+            if (!restored) {
+              try {
+                restore();
+              } catch (_directRollbackError) {
+                // Preserve the initiating failure. The rollback is best-effort
+                // when the host keeps throwing from fundamental DOM APIs.
+              }
+            }
+          }
+        }
+        throw error;
+      }
+    }
+
+    function mutateRootAtomically(renderRoot, mutate) {
+      const snapshot = captureSubtree(renderRoot);
+      return runSuppressedTransaction(mutate, () => restoreSubtree(snapshot));
+    }
+
+    function ownedWrappers(entry) {
+      return Array.from(entry && entry.wrapperRefs || [], (reference) => reference && reference.deref())
+        .filter((wrapper) => wrapper && wrapperCapabilities.has(wrapper))
+        .filter((wrapper) => {
+          const metadata = wrapperMetadata.get(wrapper);
+          return metadata && metadata.rootId === entry.rootId;
+        });
     }
 
     function unwrapEntry(entry, normalizeParents) {
@@ -399,8 +520,9 @@
         const parent = wrapper.parentNode;
         if (!parent) continue;
         const children = Array.from(wrapper.childNodes || []);
+        const metadata = wrapperMetadata.get(wrapper);
         const cleanOwnership = children.length === 1 && children[0].nodeType === 3 &&
-          children[0].nodeValue === wrapper.getAttribute('data-halo-original');
+          metadata && children[0].nodeValue === metadata.original;
         parents.set(parent, (parents.get(parent) ?? true) && cleanOwnership);
         track(wrapper);
         track(parent);
@@ -425,6 +547,14 @@
     function preparedOperations(request) {
       return planNodeOperations(request.fragments).map((fragment) => {
         const wrapper = track(document.createElement('span'));
+        wrapperCapabilities.add(wrapper);
+        wrapperMetadata.set(wrapper, {
+          rootId: request.rootId,
+          runId: request.runId,
+          original: fragment.text,
+          boundaryKey: fragment.boundaryKey,
+          boundaryIndex: fragment.boundaryIndex
+        });
         applyProjection(wrapper, request, fragment);
         wrapper.textContent = fragment.text;
         for (const child of Array.from(wrapper.childNodes || [])) track(child);
@@ -448,22 +578,42 @@
       }
     }
 
-    function record(request) {
-      return renderState.record({
+    function validatePrivateOwnership(request) {
+      for (const fragment of request.fragments) {
+        for (let current = fragment.node.parentNode; current; current = current.parentNode) {
+          if (!wrapperCapabilities.has(current)) continue;
+          const metadata = wrapperMetadata.get(current);
+          if (!metadata || metadata.rootId !== request.rootId) {
+            throw new Error('render fragment is already owned by another renderer root');
+          }
+          break;
+        }
+      }
+      return request;
+    }
+
+    function prepareRecord(request, wrappers) {
+      return renderState.prepare({
         rootId: request.rootId,
         rootRevision: request.rootRevision,
         analysisKey: request.analysisKey,
         runId: request.runId,
         wrappers: request.fragments.length,
         boundarySignature: request.boundarySignature,
-        root: request.root
+        root: request.root,
+        wrapperNodes: wrappers
       });
     }
 
     function applyValidated(request) {
       const prepared = preparedOperations(request);
-      suppressMutations(() => applyPrepared(prepared));
-      record(request);
+      const wrappers = prepared
+        .slice()
+        .sort((left, right) => left.fragment.boundaryIndex - right.fragment.boundaryIndex)
+        .map((operation) => operation.wrapper);
+      const nextEntry = prepareRecord(request, wrappers);
+      mutateRootAtomically(request.root, () => applyPrepared(prepared));
+      renderState.commit(nextEntry);
       lastAction = 'applied';
       return frozenResult({ action: 'applied', rootId: request.rootId, wrappers: request.fragments.length });
     }
@@ -472,12 +622,16 @@
       if (entry.boundarySignature !== request.boundarySignature) return false;
       const wrappers = ownedWrappers(entry);
       if (wrappers.length !== request.fragments.length) return false;
-      const byIndex = new Map(wrappers.map((wrapper) => [wrapper.getAttribute('data-halo-index'), wrapper]));
+      const byIndex = new Map(wrappers.map((wrapper) => {
+        const metadata = wrapperMetadata.get(wrapper);
+        return [String(metadata.boundaryIndex), wrapper];
+      }));
       return request.fragments.every((fragment) => {
         const wrapper = byIndex.get(String(fragment.boundaryIndex));
+        const metadata = wrapper && wrapperMetadata.get(wrapper);
         return Boolean(wrapper &&
-          wrapper.getAttribute('data-halo-boundary') === fragment.boundaryKey &&
-          wrapper.getAttribute('data-halo-original') === fragment.text &&
+          metadata && metadata.boundaryKey === fragment.boundaryKey &&
+          metadata.original === fragment.text &&
           wrapper.childNodes.length === 1 && wrapper.childNodes[0].nodeType === 3 &&
           wrapper.textContent === fragment.text);
       });
@@ -485,15 +639,28 @@
 
     function updateInPlace(entry, request) {
       const wrappers = ownedWrappers(entry);
-      const byIndex = new Map(wrappers.map((wrapper) => [wrapper.getAttribute('data-halo-index'), wrapper]));
-      suppressMutations(() => {
+      const byIndex = new Map(wrappers.map((wrapper) => [
+        String(wrapperMetadata.get(wrapper).boundaryIndex), wrapper
+      ]));
+      const nextEntry = prepareRecord(request, wrappers);
+      mutateRootAtomically(request.root, () => {
         for (const fragment of request.fragments) {
           const wrapper = byIndex.get(String(fragment.boundaryIndex));
           track(wrapper);
           applyProjection(wrapper, request, fragment);
         }
       });
-      record(request);
+      for (const fragment of request.fragments) {
+        const wrapper = byIndex.get(String(fragment.boundaryIndex));
+        wrapperMetadata.set(wrapper, {
+          rootId: request.rootId,
+          runId: request.runId,
+          original: fragment.text,
+          boundaryKey: fragment.boundaryKey,
+          boundaryIndex: fragment.boundaryIndex
+        });
+      }
+      renderState.commit(nextEntry);
       lastAction = 'updated';
       return frozenResult({ action: 'updated', rootId: request.rootId, wrappers: request.fragments.length });
     }
@@ -506,11 +673,16 @@
       }
       if (wrappersMatchBoundaries(entry, request)) return updateInPlace(entry, request);
       const prepared = preparedOperations(request);
-      suppressMutations(() => {
+      const wrappers = prepared
+        .slice()
+        .sort((left, right) => left.fragment.boundaryIndex - right.fragment.boundaryIndex)
+        .map((operation) => operation.wrapper);
+      const nextEntry = prepareRecord(request, wrappers);
+      mutateRootAtomically(request.root, () => {
         unwrapEntry(entry, false);
         applyPrepared(prepared);
       });
-      record(request);
+      renderState.commit(nextEntry);
       lastAction = 'rebuilt';
       return frozenResult({ action: 'rebuilt', rootId: request.rootId, wrappers: request.fragments.length });
     }
@@ -526,7 +698,7 @@
         lastAction = 'duplicate';
         return frozenResult({ action: 'duplicate', rootId: envelope.rootId, wrappers: entry ? entry.wrappers : 0 });
       }
-      const request = validateRenderRequest(rawRequest, document);
+      const request = validatePrivateOwnership(validateRenderRequest(rawRequest, document));
       if (classification === 'reconcile') return reconcileValidated(request);
       return applyValidated(request);
     }
@@ -542,7 +714,7 @@
         lastAction = 'duplicate';
         return frozenResult({ action: 'duplicate', rootId: envelope.rootId, wrappers: entry ? entry.wrappers : 0 });
       }
-      const request = validateRenderRequest(rawRequest, document);
+      const request = validatePrivateOwnership(validateRenderRequest(rawRequest, document));
       return reconcileValidated(request);
     }
 
@@ -551,19 +723,60 @@
       const entry = renderState.lookup(key);
       if (!entry) return frozenResult({ action: 'noop', rootId: key, wrappers: 0 });
       let removed = 0;
-      suppressMutations(() => {
-        removed = unwrapEntry(entry, true);
-      });
+      const renderRoot = rootFor(entry);
+      if (renderRoot) {
+        mutateRootAtomically(renderRoot, () => {
+          removed = unwrapEntry(entry, true);
+        });
+      }
       renderState.remove(key);
       lastAction = 'removed';
       return frozenResult({ action: 'removed', rootId: key, wrappers: removed });
     }
 
+    function nodeLocation(node) {
+      const parent = node && node.parentNode;
+      return {
+        node,
+        parent,
+        index: parent ? Array.from(parent.childNodes || []).indexOf(node) : -1
+      };
+    }
+
+    function restoreNodeLocation(location) {
+      const node = location && location.node;
+      if (!node) return;
+      if (!location.parent) {
+        if (node.parentNode) {
+          track(node);
+          track(node.parentNode);
+          node.parentNode.removeChild(node);
+        }
+        return;
+      }
+      const reference = location.parent.childNodes[location.index] || null;
+      if (node.parentNode === location.parent && reference === node) return;
+      track(node);
+      track(location.parent);
+      location.parent.insertBefore(node, reference);
+    }
+
+    function removePanelHost(parts) {
+      if (!parts || !parts.host || !parts.host.parentNode) return;
+      track(parts.host);
+      track(parts.host.parentNode);
+      parts.host.parentNode.removeChild(parts.host);
+    }
+
     function closePanel(reason) {
       const closeReason = reason === undefined ? 'closed' : nonemptyString(reason, 'reason', 128);
       if (!panelOpen || !panelParts) return frozenResult({ action: 'noop', reason: panelCloseReason });
-      track(panelParts.host);
-      panelParts.host.remove();
+      const closingParts = panelParts;
+      const location = nodeLocation(closingParts.host);
+      runSuppressedTransaction(
+        () => removePanelHost(closingParts),
+        () => restoreNodeLocation(location)
+      );
       panelParts = null;
       panelOpen = false;
       panelCloseReason = closeReason;
@@ -572,12 +785,33 @@
     }
 
     function removeAll() {
-      let wrappers = 0;
-      for (const entry of [...renderState.values()]) {
-        const result = removeRoot(entry.rootId);
-        wrappers += result.wrappers;
+      const entries = [...renderState.values()];
+      const snapshots = [];
+      const seenRoots = new Set();
+      for (const entry of entries) {
+        const renderRoot = rootFor(entry);
+        if (!renderRoot || seenRoots.has(renderRoot)) continue;
+        seenRoots.add(renderRoot);
+        snapshots.push(captureSubtree(renderRoot));
       }
-      if (panelOpen) closePanel('remove-all');
+      const closingParts = panelOpen ? panelParts : null;
+      const panelLocation = closingParts ? nodeLocation(closingParts.host) : null;
+      let wrappers = 0;
+      if (entries.length || closingParts) {
+        runSuppressedTransaction(() => {
+          for (const entry of entries) wrappers += unwrapEntry(entry, true);
+          if (closingParts) removePanelHost(closingParts);
+        }, () => {
+          for (const snapshot of snapshots) restoreSubtree(snapshot);
+          if (panelLocation) restoreNodeLocation(panelLocation);
+        });
+      }
+      for (const entry of entries) renderState.remove(entry.rootId);
+      if (closingParts) {
+        panelParts = null;
+        panelOpen = false;
+        panelCloseReason = 'remove-all';
+      }
       lastAction = 'removed-all';
       return frozenResult({ action: 'removed-all', wrappers });
     }
@@ -588,20 +822,33 @@
       const bodyText = optionalString(model.body, 'panel model.body', 4000) || '';
       const statusText = optionalString(model.status, 'panel model.status', 256) || '';
       const anchor = model.anchor && typeof model.anchor === 'object' ? model.anchor : {};
-      if (panelOpen) closePanel('replaced');
-      panelParts = createCorePanel(document);
-      panelParts.title.textContent = titleText;
-      panelParts.body.textContent = bodyText;
-      panelParts.status.textContent = statusText;
-      track(panelParts.host);
-      const container = document.body || document.documentElement;
-      container.appendChild(panelParts.host);
+      const requestedPosition = { x: Number(anchor.x) || 8, y: Number(anchor.y) || 8 };
       const view = document.defaultView || root;
       const viewport = { width: Number(view.innerWidth) || 0, height: Number(view.innerHeight) || 0 };
-      const rect = panelParts.panel.getBoundingClientRect();
-      const position = clampPanelPosition({ x: anchor.x, y: anchor.y }, viewport, rect, 8);
-      panelParts.panel.style.left = `${position.left}px`;
-      panelParts.panel.style.top = `${position.top}px`;
+      const container = document.body || document.documentElement;
+      if (!container || typeof container.appendChild !== 'function') throw new TypeError('panel container: is unavailable');
+      const nextParts = createCorePanel(document);
+      nextParts.title.textContent = titleText;
+      nextParts.body.textContent = bodyText;
+      nextParts.status.textContent = statusText;
+      const priorParts = panelOpen ? panelParts : null;
+      const nextLocation = nodeLocation(nextParts.host);
+      const priorLocation = priorParts ? nodeLocation(priorParts.host) : null;
+      let position;
+      runSuppressedTransaction(() => {
+        track(nextParts.host);
+        track(container);
+        container.appendChild(nextParts.host);
+        const rect = nextParts.panel.getBoundingClientRect();
+        position = clampPanelPosition(requestedPosition, viewport, rect, 8);
+        nextParts.panel.style.left = `${position.left}px`;
+        nextParts.panel.style.top = `${position.top}px`;
+        if (priorParts) removePanelHost(priorParts);
+      }, () => {
+        restoreNodeLocation(nextLocation);
+        if (priorLocation) restoreNodeLocation(priorLocation);
+      });
+      panelParts = nextParts;
       panelOpen = true;
       panelCloseReason = null;
       lastAction = 'panel-opened';

@@ -134,6 +134,51 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       });
       await page.waitForSelector('#initial [data-halo-owned="token"]');
 
+      const initialModelPasses = await page.evaluate(() =>
+        __haloDynamic.semanticRequests.flatMap((request) => request.items)
+          .filter((item) => item.text === 'The initial model learns.').length
+      );
+      await page.evaluate(() => {
+        const wrapper = document.querySelector('#initial [data-halo-original="model"]');
+        wrapper.setAttribute('data-halo-pos', 'third-party-semantic-change');
+      });
+      await page.waitForFunction((count) =>
+        __haloDynamic.semanticRequests.flatMap((request) => request.items)
+          .filter((item) => item.text === 'The initial model learns.').length > count &&
+        document.querySelector('#initial [data-halo-original="model"]'), initialModelPasses
+      );
+      await page.evaluate(() => {
+        const wrapper = document.querySelector('#initial [data-halo-original="model"]');
+        wrapper.setAttribute('data-halo-owned', 'third-party-ownership-change');
+      });
+      await page.waitForFunction(() =>
+        __haloDynamic.semanticRequests.flatMap((request) => request.items)
+          .filter((item) => item.text === 'The initial model learns.').length >= 3 &&
+        document.querySelector('#initial [data-halo-original="model"]')
+      );
+      await page.evaluate(() => {
+        const wrapper = document.querySelector('#initial [data-halo-original="model"]');
+        wrapper.firstChild.nodeValue = 'system';
+      });
+      await page.waitForFunction(() =>
+        __haloDynamic.semanticRequests.flatMap((request) => request.items)
+          .some((item) => item.text === 'The initial system learns.') &&
+        document.querySelector('#initial [data-halo-original="system"]')
+      );
+      await page.evaluate(() => {
+        const wrapper = document.querySelector('#initial [data-halo-original="system"]');
+        const thirdParty = document.createElement('i');
+        thirdParty.id = 'third-party-token-child';
+        thirdParty.textContent = '!';
+        __haloDynamic.thirdParty = thirdParty;
+        wrapper.appendChild(thirdParty);
+      });
+      await page.waitForFunction(() =>
+        __haloDynamic.semanticRequests.flatMap((request) => request.items)
+          .some((item) => item.text === 'The initial system! learns.') &&
+        document.querySelector('#initial [data-halo-owned="token"]')
+      );
+
       await page.evaluate(() => {
         const main = document.getElementById('content');
         const inserted = document.createElement('p');
@@ -245,6 +290,7 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
           epochs,
           epochTwoTexts,
           nestedWrappers,
+          thirdPartyPreserved: document.getElementById('third-party-token-child') === __haloDynamic.thirdParty,
           wrappersAfterCleanup: document.querySelectorAll('[data-halo-owned="token"]').length,
           historyRestored: history.pushState === __haloDynamic.originalPushState &&
             history.replaceState === __haloDynamic.originalReplaceState
@@ -252,7 +298,6 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       });
 
       for (const text of [
-        'The initial model learns.',
         'The inserted paragraph works.',
         'The lazy paragraph appears.',
         'Infinite item alpha arrives.',
@@ -269,9 +314,13 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
       ]) {
         assert.equal(result.itemTexts.filter((value) => value === text).length, 1, text);
       }
+      assert.equal(result.itemTexts.filter((value) => value === 'The initial model learns.').length, 3);
+      assert.equal(result.itemTexts.filter((value) => value === 'The initial system learns.').length, 1);
+      assert.equal(result.itemTexts.filter((value) => value === 'The initial system! learns.').length, 1);
       assert.deepEqual(result.epochs, [1, 2, 3, 4, 5]);
       assert.deepEqual(result.epochTwoTexts, ['The history-first route starts.']);
       assert.equal(result.nestedWrappers, 0);
+      assert.equal(result.thirdPartyPreserved, true);
       assert.equal(result.wrappersAfterCleanup, 0);
       assert.equal(result.historyRestored, true);
     });

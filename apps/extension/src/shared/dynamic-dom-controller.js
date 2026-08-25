@@ -5,13 +5,8 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (root) {
   'use strict';
 
-  function defaultIsHaloOwned(node) {
-    const element = node && node.nodeType === 1 ? node : node && (node.parentElement || node.parentNode);
-    if (!element) return false;
-    if (element.owned === true) return true;
-    if (element.dataset && ['token', 'panel'].includes(element.dataset.haloOwned)) return true;
-    return typeof element.closest === 'function' &&
-      Boolean(element.closest('[data-halo-owned="token"], [data-halo-owned="panel"]'));
+  function defaultIsHaloOwned() {
+    return false;
   }
 
   function elementFor(node, fallback) {
@@ -297,7 +292,15 @@
       observer.observe(documentRef.body || documentRef.documentElement || documentRef, {
         subtree: true,
         childList: true,
-        characterData: true
+        characterData: true,
+        attributes: true,
+        attributeFilter: [
+          'class', 'title',
+          'data-halo-owned', 'data-halo-run', 'data-halo-root', 'data-halo-original',
+          'data-halo-node', 'data-halo-start', 'data-halo-end', 'data-halo-index',
+          'data-halo-boundary', 'data-halo-revision', 'data-halo-carrier',
+          'data-halo-pos', 'data-halo-meta', 'data-halo-gloss', 'data-halo-confidence'
+        ]
       });
       observing = true;
     }
