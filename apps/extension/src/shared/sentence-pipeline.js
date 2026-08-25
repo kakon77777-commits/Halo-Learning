@@ -76,7 +76,9 @@
   }
 
   function isStructurallyHidden(element, options) {
-    return hasAttribute(element, 'hidden') || styleHidesElement(element, options);
+    return hasAttribute(element, 'hidden') ||
+      normalizedAttribute(element, 'aria-hidden') === 'true' ||
+      styleHidesElement(element, options);
   }
 
   function elementHasSensitiveMarker(element) {
@@ -125,7 +127,6 @@
     if (tagName === 'NAV' || normalizedAttribute(element, 'role') === 'navigation') return true;
     if (normalizedAttribute(element, 'role') === 'textbox') return true;
     if (structurallyHidden || hasAttribute(element, 'inert')) return true;
-    if (normalizedAttribute(element, 'aria-hidden') === 'true') return true;
     if (isEditable(element) || isHaloOwned(element)) return true;
     if (elementHasSensitiveMarker(element)) return true;
     if ((tagName === 'FORM' || normalizedAttribute(element, 'role') === 'form') &&

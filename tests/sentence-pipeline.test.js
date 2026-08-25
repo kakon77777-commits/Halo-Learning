@@ -122,6 +122,41 @@ function assertTwoSentenceBoundary(root, expectedBoundary, secondStart, secondEn
   }
 }
 
+function assertPolicyHiddenBlock(attributes, style, caseId) {
+  const unreadable = text('', `${caseId}-secret`);
+  Object.defineProperty(unreadable, 'nodeValue', {
+    get() {
+      throw new Error(`${caseId} hidden text was read`);
+    }
+  });
+  const root = fixtureRoot([
+    text('First.', 'first'),
+    element('section', attributes, [unreadable], { display: 'block', ...style }),
+    text('Second.', 'second')
+  ]);
+  const options = { getNodeId: (node) => node._id, isVisible: () => true };
+  const runs = Pipeline.createTextRuns(root, options);
+  assert.equal(runs.map((run) => run.boundaryBefore + run.text).join(''), 'First.Second.', caseId);
+  assert.deepEqual(runs.map(publicRun), [
+    { nodeId: 'first', text: 'First.', start: 0, end: 6, boundaryBefore: '', rootRevision: 0 },
+    { nodeId: 'second', text: 'Second.', start: 6, end: 13, boundaryBefore: '', rootRevision: 0 }
+  ], caseId);
+  assert.deepEqual(Pipeline.buildSentenceRecords(root, options), [
+    {
+      id: '0:0:13',
+      text: 'First.Second.',
+      start: 0,
+      end: 13,
+      language: 'en',
+      rootRevision: 0,
+      fragments: [
+        { nodeId: 'first', start: 0, end: 6 },
+        { nodeId: 'second', start: 0, end: 7 }
+      ]
+    }
+  ], caseId);
+}
+
 test('aggregate token spans map across nested node-local fragments without drift', () => {
   const runs = [
     { nodeId: 'a', text: 'The ', start: 0, end: 4 },
@@ -360,6 +395,18 @@ test('content-visibility hidden descendants are rejected before text access', ()
     }).map((run) => run.text),
     ['Visible.', ' Still visible.']
   );
+});
+
+test('policy-hidden blocks contribute neither text nor aggregate boundary offsets', () => {
+  const cases = [
+    { id: 'aria-hidden', attributes: { 'aria-hidden': 'true' }, style: {} },
+    { id: 'hidden-attribute', attributes: { hidden: '' }, style: {} },
+    { id: 'display-none', attributes: {}, style: { display: 'none' } },
+    { id: 'content-visibility-hidden', attributes: {}, style: { contentVisibility: 'hidden' } }
+  ];
+  for (const fixture of cases) {
+    assertPolicyHiddenBlock(fixture.attributes, fixture.style, fixture.id);
+  }
 });
 
 test('fresh extraction reflects dynamic roots and partially hidden descendants', () => {
