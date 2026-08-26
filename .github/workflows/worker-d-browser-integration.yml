@@ -1,4 +1,4 @@
-name: Worker D Dynamic DOM Diagnostic
+name: Worker D Frozen Source Snapshot
 
 on:
   push:
@@ -10,69 +10,25 @@ permissions:
   contents: read
 
 jobs:
-  dynamic-dom-diagnostic:
+  source-snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
       - name: Checkout exact frozen Worker B base
         uses: actions/checkout@v4
         with:
           ref: b6cd8ccfd705563bad7dcea87900d50fa8ca0b80
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
+      - name: Verify frozen source SHA
+        run: test "$(git rev-parse HEAD)" = "b6cd8ccfd705563bad7dcea87900d50fa8ca0b80"
 
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-
-      - name: Resolve Chromium and instrument focused test
-        run: |
-          set -euo pipefail
-          mkdir -p evidence/worker-d-dynamic-diagnostic
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const { chromium } = require('playwright');
-          const executable = chromium.executablePath();
-          if (!fs.existsSync(executable)) throw new Error(`Chromium missing at ${executable}`);
-          fs.appendFileSync(process.env.GITHUB_ENV, `HALO_CHROMIUM_EXECUTABLE=${executable}\n`);
-
-          const target = 'tests/browser/dynamic-dom.e2e.test.js';
-          let source = fs.readFileSync(target, 'utf8');
-          const pageAnchor = '      const page = await context.newPage();';
-          if (!source.includes(pageAnchor)) throw new Error('dynamic-DOM page anchor missing');
-          source = source.replace('    context = await launchExtension({', "    console.error('[D-DIAG] launchExtension:start');\n    context = await launchExtension({");
-          source = source.replace('    await withFixtureServer({', "    console.error('[D-DIAG] launchExtension:end');\n    console.error('[D-DIAG] withFixtureServer:start');\n    await withFixtureServer({");
-          source = source.replace(pageAnchor, pageAnchor + "\n      console.error('[D-DIAG] page:new:end');\n      page.setDefaultTimeout(5000);\n      const __haloOriginalEvaluate = page.evaluate.bind(page);\n      let __haloEvaluateSequence = 0;\n      page.evaluate = (...args) => {\n        const __haloEvaluateId = ++__haloEvaluateSequence;\n        console.error('[D-DIAG] evaluate:' + __haloEvaluateId + ':start');\n        return Promise.race([\n          __haloOriginalEvaluate(...args).then((value) => { console.error('[D-DIAG] evaluate:' + __haloEvaluateId + ':end'); return value; }),\n          new Promise((_, reject) => setTimeout(() => reject(new Error('D_DIAG_EVALUATE_TIMEOUT_' + __haloEvaluateId)), 5000))\n        ]);\n      };");
-          let boundary = 0;
-          source = source.replace(/^([ \t]*)(.*\bawait page\.(?:goto|evaluate|addScriptTag|waitForSelector|waitForFunction|waitForTimeout)\b.*)$/gm, (whole, indent, line) => {
-            boundary += 1;
-            return indent + "console.error('[D-DIAG] boundary:" + boundary + ":before');\n" + indent + line.trimStart();
-          });
-          source = source.replace("    });\n  } finally {\n    if (context) await context.close();", "    });\n    console.error('[D-DIAG] withFixtureServer:end');\n  } finally {\n    console.error('[D-DIAG] contextClose:start');\n    if (context) await context.close();\n    console.error('[D-DIAG] contextClose:end');");
-          fs.writeFileSync(target, source);
-          console.log(`instrumented_boundaries=${boundary}`);
-          NODE
-
-      - name: Run bounded focused diagnostic
-        id: diagnostic
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          timeout 45s node --test tests/browser/dynamic-dom.e2e.test.js 2>&1 | tee evidence/worker-d-dynamic-diagnostic/dynamic-dom-diagnostic.log
-
-      - name: Upload focused diagnostic
-        if: always()
+      - name: Upload D-owned source snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: worker-d-dynamic-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence/worker-d-dynamic-diagnostic/
+          name: worker-d-frozen-sources-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tests/browser/dynamic-dom.e2e.test.js
+            scripts/collect-worker-b-browser-evidence.js
+            tests/browser/helpers/service-worker-cdp.js
           if-no-files-found: error
           retention-days: 14
-
-      - name: Record diagnostic outcome
-        if: always()
-        env:
-          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
-        run: echo "diagnostic_outcome=$DIAGNOSTIC_OUTCOME"
