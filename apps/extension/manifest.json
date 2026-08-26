@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Halo Learning - Magic Hand",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Local-first English/Traditional-Chinese semantic annotation with configurable, reversible projection.",
   "permissions": ["activeTab", "contextMenus", "scripting", "storage"],
   "background": {
