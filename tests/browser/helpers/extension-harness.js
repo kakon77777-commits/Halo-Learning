@@ -9,21 +9,27 @@ function resolveChromiumExecutable(options) {
   throw new Error('Chromium executable is required for Halo browser gates');
 }
 
+function extensionLaunchArguments(extensionRoot) {
+  return Object.freeze([
+    '--disable-extensions-except=' + extensionRoot,
+    '--load-extension=' + extensionRoot,
+    '--enable-unsafe-extension-debugging',
+    '--enable-precise-memory-info',
+    '--no-sandbox'
+  ]);
+}
+
 async function launchExtension({ extensionRoot, userDataDir, headless, executablePath }) {
   const { chromium } = require('playwright');
   return chromium.launchPersistentContext(userDataDir, {
     executablePath,
     headless,
-    args: [
-      '--disable-extensions-except=' + extensionRoot,
-      '--load-extension=' + extensionRoot,
-      '--enable-precise-memory-info',
-      '--no-sandbox'
-    ]
+    args: extensionLaunchArguments(extensionRoot)
   });
 }
 
 module.exports = Object.freeze({
+  extensionLaunchArguments,
   launchExtension,
   resolveChromiumExecutable
 });
