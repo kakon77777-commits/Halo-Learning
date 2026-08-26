@@ -10,20 +10,6 @@ permissions:
   contents: read
 
 jobs:
-  command-diagnostic:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - name: Diagnose native command delivery
-        run: node scripts/diagnose-b03-b05.js
-
   core:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -58,7 +44,6 @@ jobs:
           - reversible-renderer
           - sensitive-site
           - sentence-pipeline
-          - trigger-controller
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -69,6 +54,26 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Run isolated real-browser file
         run: timeout --kill-after=10s 180s node --test "tests/browser/${{ matrix.file }}.e2e.test.js"
+
+  trigger-controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: Trigger controller unit regression
+        run: node --test tests/trigger-controller.test.js tests/browser-trigger-entry.test.js
+      - name: Trigger controller installed-browser lifecycle
+        env:
+          HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/trigger-controller.e2e.test.js
 
   mv3:
     runs-on: ubuntu-latest
