@@ -9,11 +9,23 @@ const { chromium } = require('playwright');
 const { launchExtension, resolveChromiumExecutable } = require('../tests/browser/helpers/extension-harness');
 const { withFixtureServer } = require('../tests/browser/helpers/fixture-server');
 
-function pressNativeShortcut(windowTitle) {
-  const output = execFileSync('xdotool', ['search', '--name', windowTitle], { encoding: 'utf8' }).trim();
+function nativeBrowserWindow() {
+  try {
+    const active = execFileSync('xdotool', ['getactivewindow'], { encoding: 'utf8' }).trim();
+    if (active) {
+      const className = execFileSync('xdotool', ['getwindowclassname', active], { encoding: 'utf8' }).trim();
+      if (/chrom/i.test(className)) return active;
+    }
+  } catch (_error) {}
+  const output = execFileSync('xdotool', ['search', '--onlyvisible', '--class', '[Cc]hrom.*'], { encoding: 'utf8' }).trim();
   const windows = output.split(/\s+/).filter(Boolean);
-  if (!windows.length) throw new Error(`B05 native shortcut window not found: ${windowTitle}`);
-  const windowId = windows[windows.length - 1];
+  if (!windows.length) throw new Error('B05 probe could not locate visible Chromium window');
+  return windows[windows.length - 1];
+}
+
+function pressNativeShortcut() {
+  const windowId = nativeBrowserWindow();
+  console.log('B05 NAVIGATION PROBE window', windowId);
   execFileSync('xdotool', ['windowfocus', '--sync', windowId], { stdio: 'inherit' });
   execFileSync('xdotool', ['key', '--window', windowId, '--clearmodifiers', 'alt+shift+h'], { stdio: 'inherit' });
 }
@@ -45,7 +57,8 @@ function pressNativeShortcut(windowTitle) {
         selection.addRange(range);
       });
       await page.bringToFront();
-      pressNativeShortcut('Halo B05 Navigation Probe');
+      await page.waitForTimeout(100);
+      pressNativeShortcut();
       await page.locator('[data-halo-owned="panel"] .halo-core-panel').waitFor({ state: 'visible', timeout: 5000 });
 
       const installed = await worker.evaluate(async (url) => {
