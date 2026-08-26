@@ -167,6 +167,44 @@ test('route matching safely includes query and hash and rejects multiply encoded
   }
 });
 
+test('forged known-host suffix suppresses only host evidence while independent sensitive routes still block', () => {
+  const blocked = [
+    ['https://chase.com.attacker.test/login', 'authentication'],
+    ['https://vault.bitwarden.com.attacker.test/checkout', 'payment-checkout'],
+    ['https://outlook.live.com.attacker.test/password-reset', 'authentication'],
+    ['https://chase.com.attacker.test/%6cogin', 'authentication'],
+    ['https://vault.bitwarden.com.attacker.test/%63heckout', 'payment-checkout'],
+    ['https://outlook.live.com.attacker.test/%70assword-reset', 'authentication'],
+    ['https://chase.com.attacker.test/?next=login', 'authentication'],
+    ['https://vault.bitwarden.com.attacker.test/?flow=%63heckout', 'payment-checkout'],
+    ['https://outlook.live.com.attacker.test/#%70assword-reset', 'authentication']
+  ];
+  for (const [url, category] of blocked) {
+    const decision = classify(url);
+    assert.equal(decision.allow, false, url);
+    assert.equal(decision.category, category, url);
+    assert.equal(decision.evidenceKind, 'PATH_LABEL', url);
+  }
+  for (const url of [
+    'https://chase.com.attacker.test/%256cogin',
+    'https://vault.bitwarden.com.attacker.test/%252Fcheckout',
+    'https://outlook.live.com.attacker.test/%2epassword-reset',
+    'https://chase.com.attacker.test/?next=%256cogin',
+    'https://vault.bitwarden.com.attacker.test/#%252Fcheckout'
+  ]) {
+    const decision = classify(url);
+    assert.equal(decision.allow, false, url);
+    assert.equal(decision.reasonCode, 'AMBIGUOUS_URL', url);
+  }
+  for (const url of [
+    'https://chase.com.attacker.test/article',
+    'https://vault.bitwarden.com.attacker.test/help',
+    'https://outlook.live.com.attacker.test/public-news',
+    'https://chase.com.attacker.test/?topic=article',
+    'https://outlook.live.com.attacker.test/#public-news'
+  ]) assert.equal(classify(url).allow, true, url);
+});
+
 test('denylist canonicalizes case, one trailing dot, and IDNA then sorts and deduplicates', () => {
   const denylist = Policy.normalizeDenylist([
     'Private.Example.',

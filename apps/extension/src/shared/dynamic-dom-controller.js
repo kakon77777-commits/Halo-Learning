@@ -5,6 +5,12 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function (root) {
   'use strict';
 
+  const CLEANUP_STAGE_CODES = Object.freeze([
+    'debounce-timer', 'hashchange-listener', 'max-wait-timer',
+    'observer-disconnect', 'observer-records', 'popstate-listener',
+    'push-state-hook', 'replace-state-hook'
+  ]);
+
   function defaultIsHaloOwned() {
     return false;
   }
@@ -217,13 +223,20 @@
     let suppressionDepth = 0;
     let observing = false;
     let policyOnly = settings.policyOnly === true;
+    let cleanupStarted = false;
+    let cleanupInProgress = false;
+    let finalCleanupNotified = false;
     let cleaned = false;
-    let hooksInstalled = false;
+    let popstateListenerInstalled = false;
+    let hashchangeListenerInstalled = false;
     let observedUrl = location && location.href ? String(location.href) : '';
     let originalPushState = null;
     let originalReplaceState = null;
     let pushStateWrapper = null;
     let replaceStateWrapper = null;
+    let pushStateHookInstalled = false;
+    let replaceStateHookInstalled = false;
+    let observerRecordsPending = false;
     let transitioning = false;
     let queuedTransition = null;
     let routeStartToken = 0;
@@ -273,7 +286,7 @@
       maxWaitHandle = null;
       const records = pendingRecords;
       pendingRecords = [];
-      if (cleaned || suppressionDepth || !records.length) return;
+      if (cleanupStarted || suppressionDepth || !records.length) return;
       const result = coalesceMutations(records, isHaloOwned);
       if (result.roots.length || result.removedRoots.length) {
         onRootsChanged(result.roots, Object.freeze({
@@ -299,7 +312,7 @@
     }
 
     function queueMutationRecords(records, filterRendererRecords) {
-      if (cleaned) return;
+      if (cleanupStarted) return;
       const retained = Array.from(records || []).map((record) =>
         filterRendererRecords ? sanitizeRendererRecord(record) : record
       ).filter(Boolean);
@@ -343,14 +356,19 @@
     }
 
     function installHooks() {
-      if (hooksInstalled || cleaned) return;
-      hooksInstalled = true;
+      if (cleanupStarted) return;
       if (eventTarget && typeof eventTarget.addEventListener === 'function') {
-        eventTarget.addEventListener('popstate', navigationEvent);
-        eventTarget.addEventListener('hashchange', navigationEvent);
+        if (!popstateListenerInstalled) {
+          eventTarget.addEventListener('popstate', navigationEvent);
+          popstateListenerInstalled = true;
+        }
+        if (!hashchangeListenerInstalled) {
+          eventTarget.addEventListener('hashchange', navigationEvent);
+          hashchangeListenerInstalled = true;
+        }
       }
       if (!history) return;
-      if (typeof history.pushState === 'function') {
+      if (!pushStateHookInstalled && !pushStateWrapper && typeof history.pushState === 'function') {
         originalPushState = history.pushState;
         pushStateWrapper = function (...args) {
           const previousUrl = currentUrl();
@@ -358,9 +376,16 @@
           routeChanged(previousUrl, currentUrl());
           return result;
         };
-        history.pushState = pushStateWrapper;
+        try {
+          history.pushState = pushStateWrapper;
+          if (history.pushState !== pushStateWrapper) throw new Error('pushState hook installation was not retained');
+          pushStateHookInstalled = true;
+        } catch (error) {
+          try { pushStateHookInstalled = history.pushState === pushStateWrapper; } catch (_readError) {}
+          throw error;
+        }
       }
-      if (typeof history.replaceState === 'function') {
+      if (!replaceStateHookInstalled && !replaceStateWrapper && typeof history.replaceState === 'function') {
         originalReplaceState = history.replaceState;
         replaceStateWrapper = function (...args) {
           const previousUrl = currentUrl();
@@ -368,29 +393,78 @@
           routeChanged(previousUrl, currentUrl());
           return result;
         };
-        history.replaceState = replaceStateWrapper;
+        try {
+          history.replaceState = replaceStateWrapper;
+          if (history.replaceState !== replaceStateWrapper) throw new Error('replaceState hook installation was not retained');
+          replaceStateHookInstalled = true;
+        } catch (error) {
+          try { replaceStateHookInstalled = history.replaceState === replaceStateWrapper; } catch (_readError) {}
+          throw error;
+        }
       }
     }
 
-    function restoreHooks() {
-      if (!hooksInstalled) return;
-      hooksInstalled = false;
-      if (eventTarget && typeof eventTarget.removeEventListener === 'function') {
-        eventTarget.removeEventListener('popstate', navigationEvent);
-        eventTarget.removeEventListener('hashchange', navigationEvent);
+    function restoreHooks(metadata) {
+      if (popstateListenerInstalled) {
+        try {
+          if (!eventTarget || typeof eventTarget.removeEventListener !== 'function') {
+            throw new TypeError('popstate listener removal is unavailable');
+          }
+          eventTarget.removeEventListener('popstate', navigationEvent);
+          popstateListenerInstalled = false;
+        } catch (error) {
+          reportError(error, 'cleanup-popstate-listener', metadata);
+        }
       }
-      if (history) {
-        if (pushStateWrapper && history.pushState === pushStateWrapper) history.pushState = originalPushState;
-        if (replaceStateWrapper && history.replaceState === replaceStateWrapper) history.replaceState = originalReplaceState;
+      if (hashchangeListenerInstalled) {
+        try {
+          if (!eventTarget || typeof eventTarget.removeEventListener !== 'function') {
+            throw new TypeError('hashchange listener removal is unavailable');
+          }
+          eventTarget.removeEventListener('hashchange', navigationEvent);
+          hashchangeListenerInstalled = false;
+        } catch (error) {
+          reportError(error, 'cleanup-hashchange-listener', metadata);
+        }
       }
-      originalPushState = null;
-      originalReplaceState = null;
-      pushStateWrapper = null;
-      replaceStateWrapper = null;
+      if (pushStateHookInstalled) {
+        try {
+          if (!history) throw new TypeError('pushState restoration is unavailable');
+          if (history.pushState === pushStateWrapper) {
+            history.pushState = originalPushState;
+            if (history.pushState !== originalPushState) throw new Error('pushState restoration was not retained');
+          }
+          pushStateHookInstalled = false;
+          originalPushState = null;
+          pushStateWrapper = null;
+        } catch (error) {
+          reportError(error, 'cleanup-push-state-hook', metadata);
+        }
+      } else if (pushStateWrapper) {
+        originalPushState = null;
+        pushStateWrapper = null;
+      }
+      if (replaceStateHookInstalled) {
+        try {
+          if (!history) throw new TypeError('replaceState restoration is unavailable');
+          if (history.replaceState === replaceStateWrapper) {
+            history.replaceState = originalReplaceState;
+            if (history.replaceState !== originalReplaceState) throw new Error('replaceState restoration was not retained');
+          }
+          replaceStateHookInstalled = false;
+          originalReplaceState = null;
+          replaceStateWrapper = null;
+        } catch (error) {
+          reportError(error, 'cleanup-replace-state-hook', metadata);
+        }
+      } else if (replaceStateWrapper) {
+        originalReplaceState = null;
+        replaceStateWrapper = null;
+      }
     }
 
     function startObservation() {
-      if (!documentRef || observing || cleaned) return;
+      if (!documentRef || observing || cleanupStarted) return;
       const securityAttributes = [
         'type', 'autocomplete', 'inputmode', 'name', 'role',
         'data-private', 'data-sensitive', 'data-1p-ignore', 'data-bwignore'
@@ -416,20 +490,19 @@
     }
 
     function stopObservation() {
-      if (!observing) return;
-      try {
+      if (observing) {
         observer.disconnect();
-      } finally {
-        try {
-          observer.takeRecords();
-        } finally {
-          observing = false;
-        }
+        observing = false;
+        observerRecordsPending = true;
+      }
+      if (observerRecordsPending) {
+        observer.takeRecords();
+        observerRecordsPending = false;
       }
     }
 
     function observe(document) {
-      if (!document || cleaned) return false;
+      if (!document || cleanupStarted) return false;
       if (documentRef === document && observing) return false;
       stopObservation();
       documentRef = document;
@@ -444,13 +517,13 @@
     }
 
     function deferRouteStart(metadata) {
-      if (cleaned) return;
+      if (cleanupStarted) return;
       const token = ++routeStartToken;
       pendingRouteStart = metadata;
       const firstTurn = () => {
-        if (cleaned || token !== routeStartToken) return;
+        if (cleanupStarted || token !== routeStartToken) return;
         const mutationTurn = () => {
-          if (cleaned || token !== routeStartToken) return;
+          if (cleanupStarted || token !== routeStartToken) return;
           pendingRouteStart = null;
           invokeLifecycle(onRouteStart, metadata, 'route-start');
         };
@@ -494,7 +567,7 @@
         }
         transitioning = false;
       }
-      if (cleaned) {
+      if (cleanupStarted) {
         queuedTransition = null;
         cancelPendingRouteStart();
         return;
@@ -509,7 +582,7 @@
     }
 
     function routeChanged(previousUrl, nextUrl) {
-      if (cleaned) return epoch;
+      if (cleanupStarted) return epoch;
       const previous = previousUrl === undefined || previousUrl === null ? observedUrl : String(previousUrl);
       const next = nextUrl === undefined || nextUrl === null ? currentUrl() : String(nextUrl);
       if (previous === next || observedUrl === next || (queuedTransition && queuedTransition.nextUrl === next)) {
@@ -537,7 +610,7 @@
 
     function setPolicyOnly(value) {
       const next = value === true;
-      if (cleaned || next === policyOnly) return false;
+      if (cleanupStarted || next === policyOnly) return false;
       policyOnly = next;
       clearPending();
       stopObservation();
@@ -549,29 +622,86 @@
       return epoch;
     }
 
-    function cleanup() {
-      if (cleaned) return;
-      cleaned = true;
-      cancelPendingRouteStart();
-      queuedTransition = null;
-      clearPending();
-      const metadata = Object.freeze({ epoch, previousUrl: observedUrl, nextUrl: null, reason: 'cleanup' });
+    function cleanupStatus() {
+      const pending = new Set();
+      if (debounceHandle !== null) pending.add('debounce-timer');
+      if (hashchangeListenerInstalled) pending.add('hashchange-listener');
+      if (maxWaitHandle !== null) pending.add('max-wait-timer');
+      if (observing) pending.add('observer-disconnect');
+      if (observerRecordsPending) pending.add('observer-records');
+      if (popstateListenerInstalled) pending.add('popstate-listener');
+      if (pushStateHookInstalled) pending.add('push-state-hook');
+      if (replaceStateHookInstalled) pending.add('replace-state-hook');
+      const pendingStages = Object.freeze(CLEANUP_STAGE_CODES.filter((stage) => pending.has(stage)));
+      return Object.freeze({
+        schemaVersion: 1,
+        cleanupStarted,
+        cleaned,
+        cleanupPending: cleanupStarted && !cleaned,
+        pendingStages
+      });
+    }
+
+    function cancelCleanupTimer(name, metadata) {
+      const handle = name === 'debounce-timer' ? debounceHandle : maxWaitHandle;
+      if (handle === null) return;
       try {
-        invokeLifecycle(onRouteCleanup, metadata, 'cleanup');
-      } finally {
+        cancelTimeout(handle);
+        if (name === 'debounce-timer') debounceHandle = null;
+        else maxWaitHandle = null;
+      } catch (error) {
+        reportError(error, `cleanup-${name}`, metadata);
+      }
+    }
+
+    function cleanupObservation(metadata) {
+      if (observing) {
         try {
-          stopObservation();
+          observer.disconnect();
+          observing = false;
+          observerRecordsPending = true;
         } catch (error) {
           reportError(error, 'cleanup-observer', metadata);
         }
-        try {
-          restoreHooks();
-        } catch (error) {
-          reportError(error, 'cleanup-hooks', metadata);
-        }
-        documentRef = null;
-        transitioning = false;
       }
+      if (observing || observerRecordsPending) {
+        try {
+          observer.takeRecords();
+          if (!observing) observerRecordsPending = false;
+        } catch (error) {
+          observerRecordsPending = true;
+          reportError(error, 'cleanup-observer-records', metadata);
+        }
+      }
+    }
+
+    function cleanup() {
+      if (cleaned || cleanupInProgress) return cleanupStatus();
+      cleanupStarted = true;
+      cleanupInProgress = true;
+      const metadata = Object.freeze({ epoch, previousUrl: observedUrl, nextUrl: null, reason: 'cleanup' });
+      try {
+        cancelPendingRouteStart();
+        queuedTransition = null;
+        cancelCleanupTimer('debounce-timer', metadata);
+        cancelCleanupTimer('max-wait-timer', metadata);
+        pendingRecords = [];
+        if (!finalCleanupNotified) {
+          finalCleanupNotified = true;
+          invokeLifecycle(onRouteCleanup, metadata, 'cleanup');
+        }
+        cleanupObservation(metadata);
+        restoreHooks(metadata);
+        transitioning = false;
+        const pending = cleanupStatus().pendingStages;
+        if (!pending.length) {
+          documentRef = null;
+          cleaned = true;
+        }
+      } finally {
+        cleanupInProgress = false;
+      }
+      return cleanupStatus();
     }
 
     return Object.freeze({
@@ -580,13 +710,15 @@
       suppressRendererMutations,
       setPolicyOnly,
       routeEpoch,
-      cleanup
+      cleanup,
+      status: cleanupStatus
     });
   }
 
   return Object.freeze({
     classifyMutation,
     coalesceMutations,
+    CLEANUP_STAGE_CODES,
     createRendererMutationSanitizer,
     createDynamicDomController
   });

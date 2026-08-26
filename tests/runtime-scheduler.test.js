@@ -730,10 +730,20 @@ test('enrichment response validation binds every result field and canonical anno
     requestId: request.requestId,
     pageEpoch: request.pageEpoch,
     results: [result],
-    status: { mode: 'degraded' }
+    status: {
+      mode: 'degraded',
+      networkActivity: {
+        schemaVersion: 1,
+        scope: 'worker-lifetime',
+        lifetimeId: 'worker-runtime-fixture',
+        fetchAttempts: 3
+      }
+    }
   };
 
-  assert.equal(Content.validateEnrichmentResponse(response, request, Contracts).results.length, 1);
+  const validated = Content.validateEnrichmentResponse(response, request, Contracts);
+  assert.equal(validated.results.length, 1);
+  assert.deepEqual(validated.networkActivity, response.status.networkActivity);
   for (const [field, badValue] of [
     ['requestId', 'req-wrong'],
     ['pageEpoch', 5],
@@ -758,6 +768,16 @@ test('enrichment response validation binds every result field and canonical anno
     const inner = { ...response, results: [{ ...result, schemaVersion: value }] };
     assert.equal(Content.validateEnrichmentResponse(outer, request, Contracts), null);
     assert.equal(Content.validateEnrichmentResponse(inner, request, Contracts), null);
+  }
+  for (const networkActivity of [
+    { ...response.status.networkActivity, scope: 'global' },
+    { ...response.status.networkActivity, fetchAttempts: -1 },
+    { ...response.status.networkActivity, secret: 'must-not-cross-status' }
+  ]) {
+    assert.equal(Content.validateEnrichmentResponse({
+      ...response,
+      status: { ...response.status, networkActivity }
+    }, request, Contracts), null);
   }
 });
 

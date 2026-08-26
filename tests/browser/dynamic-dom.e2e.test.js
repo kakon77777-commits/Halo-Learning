@@ -86,7 +86,15 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
                 generatedAt
               })
             })),
-            status: { mode: 'degraded' }
+            status: {
+              mode: 'degraded',
+              networkActivity: {
+                schemaVersion: 1,
+                scope: 'worker-lifetime',
+                lifetimeId: 'worker-dynamic-fixture',
+                fetchAttempts: 0
+              }
+            }
           };
         }
         Object.defineProperty(globalThis, 'chrome', {

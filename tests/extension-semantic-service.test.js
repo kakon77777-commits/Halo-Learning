@@ -107,6 +107,7 @@ function serviceFor(runtime, overrides) {
     semanticModule: Semantic,
     grammarModule: Grammar,
     shardedProviderModule: ShardedProvider,
+    networkActivityCounter: settings.networkActivityCounter,
     now: () => GENERATED_AT
   });
 }
@@ -180,6 +181,83 @@ test('shard enrichment returns versioned lexical results and rejects the legacy 
   assert.equal(response.results[0].annotationSet.tokens[1].simplifiedPos, 'n');
   assert.equal(response.status.mode, 'ready');
   assert.equal(ignored, null);
+});
+
+test('production resource fetch attempts flow through lexical and dictionary status with worker-lifetime scope', async () => {
+  const networkActivityCounter = ServiceWorker.createNetworkActivityCounter({
+    lifetimeId: 'worker-lifetime-success'
+  });
+  const runtime = fixtureRuntime();
+  runtime.withEnsuredShards = async (ids, loadOptions, callback) => {
+    await runtime.readPackagedShard('en/00.json', loadOptions);
+    runtime.ensured.push([...ids]);
+    return callback(Object.freeze([lexicalShard()]));
+  };
+  const requested = [];
+  const loadShardRuntime = ServiceWorker.createBrowserShardLoader({
+    bootstrapProvider: bootstrapProvider(),
+    networkActivityCounter,
+    getResourceUrl: (resourcePath) => `chrome-extension://fixture/${resourcePath}`,
+    fetch: async (resourceUrl) => {
+      requested.push(resourceUrl);
+      return { ok: true, text: async () => '{}' };
+    },
+    shardModule: {
+      async loadBrowserLexicalManifest() {
+        return { rootHash: { value: 'manifest-root-1' } };
+      },
+      createBrowserLexicalRuntime(options) {
+        runtime.readPackagedShard = options.readText;
+        return runtime;
+      }
+    }
+  });
+  const context = await loadShardRuntime();
+  const service = serviceFor(null, { context, networkActivityCounter });
+  const response = await service.handleMessage(message([item(1)]), { tab: { id: 7 } });
+  const dictionaryStatus = await service.handleMessage({ type: 'HALO_DICTIONARY_STATUS' }, {});
+
+  assert.equal(response.results[0].phase, 'lexical');
+  assert.deepEqual(requested, [
+    'chrome-extension://fixture/data/lexical-v0.4.0/manifest.json',
+    'chrome-extension://fixture/data/lexical-v0.4.0/en/00.json'
+  ]);
+  assert.deepEqual(response.status.networkActivity, {
+    schemaVersion: 1,
+    scope: 'worker-lifetime',
+    lifetimeId: 'worker-lifetime-success',
+    fetchAttempts: 2
+  });
+  assert.deepEqual(dictionaryStatus.networkActivity, response.status.networkActivity);
+
+  const failedCounter = ServiceWorker.createNetworkActivityCounter({
+    lifetimeId: 'worker-lifetime-failure'
+  });
+  const failedContext = await ServiceWorker.createBrowserShardLoader({
+    bootstrapProvider: bootstrapProvider(),
+    networkActivityCounter: failedCounter,
+    getResourceUrl: (resourcePath) => `chrome-extension://fixture/${resourcePath}`,
+    fetch: async () => { throw new Error('packaged fetch failed'); },
+    shardModule: { loadBrowserLexicalManifest() { throw new Error('unreachable'); } }
+  })();
+  const failedService = serviceFor(null, { context: failedContext, networkActivityCounter: failedCounter });
+  const fallback = await failedService.handleMessage(message([item(1)]), { tab: { id: 7 } });
+  assert.equal(fallback.results[0].phase, 'bootstrap');
+  assert.equal(fallback.status.networkActivity.fetchAttempts, 1, 'failed fetch attempts are counted');
+
+  const abortedCounter = ServiceWorker.createNetworkActivityCounter({
+    lifetimeId: 'worker-lifetime-aborted'
+  });
+  await ServiceWorker.createBrowserShardLoader({
+    bootstrapProvider: bootstrapProvider(),
+    networkActivityCounter: abortedCounter,
+    getResourceUrl: (resourcePath) => `chrome-extension://fixture/${resourcePath}`,
+    fetch: async () => {
+      throw Object.assign(new Error('packaged fetch aborted'), { name: 'AbortError' });
+    },
+    shardModule: { loadBrowserLexicalManifest() { throw new Error('unreachable'); } }
+  })();
+  assert.equal(abortedCounter.status().fetchAttempts, 1, 'aborted fetch attempts are counted');
 });
 
 test('missing canonical manifest fails soft to authored bootstrap without requesting the legacy index', async () => {

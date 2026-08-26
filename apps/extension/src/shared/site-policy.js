@@ -507,10 +507,12 @@
         };
       }
     }
-    if (registrySuffixTrick(hostname)) return null;
+    const suppressKnownHostEvidence = registrySuffixTrick(hostname);
     for (const rule of DEFAULT_CATEGORY_RULES) {
-      const hostMatch = Boolean(rule.host && rule.host.some((label) => hosts.includes(label))) ||
-        Boolean(rule.governmentTld && hosts[hosts.length - 1] === 'gov');
+      const hostMatch = !suppressKnownHostEvidence && (
+        Boolean(rule.host && rule.host.some((label) => hosts.includes(label))) ||
+        Boolean(rule.governmentTld && hosts[hosts.length - 1] === 'gov')
+      );
       const pathMatch = Boolean(rule.path && rule.path.some((label) => paths.includes(label)));
       if ((rule.both && hostMatch && pathMatch) ||
           (rule.either && (hostMatch || pathMatch)) ||

@@ -519,6 +519,14 @@
         response.requestId !== request.requestId || response.pageEpoch !== request.pageEpoch ||
         !Array.isArray(request.items) || !Array.isArray(response.results) ||
         response.results.length !== request.items.length) return null;
+    const networkActivity = response.status && response.status.networkActivity;
+    if (!networkActivity || typeof networkActivity !== 'object' ||
+        Object.keys(networkActivity).sort().join('\u0000') !==
+          'fetchAttempts\u0000lifetimeId\u0000schemaVersion\u0000scope' ||
+        networkActivity.schemaVersion !== 1 || networkActivity.scope !== 'worker-lifetime' ||
+        typeof networkActivity.lifetimeId !== 'string' || networkActivity.lifetimeId.length < 1 ||
+        networkActivity.lifetimeId.length > 128 || !/^[A-Za-z0-9._:-]+$/u.test(networkActivity.lifetimeId) ||
+        !Number.isSafeInteger(networkActivity.fetchAttempts) || networkActivity.fetchAttempts < 0) return null;
     const expectedByRoot = new Map(request.items.map((item) => [item.rootId, item]));
     if (expectedByRoot.size !== request.items.length) return null;
     const seen = new Set();
@@ -548,7 +556,13 @@
       results: Object.freeze(normalized),
       providerMode: response.status && ['ready', 'degraded', 'bootstrap-only'].includes(response.status.mode)
         ? response.status.mode
-        : 'degraded'
+        : 'degraded',
+      networkActivity: Object.freeze({
+        schemaVersion: 1,
+        scope: 'worker-lifetime',
+        lifetimeId: networkActivity.lifetimeId,
+        fetchAttempts: networkActivity.fetchAttempts
+      })
     });
   }
 
@@ -1220,14 +1234,44 @@
       rendererCalls: 0,
       networkRequests: 0
     };
+    const boundaryCounterScope = Object.freeze({
+      schemaVersion: 1,
+      lifetime: 'content-script-lifetime',
+      networkRequests: 'observed-worker-fetch-attempts',
+      sourceLifetime: 'worker-lifetime'
+    });
+    const observedWorkerNetworkAttempts = new Map();
     const boundaryCounters = () => Object.freeze({ ...boundaryCounterState });
-    const stampStatus = (value) => Object.freeze({ ...value, boundaryCounters: boundaryCounters() });
+    const stampStatus = (value) => Object.freeze({
+      ...value,
+      boundaryCounters: boundaryCounters(),
+      boundaryCounterScope
+    });
     const incrementBoundary = (name, amount) => {
       const increment = amount === undefined ? 1 : amount;
       if (Object.hasOwn(boundaryCounterState, name) && Number.isSafeInteger(increment) && increment >= 0) {
+        if (boundaryCounterState[name] > Number.MAX_SAFE_INTEGER - increment) {
+          throw new RangeError('content boundary counter exhausted');
+        }
         boundaryCounterState[name] += increment;
       }
     };
+    function observeWorkerNetworkActivity(activity) {
+      const previous = observedWorkerNetworkAttempts.get(activity.lifetimeId);
+      if (previous === undefined) {
+        if (observedWorkerNetworkAttempts.size >= 8) {
+          const oldest = observedWorkerNetworkAttempts.keys().next();
+          if (!oldest.done) observedWorkerNetworkAttempts.delete(oldest.value);
+        }
+        observedWorkerNetworkAttempts.set(activity.lifetimeId, activity.fetchAttempts);
+        incrementBoundary('networkRequests', activity.fetchAttempts);
+        return;
+      }
+      if (activity.fetchAttempts <= previous) return;
+      observedWorkerNetworkAttempts.delete(activity.lifetimeId);
+      observedWorkerNetworkAttempts.set(activity.lifetimeId, activity.fetchAttempts);
+      incrementBoundary('networkRequests', activity.fetchAttempts - previous);
+    }
     const emptyStatus = () => stampStatus({
       active: false,
       textNodesVisited: 0,
@@ -1404,8 +1448,15 @@
       }
       for (const controller of cleanupControllerTargets) {
         try {
-          controller.cleanup();
-          cleanupControllerTargets.delete(controller);
+          let status = controller.cleanup();
+          if ((!status || typeof status !== 'object') && typeof controller.status === 'function') {
+            status = controller.status();
+          }
+          if (status && status.schemaVersion === 1 && status.cleaned === true &&
+              status.cleanupPending === false && Array.isArray(status.pendingStages) &&
+              status.pendingStages.length === 0) {
+            cleanupControllerTargets.delete(controller);
+          }
         } catch (_error) {
           // Retain authority for a later route, storage, APPLY, or REMOVE retry.
         }
@@ -1482,6 +1533,7 @@
         if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;
         const validated = validateEnrichmentResponse(response, request, modules.Contracts);
         if (!validated) throw new Error('Local semantic service returned an invalid response');
+        observeWorkerNetworkActivity(validated.networkActivity);
         return validated;
       } catch (error) {
         if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;

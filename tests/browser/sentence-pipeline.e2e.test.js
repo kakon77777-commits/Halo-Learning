@@ -195,7 +195,17 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
                 generatedAt
               })
             })),
-            status: { mode: 'degraded', fallbackActivated: true, failures: [{ code: 'MANIFEST_UNAVAILABLE' }] }
+            status: {
+              mode: 'degraded',
+              fallbackActivated: true,
+              failures: [{ code: 'MANIFEST_UNAVAILABLE' }],
+              networkActivity: {
+                schemaVersion: 1,
+                scope: 'worker-lifetime',
+                lifetimeId: 'worker-sentence-fixture',
+                fetchAttempts: 0
+              }
+            }
           };
           if (message.items.some((item) => item.text.includes('Reject stale'))) {
             response.results[0] = { ...response.results[0], schemaVersion: 999 };

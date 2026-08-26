@@ -161,6 +161,21 @@ async function setWorkerStorageFailure(worker, enabled) {
   }, enabled);
 }
 
+async function workerNetworkActivity(worker) {
+  return worker.evaluate(async () => {
+    const service = globalThis.__HALO_SEMANTIC_SERVICE_INITIALIZED__;
+    if (!service || typeof service.handleMessage !== 'function') {
+      throw new Error('production semantic service status is unavailable');
+    }
+    const status = await service.handleMessage({ type: 'HALO_DICTIONARY_STATUS' }, {});
+    return status && status.networkActivity;
+  });
+}
+
+function noWorkerNetworkIncrease(before, after, label) {
+  assert.deepEqual(after, before, `${label}: worker-lifetime fetch attempts must not increase`);
+}
+
 async function invokeCommand(page, worker, url, expectBlocked) {
   await page.bringToFront();
   const tabId = await currentActiveTabId(worker);
@@ -191,6 +206,9 @@ function zeroWork(status) {
   assert.equal(status.boundaryCounters.semanticMessages, 0);
   assert.equal(status.boundaryCounters.rendererCalls, 0);
   assert.equal(status.boundaryCounters.networkRequests, 0);
+  assert.equal(status.boundaryCounterScope.lifetime, 'content-script-lifetime');
+  assert.equal(status.boundaryCounterScope.networkRequests, 'observed-worker-fetch-attempts');
+  assert.equal(status.boundaryCounterScope.sourceLifetime, 'worker-lifetime');
 }
 
 function noNewPrivateWork(before, after) {
@@ -251,6 +269,30 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       }
     }, async ({ port }) => {
       const page = await context.newPage();
+      const canaryUrl = `http://public.localhost:${port}/public.html`;
+      await page.goto(canaryUrl);
+      const canaryCommand = await invokeCommand(page, worker, canaryUrl, false);
+      const popup = await context.newPage();
+      await popup.goto(`chrome-extension://${extensionId}/src/popup.html`);
+      await popup.waitForSelector('#applyButton:not([disabled])');
+      await activateTab(worker, canaryCommand.tabId);
+      await popup.click('#applyButton');
+      await page.waitForSelector('#lesson [data-halo-owned="token"]');
+      const canaryStatus = await statusFor(worker, canaryCommand.tabId);
+      assert.ok(canaryStatus.boundaryCounters.networkRequests > 1,
+        'allowed lexical marking must observe manifest plus shard fetch attempts');
+      assert.equal(canaryStatus.boundaryCounterScope.lifetime, 'content-script-lifetime');
+      assert.equal(canaryStatus.boundaryCounterScope.networkRequests, 'observed-worker-fetch-attempts');
+      assert.equal(canaryStatus.boundaryCounterScope.sourceLifetime, 'worker-lifetime');
+      let sensitiveNetworkBaseline = await workerNetworkActivity(worker);
+      assert.equal(sensitiveNetworkBaseline.schemaVersion, 1);
+      assert.equal(sensitiveNetworkBaseline.scope, 'worker-lifetime');
+      assert.ok(sensitiveNetworkBaseline.fetchAttempts > 1,
+        'production worker status must observe the same allowed lexical fetch canary');
+      assert.equal(canaryStatus.boundaryCounters.networkRequests, sensitiveNetworkBaseline.fetchAttempts);
+      await popup.click('#removeButton');
+      await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
+
       const serviceMatrix = [
         ['banking', 'https://chase.com/personal/checking'],
         ['banking', 'https://secure.chase.com/web/auth/dashboard'],
@@ -276,6 +318,9 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
           selection: 0,
           rendererRemoveFailures: 0
         });
+        const afterNetwork = await workerNetworkActivity(worker);
+        noWorkerNetworkIncrease(sensitiveNetworkBaseline, afterNetwork, url);
+        sensitiveNetworkBaseline = afterNetwork;
       }
       const sensitiveMatrix = [
         ['banking', `http://bank.localhost:${port}/fixture.html`],
@@ -309,6 +354,9 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
         });
         assert.deepEqual(requests, []);
         page.off('request', observeRequest);
+        const afterNetwork = await workerNetworkActivity(worker);
+        noWorkerNetworkIncrease(sensitiveNetworkBaseline, afterNetwork, url);
+        sensitiveNetworkBaseline = afterNetwork;
       }
 
       const passwordUrl = `http://public.localhost:${port}/fixture.html`;
@@ -324,12 +372,14 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
         selection: 0,
         rendererRemoveFailures: 0
       });
+      const afterPasswordNetwork = await workerNetworkActivity(worker);
+      noWorkerNetworkIncrease(sensitiveNetworkBaseline, afterPasswordNetwork, passwordUrl);
+      sensitiveNetworkBaseline = afterPasswordNetwork;
 
       const publicUrl = `http://public.localhost:${port}/public.html`;
       await page.goto(publicUrl);
       const publicCommand = await invokeCommand(page, worker, publicUrl);
-      const popup = await context.newPage();
-      await popup.goto(`chrome-extension://${extensionId}/src/popup.html`);
+      await popup.reload();
       await popup.waitForSelector('#applyButton:not([disabled])');
       await activateTab(worker, publicCommand.tabId);
       await popup.click('#applyButton');
@@ -343,6 +393,7 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       await page.waitForTimeout(50);
       assert.ok(await page.locator('#lesson [data-halo-owned="token"]').count() > 0);
       const beforeSensitiveAttribute = await statusFor(worker, publicCommand.tabId);
+      const beforeSensitiveWorkerNetwork = await workerNetworkActivity(worker);
       await setIsolatedFlag(worker, publicCommand.tabId, '__HALO_FAIL_RENDERER_REMOVE__', true);
       await page.evaluate(() => {
         document.getElementById('dynamic-password').setAttribute('autocomplete', 'current-password');
@@ -365,10 +416,16 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       const cleanupRetried = await statusFor(worker, publicCommand.tabId);
       blockedAndClean(cleanupRetried);
       noNewPrivateWork(cleanupFailure, cleanupRetried);
+      noWorkerNetworkIncrease(
+        beforeSensitiveWorkerNetwork,
+        await workerNetworkActivity(worker),
+        'dynamic sensitive attribute transition'
+      );
 
       await page.evaluate(() => document.getElementById('dynamic-password').remove());
       await page.waitForSelector('#lesson [data-halo-owned="token"]');
       assert.equal((await statusFor(worker, publicCommand.tabId)).lastError, null);
+      const beforeInsertedNetwork = await workerNetworkActivity(worker);
 
       await page.evaluate(() => {
         const input = document.createElement('input');
@@ -378,14 +435,26 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       });
       await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
       blockedAndClean(await statusFor(worker, publicCommand.tabId));
+      const afterInsertedNetwork = await workerNetworkActivity(worker);
+      noWorkerNetworkIncrease(
+        beforeInsertedNetwork,
+        afterInsertedNetwork,
+        'dynamic sensitive form insertion'
+      );
       await page.evaluate(() => document.getElementById('inserted-password').remove());
       await page.waitForSelector('#lesson [data-halo-owned="token"]');
+      const beforeSpaNetwork = await workerNetworkActivity(worker);
 
       await page.evaluate(() => history.pushState({}, '', '/checkout'));
       await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
       const spaStatus = await statusFor(worker, publicCommand.tabId);
       blockedAndClean(spaStatus);
       assert.equal(spaStatus.policyDecision.category, 'payment-checkout');
+      noWorkerNetworkIncrease(
+        beforeSpaNetwork,
+        await workerNetworkActivity(worker),
+        'public-to-sensitive SPA route'
+      );
 
       await page.goto(publicUrl);
       await invokeCommand(page, worker, publicUrl);
@@ -394,17 +463,32 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       await popup.waitForSelector('#blockSiteButton:not([disabled])');
       await popup.click('#applyButton');
       await page.waitForSelector('#lesson [data-halo-owned="token"]');
+      const beforeDenylistNetwork = await workerNetworkActivity(worker);
       await popup.click('#blockSiteButton');
       await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
       const deniedStatus = await statusFor(worker, publicCommand.tabId);
       blockedAndClean(deniedStatus);
       assert.equal(deniedStatus.policyDecision.category, 'user-denylist');
+      const deniedWorkerNetwork = await workerNetworkActivity(worker);
+      noWorkerNetworkIncrease(
+        beforeDenylistNetwork,
+        deniedWorkerNetwork,
+        'denylist allowed-to-blocked transition'
+      );
+      sensitiveNetworkBaseline = deniedWorkerNetwork;
 
       const subdomainUrl = `http://sub.public.localhost:${port}/public.html`;
       await page.goto(subdomainUrl);
       const subdomain = await invokeCommand(page, worker, subdomainUrl, true);
       zeroWork(subdomain.status);
       assert.equal(subdomain.status.policyDecision.category, 'user-denylist');
+      const afterSubdomainNetwork = await workerNetworkActivity(worker);
+      noWorkerNetworkIncrease(
+        sensitiveNetworkBaseline,
+        afterSubdomainNetwork,
+        'denylist subdomain'
+      );
+      sensitiveNetworkBaseline = afterSubdomainNetwork;
 
       const suffixTrickUrl = `http://public.localhost.attacker.localhost:${port}/public.html`;
       await page.goto(suffixTrickUrl);
@@ -412,10 +496,23 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       assert.equal(suffixTrick.status.lastError, null);
       assert.equal(suffixTrick.status.boundaryCounters.selectionReads, 1);
       assert.equal(await page.locator('[data-halo-owned]').count(), 0);
+      const afterSuffixTrickNetwork = await workerNetworkActivity(worker);
+      noWorkerNetworkIncrease(
+        sensitiveNetworkBaseline,
+        afterSuffixTrickNetwork,
+        'denylist suffix-trick allow decision without marking'
+      );
+      sensitiveNetworkBaseline = afterSuffixTrickNetwork;
 
       await page.goto(publicUrl);
       const exactAgain = await invokeCommand(page, worker, publicUrl, true);
       zeroWork(exactAgain.status);
+      const afterExactAgainNetwork = await workerNetworkActivity(worker);
+      noWorkerNetworkIncrease(
+        sensitiveNetworkBaseline,
+        afterExactAgainNetwork,
+        'denylist exact host on fresh page'
+      );
       await activateTab(worker, exactAgain.tabId);
       await popup.reload();
       await popup.waitForSelector('#allowSiteButton:not([disabled])');
@@ -428,6 +525,7 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       await popup.click('#removeButton');
       await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
       const beforeStorageFailure = await statusFor(worker, exactAgain.tabId);
+      const beforeStorageFailureNetwork = await workerNetworkActivity(worker);
       await setWorkerStorageFailure(worker, true);
       await popup.click('#applyButton');
       let storageFailure;
@@ -438,7 +536,16 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       }
       assert.equal(storageFailure.lastError, 'LOCAL_MARKING_ERROR');
       assert.ok(storageFailure.boundaryCounters.semanticMessages > beforeStorageFailure.boundaryCounters.semanticMessages);
-      assert.equal(storageFailure.boundaryCounters.networkRequests, 0);
+      assert.equal(
+        storageFailure.boundaryCounters.networkRequests,
+        beforeStorageFailure.boundaryCounters.networkRequests,
+        'authorization failure must not observe a worker fetch attempt'
+      );
+      noWorkerNetworkIncrease(
+        beforeStorageFailureNetwork,
+        await workerNetworkActivity(worker),
+        'storage authorization failure'
+      );
       assert.equal(await page.locator('[data-halo-owned="token"]').count(), 0);
       await setWorkerStorageFailure(worker, false);
       await popup.waitForSelector('#applyButton:not([disabled])');
@@ -459,6 +566,7 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
         await page.waitForTimeout(25);
       }
       assert.ok(heldResponse.boundaryCounters.semanticMessages > beforeHeldResponse.boundaryCounters.semanticMessages);
+      const beforeSensitiveStaleReleaseNetwork = await workerNetworkActivity(worker);
       await page.evaluate(() => history.pushState({}, '', '/checkout'));
       let blockedBeforeRelease;
       for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -473,6 +581,11 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       const afterStaleRelease = await statusFor(worker, exactAgain.tabId);
       blockedAndClean(afterStaleRelease);
       noNewPrivateWork(blockedBeforeRelease, afterStaleRelease);
+      noWorkerNetworkIncrease(
+        beforeSensitiveStaleReleaseNetwork,
+        await workerNetworkActivity(worker),
+        'stale response release after sensitive SPA transition'
+      );
     });
   } finally {
     if (context) await context.close();

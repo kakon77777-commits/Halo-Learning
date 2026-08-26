@@ -7,6 +7,8 @@
 Task 9 was implemented on `workbench/v0.4.0-browser-runtime` from base
 `d944afa683cb8e0e37b4c5516ad1e248ef757da6`. Fix round 1 was applied from
 clean Task 9 commit `f7b7b09726946bb8cdb638869dc5d998acf4ea34`.
+Fix round 2 was applied from clean commit
+`9708dda462b83837694bbe6309dd4ab6f5c518fb`.
 
 The installed-extension browser gate remains an explicit failure with zero
 skips because this environment has no Chromium executable. No browser result
@@ -96,6 +98,43 @@ The worker delayed-authorization test also failed before implementation:
 CANCEL returned `not-found` while authorization was pending, proving that the
 request controller was registered too late.
 
+### Fix-round 2 RED evidence
+
+The three adjudicated round-2 issues each received a focused adversarial RED
+before implementation:
+
+```text
+node --test --test-name-pattern='forged known-host suffix' tests/site-policy.test.js
+tests 1; pass 0; fail 1
+https://chase.com.attacker.test/login: expected allow false; actual true
+
+node --test --test-name-pattern='cleanup retains and retries' \
+  tests/dynamic-dom-controller.test.js
+tests 1; pass 0; fail 1
+Expected a versioned pending cleanup status; actual undefined.
+
+node --test --test-name-pattern='failed controller cleanup retains authority' \
+  tests/content-policy-lifecycle.test.js
+tests 1; pass 0; fail 1
+Expected cleanupPending true after a non-throwing residual teardown; actual false.
+
+node --test --test-name-pattern='production resource fetch attempts' \
+  tests/extension-semantic-service.test.js
+tests 1; pass 0; fail 1
+TypeError: ServiceWorker.createNetworkActivityCounter is not a function
+
+node --test --test-name-pattern='successful non-empty batch' \
+  tests/content-policy-lifecycle.test.js
+tests 1; pass 0; fail 1
+Expected observed worker fetch attempts 2; actual 0.
+
+node --test --test-name-pattern='observer drain authority survives' \
+  tests/dynamic-dom-controller.test.js
+tests 1; pass 0; fail 1
+After setPolicyOnly disconnected successfully but takeRecords threw, cleanup
+reported cleaned true with no pending stages and never retried the record drain.
+```
+
 ## Policy contract
 
 - `PolicyDecision/v1` remains frozen and closed to the five canonical fields.
@@ -109,8 +148,11 @@ request controller was registered too late.
   Secrets Manager, Google Secret Manager, and Azure Key Vault/secrets.
 - This registry is deliberately representative and auditable; it is not
   claimed to classify the web exhaustively. Known-host suffix tricks such as
-  `vault.bitwarden.com.attacker.test` are allowed to continue to form scanning
-  rather than being captured by generic label rules.
+  `vault.bitwarden.com.attacker.test` suppress only forged host evidence; they
+  still pass through independent route and form rules. Thus benign paths remain
+  allowed, while `/login`, `/checkout`, `/password-reset`, their single-encoded
+  equivalents, and ambiguous multiply encoded routes block without treating
+  the attacker host as the registered service.
 - Route evidence is taken from bounded path, search, and hash tokens after safe
   normalization. Credentials, encoded separators/backslashes/dot ambiguity,
   multiple encoding, malformed percent escapes, residual `%xx`, token excess,
@@ -146,6 +188,19 @@ request controller was registered too late.
   controller cannot overwrite them: APPLY returns cleanup-pending until every
   retained target cleans, while renderer cleanup can still use the retained
   observer's mutation-suppression boundary.
+- Dynamic-controller teardown is transactional per capability. Every cleanup
+  attempt best-effort tries all still-pending timers, observer disconnect and
+  record drain, event listeners, and history hooks. A capability flag and its
+  exact restoration authority are released only after that stage succeeds;
+  successful stages are not repeated, failures remain in a frozen allowlisted
+  status for retry, and failed history restoration leaves the installed wrapper
+  calling the original native method. Content deletes the exact controller
+  target only after the controller reports verified clean.
+- Observer record-drain authority is acquired immediately after every verified
+  disconnect, including policy-mode and route reconfiguration outside final
+  cleanup. Re-observation cannot erase it, and only a successful `takeRecords()`
+  releases it; an intermediate failure therefore remains visible and retriable
+  during final cleanup.
 - A malformed APPLY or disappearing shared module performs best-effort shutdown
   before module/settings validation. Missing dynamic-controller globals cannot
   prevent a retained controller from suppressing and completing renderer
@@ -154,7 +209,8 @@ request controller was registered too late.
   failed cleanup reports retained counts/unknown and never fabricates zero.
   Monotonic production boundary counters for policy evaluations, TextRun
   extraction, sentence records, selection reads, semantic messages, renderer
-  calls, and network calls are stamped into status and are never reset.
+  calls, and observed worker packaged-resource fetch attempts are stamped into
+  status and are never reset within that content-script lifetime.
   Allowed APPLY responses are stamped after discovery and scheduler flushing,
   so they agree with the immediately following HALO_STATUS snapshot.
 - Explicit selection rechecks policy and pending cleanup before touching the
@@ -177,6 +233,21 @@ request controller was registered too late.
 - No host permissions, remote policy dependency, remote script, or language
   scope were added.
 
+### Network boundary accounting
+
+- A counter owned by one service-worker lifetime increments immediately before
+  every actual packaged lexical-resource `fetch` call, including attempts whose
+  fetch later rejects or is aborted. URL construction failures and runtime
+  messages are not counted because no fetch was attempted.
+- The worker returns only frozen, sanitized
+  `{schemaVersion, scope: "worker-lifetime", lifetimeId, fetchAttempts}` data
+  through the same lexical response/status path used by production and
+  `HALO_DICTIONARY_STATUS`; it never exposes a resource URL or page data.
+- Content observes worker-lifetime snapshots and accumulates only monotonic
+  deltas into its own explicitly scoped `content-script-lifetime` status. A
+  worker restart creates a new lifetime ID and is added as a new observed
+  source; neither scope is represented as globally monotonic across restarts.
+
 ## Browser acceptance authored; execution blocked
 
 The installed-runtime test now:
@@ -184,7 +255,12 @@ The installed-runtime test now:
 - routes local fixture HTML under the real representative service URLs above;
 - installs prohibited getters in the extension `ISOLATED` world through
   `chrome.scripting.executeScript` before Halo files;
-- asserts production boundary counters plus zero wrappers/panels/network work;
+- first drives an allowed installed-page lexical marking canary through the
+  production response/status plumbing and requires the manifest and shard
+  fetch-attempt counts to become non-zero in both content and worker status;
+- then asserts sensitive fixtures do not increase the real worker-lifetime
+  fetch-attempt counter, alongside zero extraction, sentence, selection,
+  semantic, wrapper, and panel work;
 - exercises installed exact-host, subdomain, and suffix-trick denylist behavior,
   popup add and remove, dynamic form insertion/attribute change, SPA blocking,
   cleanup failure/retry, storage-authorization failure, and a held stale
@@ -214,8 +290,8 @@ environment.
 
 ```text
 node --test tests/*.test.js
-tests 398
-pass 398
+tests 402
+pass 402
 fail 0
 cancelled 0
 skipped 0

@@ -147,7 +147,15 @@ function createHarness(options) {
             schemaVersion: 1,
             requestId: message.requestId,
             pageEpoch: message.pageEpoch,
-            status: { mode: 'ready' },
+            status: {
+              mode: 'ready',
+              networkActivity: {
+                schemaVersion: 1,
+                scope: 'worker-lifetime',
+                lifetimeId: 'worker-fixture-1',
+                fetchAttempts: 2
+              }
+            },
             results: message.items.map((item) => {
               const generatedAt = '2026-08-26T00:00:00.000Z';
               return {
@@ -238,6 +246,7 @@ function createHarness(options) {
       createRendererMutationSanitizer() { return { trackNode() {}, expect() {}, sanitize: (record) => record }; },
       createDynamicDomController() {
         controllerCreates += 1;
+        let controllerCleaned = false;
         return {
           observe() { controllerObserves += 1; },
           routeEpoch() { return 1; },
@@ -245,7 +254,25 @@ function createHarness(options) {
           suppressRendererMutations(callback) { return callback(); },
           cleanup() {
             controllerCleanups += 1;
-            if (controllerCleanupFails) throw new Error('controller cleanup failed');
+            controllerCleaned = !controllerCleanupFails;
+            return Object.freeze({
+              schemaVersion: 1,
+              cleanupStarted: true,
+              cleaned: controllerCleaned,
+              cleanupPending: !controllerCleaned,
+              pendingStages: Object.freeze(controllerCleaned ? [] : ['observer-disconnect'])
+            });
+          },
+          status() {
+            return Object.freeze({
+              schemaVersion: 1,
+              cleanupStarted: controllerCleanups > 0,
+              cleaned: controllerCleaned,
+              cleanupPending: controllerCleanups > 0 && !controllerCleaned,
+              pendingStages: Object.freeze(controllerCleaned || controllerCleanups === 0
+                ? []
+                : ['observer-disconnect'])
+            });
           }
         };
       }
@@ -412,6 +439,11 @@ test('successful non-empty batch preserves truthful cleanup status fields', asyn
   assert.equal(status.remainingArtifacts.wrapperCount, 0);
   assert.equal(status.remainingArtifacts.panelCount, 0);
   assert.equal(status.boundaryCounters.semanticMessages, 1);
+  assert.equal(status.boundaryCounters.networkRequests, 2);
+  assert.equal(status.boundaryCounterScope.schemaVersion, 1);
+  assert.equal(status.boundaryCounterScope.lifetime, 'content-script-lifetime');
+  assert.equal(status.boundaryCounterScope.networkRequests, 'observed-worker-fetch-attempts');
+  assert.equal(status.boundaryCounterScope.sourceLifetime, 'worker-lifetime');
 });
 
 test('allowed-to-blocked storage transition cannot restart until failed cleanup is retried and verified', async () => {

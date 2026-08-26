@@ -849,6 +849,189 @@ test('throwing final cleanup still restores hooks, observation, and timers exact
   assert.equal(calls.filter((call) => call === 'disconnect').length, 1);
 });
 
+test('cleanup retains and retries only failed listener, observer, and history capabilities', () => {
+  const location = { href: 'https://example.test/a' };
+  const listeners = new Map();
+  const removalAttempts = { popstate: 0, hashchange: 0 };
+  let failPopstateRemoval = false;
+  const events = {
+    addEventListener(type, listener) {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type).add(listener);
+    },
+    removeEventListener(type, listener) {
+      removalAttempts[type] += 1;
+      if (type === 'popstate' && failPopstateRemoval) throw new Error('popstate removal failed');
+      listeners.get(type).delete(listener);
+    },
+    count(type) { return listeners.get(type).size; }
+  };
+  let failDisconnect = false;
+  let disconnectAttempts = 0;
+  let takeRecordsAttempts = 0;
+  class ThrowingObserver {
+    constructor() { ThrowingObserver.instance = this; }
+    observe(document) { this.document = document; }
+    disconnect() {
+      disconnectAttempts += 1;
+      if (failDisconnect) throw new Error('observer disconnect failed');
+      this.document = null;
+    }
+    takeRecords() { takeRecordsAttempts += 1; return []; }
+  }
+  let nativePushCalls = 0;
+  const originalPushState = function () { nativePushCalls += 1; return 'native-push'; };
+  const originalReplaceState = function () { return 'native-replace'; };
+  let currentPushState = originalPushState;
+  let currentReplaceState = originalReplaceState;
+  let failPushRestore = false;
+  let pushRestoreAttempts = 0;
+  let replaceRestoreAttempts = 0;
+  const history = {};
+  Object.defineProperties(history, {
+    pushState: {
+      configurable: true,
+      get() { return currentPushState; },
+      set(next) {
+        if (next === originalPushState) {
+          pushRestoreAttempts += 1;
+          if (failPushRestore) throw new Error('pushState restoration failed');
+        }
+        currentPushState = next;
+      }
+    },
+    replaceState: {
+      configurable: true,
+      get() { return currentReplaceState; },
+      set(next) {
+        if (next === originalReplaceState) replaceRestoreAttempts += 1;
+        currentReplaceState = next;
+      }
+    }
+  });
+  let finalCleanupCalls = 0;
+  const errors = [];
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver: ThrowingObserver,
+    history,
+    location,
+    eventTarget: events,
+    onRouteCleanup(metadata) {
+      if (metadata.reason === 'cleanup') finalCleanupCalls += 1;
+    },
+    onError(error, metadata) { errors.push([error.message, metadata.phase]); }
+  });
+  controller.observe({ body: element('body') });
+  const installedPushWrapper = history.pushState;
+  failPopstateRemoval = true;
+  failDisconnect = true;
+  failPushRestore = true;
+
+  const pending = controller.cleanup();
+  assert.deepEqual(pending, {
+    schemaVersion: 1,
+    cleanupStarted: true,
+    cleaned: false,
+    cleanupPending: true,
+    pendingStages: ['observer-disconnect', 'popstate-listener', 'push-state-hook']
+  });
+  assert.equal(Object.isFrozen(pending), true);
+  assert.equal(finalCleanupCalls, 1);
+  assert.equal(removalAttempts.popstate, 1);
+  assert.equal(removalAttempts.hashchange, 1);
+  assert.equal(disconnectAttempts, 1);
+  assert.equal(takeRecordsAttempts, 1);
+  assert.equal(pushRestoreAttempts, 1);
+  assert.equal(replaceRestoreAttempts, 1);
+  assert.equal(events.count('popstate'), 1);
+  assert.equal(events.count('hashchange'), 0);
+  assert.equal(history.pushState, installedPushWrapper);
+  assert.equal(history.replaceState, originalReplaceState);
+  assert.equal(history.pushState({}, '', '/ignored'), 'native-push');
+  assert.equal(nativePushCalls, 1, 'failed restoration keeps native history behavior');
+
+  failPopstateRemoval = false;
+  failDisconnect = false;
+  failPushRestore = false;
+  const cleaned = controller.cleanup();
+  assert.deepEqual(cleaned, {
+    schemaVersion: 1,
+    cleanupStarted: true,
+    cleaned: true,
+    cleanupPending: false,
+    pendingStages: []
+  });
+  assert.deepEqual(controller.status(), cleaned);
+  assert.equal(finalCleanupCalls, 1);
+  assert.equal(removalAttempts.popstate, 2);
+  assert.equal(removalAttempts.hashchange, 1, 'successful listener removal is not repeated');
+  assert.equal(disconnectAttempts, 2);
+  assert.equal(pushRestoreAttempts, 2);
+  assert.equal(replaceRestoreAttempts, 1, 'successful history restoration is not repeated');
+  assert.equal(events.count('popstate'), 0);
+  assert.equal(history.pushState, originalPushState);
+  assert.equal(history.replaceState, originalReplaceState);
+  assert.ok(errors.some(([message, phase]) => message === 'observer disconnect failed' && phase === 'cleanup-observer'));
+  assert.ok(errors.some(([message, phase]) => message === 'popstate removal failed' && phase === 'cleanup-popstate-listener'));
+  assert.ok(errors.some(([message, phase]) => message === 'pushState restoration failed' && phase === 'cleanup-push-state-hook'));
+
+  controller.cleanup();
+  assert.equal(removalAttempts.popstate, 2);
+  assert.equal(disconnectAttempts, 2);
+  assert.equal(pushRestoreAttempts, 2);
+});
+
+test('observer drain authority survives a pre-cleanup restart failure until a verified retry', () => {
+  let disconnectAttempts = 0;
+  let takeRecordsAttempts = 0;
+  let failTakeRecords = true;
+  const errors = [];
+  class ThrowingDrainObserver {
+    observe(document) { this.document = document; }
+    disconnect() {
+      disconnectAttempts += 1;
+      this.document = null;
+    }
+    takeRecords() {
+      takeRecordsAttempts += 1;
+      if (failTakeRecords) throw new Error('observer record drain failed');
+      return [];
+    }
+  }
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver: ThrowingDrainObserver,
+    eventTarget: eventTarget(),
+    location: { href: 'https://example.test/a' },
+    onError(error, metadata) { errors.push([error.message, metadata.phase]); }
+  });
+  controller.observe({ body: element('body') });
+
+  assert.throws(() => controller.setPolicyOnly(true), /observer record drain failed/);
+  const pending = controller.cleanup();
+  assert.deepEqual(pending, {
+    schemaVersion: 1,
+    cleanupStarted: true,
+    cleaned: false,
+    cleanupPending: true,
+    pendingStages: ['observer-records']
+  });
+  assert.equal(disconnectAttempts, 1, 'successful disconnect is not repeated');
+  assert.equal(takeRecordsAttempts, 2, 'final cleanup retries the unverified drain');
+  assert.deepEqual(errors, [['observer record drain failed', 'cleanup-observer-records']]);
+
+  failTakeRecords = false;
+  const cleaned = controller.cleanup();
+  assert.deepEqual(cleaned, {
+    schemaVersion: 1,
+    cleanupStarted: true,
+    cleaned: true,
+    cleanupPending: false,
+    pendingStages: []
+  });
+  assert.equal(disconnectAttempts, 1);
+  assert.equal(takeRecordsAttempts, 3);
+});
+
 test('reentrant final cleanup during route cleanup cannot schedule or resurrect route start', () => {
   const calls = [];
   const clock = fakeClock();

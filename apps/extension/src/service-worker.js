@@ -69,6 +69,51 @@ if (typeof importScripts === 'function') {
     return typeof value === 'string' && value.length > 0 && value.length <= 128 && /^[A-Za-z0-9._:-]+$/.test(value);
   }
 
+  function createNetworkActivityCounter(options) {
+    const settings = options || {};
+    let lifetimeId = settings.lifetimeId;
+    if (lifetimeId === undefined) {
+      const cryptoApi = root.crypto;
+      if (!cryptoApi || typeof cryptoApi.randomUUID !== 'function') {
+        throw new TypeError('worker network lifetime identity is unavailable');
+      }
+      lifetimeId = `worker-${cryptoApi.randomUUID()}`;
+    }
+    if (!validStableId(lifetimeId)) throw new TypeError('network lifetimeId: must be a stable ID');
+    let fetchAttempts = 0;
+    function status() {
+      return Object.freeze({
+        schemaVersion: 1,
+        scope: 'worker-lifetime',
+        lifetimeId,
+        fetchAttempts
+      });
+    }
+    function recordFetchAttempt() {
+      if (!Number.isSafeInteger(fetchAttempts) || fetchAttempts >= Number.MAX_SAFE_INTEGER) {
+        throw new RangeError('worker network fetch-attempt counter exhausted');
+      }
+      fetchAttempts += 1;
+      return status();
+    }
+    return Object.freeze({ recordFetchAttempt, status });
+  }
+
+  function sanitizedNetworkActivity(counter) {
+    if (!counter || typeof counter.status !== 'function') return null;
+    const raw = counter.status();
+    if (!raw || raw.schemaVersion !== 1 || raw.scope !== 'worker-lifetime' ||
+        !validStableId(raw.lifetimeId) || !Number.isSafeInteger(raw.fetchAttempts) || raw.fetchAttempts < 0) {
+      throw new TypeError('worker network activity status is invalid');
+    }
+    return Object.freeze({
+      schemaVersion: 1,
+      scope: 'worker-lifetime',
+      lifetimeId: raw.lifetimeId,
+      fetchAttempts: raw.fetchAttempts
+    });
+  }
+
   function stableFailureCode(error, fallback) {
     return error && typeof error.code === 'string' && /^[A-Z][A-Z0-9_]*$/.test(error.code)
       ? error.code
@@ -209,9 +254,22 @@ if (typeof importScripts === 'function') {
     if (!shardModule || typeof shardModule.loadBrowserLexicalManifest !== 'function') {
       throw new TypeError('shardModule.loadBrowserLexicalManifest: must be a function');
     }
+    const networkActivityCounter = settings.networkActivityCounter || null;
+    if (!settings.readText && (!networkActivityCounter ||
+        typeof networkActivityCounter.recordFetchAttempt !== 'function' ||
+        typeof networkActivityCounter.status !== 'function')) {
+      throw new TypeError('networkActivityCounter: is required for packaged resource fetches');
+    }
+    const fetchResource = settings.fetch || (typeof root.fetch === 'function' ? root.fetch.bind(root) : null);
+    const getResourceUrl = settings.getResourceUrl || (root.chrome && root.chrome.runtime &&
+      typeof root.chrome.runtime.getURL === 'function' ? root.chrome.runtime.getURL.bind(root.chrome.runtime) : null);
     const readText = settings.readText || (async (resourcePath) => {
-      const resourceUrl = root.chrome.runtime.getURL(resourcePath);
-      const response = await fetch(resourceUrl, { cache: 'no-store' });
+      if (typeof fetchResource !== 'function' || typeof getResourceUrl !== 'function') {
+        throw new TypeError('packaged resource fetch boundary is unavailable');
+      }
+      const resourceUrl = getResourceUrl(resourcePath);
+      networkActivityCounter.recordFetchAttempt();
+      const response = await fetchResource(resourceUrl, { cache: 'no-store' });
       if (!response.ok) throw Object.assign(new Error('Packaged browser lexical resource is unavailable'), {
         code: resourcePath === MANIFEST_PATH ? 'MANIFEST_UNAVAILABLE' : 'SHARD_LOAD_FAILED'
       });
@@ -274,12 +332,19 @@ if (typeof importScripts === 'function') {
     }
     const now = typeof settings.now === 'function' ? settings.now : () => new Date().toISOString();
     const authorizeSender = typeof settings.authorizeSender === 'function' ? settings.authorizeSender : null;
+    const networkActivityCounter = settings.networkActivityCounter || null;
     let contextPromise = null;
     const controllers = new Map();
 
     function getContext() {
       if (!contextPromise) contextPromise = Promise.resolve().then(() => settings.loadShardRuntime());
       return contextPromise;
+    }
+
+    function statusWithNetworkActivity(source, defaults) {
+      const status = sanitizedStatus(source, defaults);
+      const networkActivity = sanitizedNetworkActivity(networkActivityCounter);
+      return networkActivity ? deepFreeze({ ...status, networkActivity }) : status;
     }
 
     function senderTabId(sender) {
@@ -337,7 +402,7 @@ if (typeof importScripts === 'function') {
         requestId: validated.requestId,
         pageEpoch: validated.pageEpoch,
         results: annotate(validated, context.bootstrapProvider, 'bootstrap', lexicalVersion, generatedAt),
-        status: runtimeStatus
+        status: statusWithNetworkActivity(runtimeStatus)
       });
     }
 
@@ -408,7 +473,7 @@ if (typeof importScripts === 'function') {
                 requestId: validated.requestId,
                 pageEpoch: validated.pageEpoch,
                 results: annotate(validated, provider, 'lexical', context.lexicalVersion, generatedAt),
-                status: sanitizedStatus(provider)
+                status: statusWithNetworkActivity(provider)
               });
             }
           );
@@ -441,11 +506,18 @@ if (typeof importScripts === 'function') {
       if (!message || typeof message !== 'object') return null;
       if (message.type === 'HALO_ENRICH_BATCH') return enrichBatch(message, sender);
       if (message.type === 'HALO_CANCEL_REQUEST') return cancelRequest(message, sender);
-      if (message.type === 'HALO_DICTIONARY_STATUS') return sanitizedStatus((await getContext()).status());
+      if (message.type === 'HALO_DICTIONARY_STATUS') {
+        return statusWithNetworkActivity((await getContext()).status());
+      }
       return null;
     }
 
-    return Object.freeze({ enrichBatch, cancelRequest, handleMessage });
+    return Object.freeze({
+      enrichBatch,
+      cancelRequest,
+      handleMessage,
+      networkActivityStatus: () => sanitizedNetworkActivity(networkActivityCounter)
+    });
   }
 
   function createWorkerPolicyAuthorizer(options) {
@@ -566,12 +638,14 @@ if (typeof importScripts === 'function') {
   function initializeBrowser() {
     if (!root.chrome || !root.chrome.runtime || !root.chrome.runtime.onMessage) return null;
     if (root.__HALO_SEMANTIC_SERVICE_INITIALIZED__) return root.__HALO_SEMANTIC_SERVICE_INITIALIZED__;
+    const networkActivityCounter = createNetworkActivityCounter();
     const service = createShardSemanticService({
-      loadShardRuntime: createBrowserShardLoader(),
+      loadShardRuntime: createBrowserShardLoader({ networkActivityCounter }),
       semanticModule: root.HaloSemanticAnnotations,
       grammarModule: root.HaloGrammarAnnotations,
       shardedProviderModule: root.HaloShardedDictionaryProvider,
-      authorizeSender: createWorkerPolicyAuthorizer({ storage: root.chrome.storage && root.chrome.storage.local })
+      authorizeSender: createWorkerPolicyAuthorizer({ storage: root.chrome.storage && root.chrome.storage.local }),
+      networkActivityCounter
     });
     root.__HALO_SEMANTIC_SERVICE_INITIALIZED__ = service;
     root.chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -602,6 +676,7 @@ if (typeof importScripts === 'function') {
   return Object.freeze({
     SCHEMA_VERSION,
     BATCH_LIMITS,
+    createNetworkActivityCounter,
     validateEnrichmentRequest,
     createBrowserShardLoader,
     createShardSemanticService,
