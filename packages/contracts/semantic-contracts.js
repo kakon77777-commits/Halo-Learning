@@ -32,13 +32,19 @@ function objectAt(value, path) {
 
 function exactObjectAt(value, path, allowed) {
   const result = objectAt(value, path);
+  const prototype = Object.getPrototypeOf(result);
+  if (prototype !== Object.prototype && prototype !== null) fail(path, 'must be plain JSON data');
+  const descriptors = Object.getOwnPropertyDescriptors(result);
+  const snapshot = {};
   for (const name of allowed) {
-    if (!Object.prototype.hasOwnProperty.call(result, name)) fail(`${path}.${name}`, 'is required');
+    const descriptor = descriptors[name];
+    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value') || !descriptor.enumerable) fail(`${path}.${name}`, 'must be an own JSON data property');
+    snapshot[name] = descriptor.value;
   }
-  for (const name of Object.keys(result)) {
+  for (const name of Object.keys(descriptors)) {
     if (!allowed.includes(name)) fail(`${path}.${name}`, 'is not allowed');
   }
-  return result;
+  return snapshot;
 }
 
 function stringAt(value, path) {

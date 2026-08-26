@@ -383,3 +383,29 @@ test('newest nested leave during explicit open keeps its dismiss intent and supp
   assert.equal(fixture.pending().length, 1);
   assert.deepEqual(fixture.opened, []);
 });
+
+test('irrelevant nested dispatch does not starve an authoritative explicit open', () => {
+  let controller;
+  const fixture = fixtureOptions();
+  const clear = fixture.options.clearTimeout;
+  fixture.options.clearTimeout = (id) => { clear(id); controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'irrelevant', at: 2 }); };
+  controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'old', at: 0 });
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'new', at: 1 });
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'new', source: 'explicit' });
+  assert.deepEqual(fixture.opened, [{ targetId: 'new', source: 'explicit' }]);
+});
+
+test('reentrant scheduling never overwrites the newest timer handle', () => {
+  const active = new Set();
+  let controller;
+  let sequence = 0;
+  let nested = false;
+  controller = Trigger.createTriggerController({ mode: 'hybrid', now: () => 1,
+    setTimeout(callback) { const id = ++sequence; active.add(id); if (!nested) { nested = true; controller.dispatch({ type: 'CANCEL', at: 2 }); } return id; },
+    clearTimeout(id) { active.delete(id); }
+  });
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'one', at: 0 });
+  assert.deepEqual(controller.state(), { name: 'cancelled' });
+  assert.deepEqual([...active], []);
+});

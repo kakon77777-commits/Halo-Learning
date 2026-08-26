@@ -11,7 +11,8 @@ test('CDP termination matches the installed worker script and stops its version'
     off(name) { listeners.delete(name); },
     async send(method, params) {
       calls.push([method, params]);
-      if (method === 'ServiceWorker.enable') listeners.get('ServiceWorker.workerVersionUpdated')({ versions: [{ versionId: 'v7', scriptURL: 'chrome-extension://abc/src/service-worker.js', status: 'activated' }] });
+      if (method === 'ServiceWorker.enable') listeners.get('ServiceWorker.workerVersionUpdated')({ versions: [{ versionId: 'stale', scriptURL: 'chrome-extension://abc/src/service-worker.js', status: 'redundant', runningStatus: 'stopped' }, { versionId: 'v7', scriptURL: 'chrome-extension://abc/src/service-worker.js', status: 'activated', runningStatus: 'running' }] });
+      if (method === 'ServiceWorker.stopWorker') listeners.get('ServiceWorker.workerVersionUpdated')({ versions: [{ versionId: 'v7', scriptURL: 'chrome-extension://abc/src/service-worker.js', status: 'activated', runningStatus: 'stopped' }] });
     }
   };
   assert.equal(await stopExtensionServiceWorker({ session, scriptUrl: 'chrome-extension://abc/src/service-worker.js', timeoutMs: 50 }), 'v7');

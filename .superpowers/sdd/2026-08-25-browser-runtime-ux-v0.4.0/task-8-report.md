@@ -296,6 +296,26 @@ Error: Chromium executable is required for Halo browser gates
 
 `progress.md` was not edited.
 
+## Fix round 4 — authoritative intent and live worker acknowledgement
+
+RED tests reproduced no-op dispatch starvation, reentrant scheduler handle
+leaks, and stale CDP worker selection. Dispatch observation remains monotonic,
+while authoritative work is now guarded by a material intent revision: no-op
+nested events do not suppress the outer panel effect, but meaningful nested
+timer/state intent wins. Hover and dismiss scheduling install provisional slots
+before calling injected schedulers and clear late outer handles when ownership
+changes; terminal cancellation leaves zero active handles.
+
+Canonical profile/settings validation snapshots enumerable own data descriptors
+from plain JSON objects exactly once, rejecting inherited or accessor-backed
+inputs before validation and freezing only the canonical snapshot. CDP worker
+termination now selects only an exact-URL activated/running version and waits
+for that exact version's stopped acknowledgement before recovery.
+
+Final regression: 355 passed, 0 failed/skipped. JavaScript syntax and diff
+checks passed. Chromium remains absent, so the installed browser gate retains
+its explicit one-failure, zero-skip blocker. `progress.md` was not edited.
+
 ## Fix round 3 — dispatch intent, strict migration, and CDP termination
 
 Adversarial RED tests reproduced same-state timer reentry, nested leave during

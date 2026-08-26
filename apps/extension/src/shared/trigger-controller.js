@@ -85,18 +85,20 @@
 
     function cancelHover(serial) {
       hoverGeneration += 1;
-      const handle = hoverTimer;
+      const timer = hoverTimer;
+      const handle = timer && typeof timer === 'object' ? timer.handle : timer;
       hoverTimer = null;
       if (handle !== null) safeEffect(() => unschedule(handle));
-      return serial === undefined || serial === dispatchSerial;
+      return serial === undefined || serial === transitionGeneration;
     }
 
     function cancelDismiss(serial) {
       dismissGeneration += 1;
-      const handle = dismissTimer;
+      const timer = dismissTimer;
+      const handle = timer && typeof timer === 'object' ? timer.handle : timer;
       dismissTimer = null;
       if (handle !== null) safeEffect(() => unschedule(handle));
-      return serial === undefined || serial === dispatchSerial;
+      return serial === undefined || serial === transitionGeneration;
     }
 
     function cancelTimers(serial) {
@@ -106,37 +108,47 @@
 
     function scheduleHover(targetId, delay, serial) {
       const generation = hoverGeneration;
-      hoverTimer = schedule(() => {
-        hoverTimer = null;
+      const slot = { handle: null };
+      hoverTimer = slot;
+      let handle;
+      try { handle = schedule(() => {
+        if (hoverTimer === slot) hoverTimer = null;
         dispatch({
           type: 'HOVER_THRESHOLD',
           targetId,
           generation,
           at: Math.max(lastAt, Number(now()) || 0)
         });
-      }, delay);
-      return serial === undefined || serial === dispatchSerial;
+      }, delay); } catch (error) { if (hoverTimer === slot) hoverTimer = null; safeEffect(() => { throw error; }); return false; }
+      if (hoverTimer !== slot || (serial !== undefined && serial !== transitionGeneration)) { safeEffect(() => unschedule(handle)); return false; }
+      slot.handle = handle;
+      return true;
     }
 
     function scheduleDismiss(targetId, serial) {
       const transition = transitionGeneration;
       if (!cancelDismiss(serial) || transition !== transitionGeneration) return;
       const generation = dismissGeneration;
-      dismissTimer = schedule(() => {
-        dismissTimer = null;
+      const slot = { handle: null };
+      dismissTimer = slot;
+      let handle;
+      try { handle = schedule(() => {
+        if (dismissTimer === slot) dismissTimer = null;
         dispatch({
           type: 'DISMISS_TIMEOUT',
           targetId,
           generation,
           at: Math.max(lastAt, Number(now()) || 0)
         });
-      }, dismissDelayMs);
+      }, dismissDelayMs); } catch (error) { if (dismissTimer === slot) dismissTimer = null; safeEffect(() => { throw error; }); return; }
+      if (dismissTimer !== slot || (serial !== undefined && serial !== transitionGeneration)) { safeEffect(() => unschedule(handle)); return; }
+      slot.handle = handle;
     }
 
     function open(targetId, source, serial) {
       current = frozenState({ name: 'core-open', targetId, source });
       const transition = ++transitionGeneration;
-      if (!cancelTimers(serial) || transition !== transitionGeneration) return current;
+      if (!cancelTimers(transition) || transition !== transitionGeneration) return current;
       safeEffect(() => openPanel(Object.freeze({ targetId, source })));
       return current;
     }
@@ -147,14 +159,15 @@
       const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'dismissed', targetId, reason });
       const transition = ++transitionGeneration;
-      if (!cancelTimers(serial) || transition !== transitionGeneration) return current;
+      if (!cancelTimers(transition) || transition !== transitionGeneration) return current;
       if (wasOpen) safeEffect(() => closePanel(reason));
       return current;
     }
 
     function beginHover(targetId, serial) {
       if (current.name === 'core-open' && current.targetId === targetId) {
-        cancelDismiss(serial);
+        const intent = ++transitionGeneration;
+        cancelDismiss(intent);
         return current;
       }
       if (settings.mode === 'explicit-only') return current;
@@ -164,10 +177,10 @@
       const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'candidate', targetId });
       const transition = ++transitionGeneration;
-      if (!cancelTimers(serial) || transition !== transitionGeneration) return current;
+      if (!cancelTimers(transition) || transition !== transitionGeneration) return current;
       if (wasOpen) safeEffect(() => closePanel('target-switch'));
       if (current.name !== 'candidate' || current.targetId !== targetId) return current;
-      scheduleHover(targetId, primeThresholdMs, serial);
+      scheduleHover(targetId, primeThresholdMs, transition);
       return current;
     }
 
@@ -177,7 +190,8 @@
       if (current.targetId !== targetId) return current;
       if (current.name === 'candidate') {
         current = frozenState({ name: 'primed', targetId });
-        scheduleHover(targetId, openThresholdMs - primeThresholdMs, serial);
+        const intent = ++transitionGeneration;
+        scheduleHover(targetId, openThresholdMs - primeThresholdMs, intent);
         return current;
       }
       if (current.name === 'primed') return open(targetId, 'hover', serial);
@@ -234,7 +248,8 @@
           transitionGeneration += 1;
           cancelHover(serial);
         } else if (current.name === 'core-open') {
-          scheduleDismiss(targetId, serial);
+          const intent = ++transitionGeneration;
+          scheduleDismiss(targetId, intent);
         }
         return current;
       }

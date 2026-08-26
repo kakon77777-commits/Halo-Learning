@@ -122,18 +122,27 @@
   }
 
   function normalizeSettings(input) {
-    const raw = input;
+    let raw = input;
     const top = ['schemaVersion', 'profileId', 'profileRevision', 'enabled', 'languageMode', 'triggerMode',
       'channels', 'density', 'minConfidence', 'labelPosition', 'runtimeBudgets', 'maxTextNodes', 'maxMarkedTokens'];
     const budgets = Object.keys(DEFAULT_RUNTIME_BUDGETS);
     function exact(value, names, path) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${path}: canonical object required`);
-      for (const name of names) if (!Object.prototype.hasOwnProperty.call(value, name)) throw new TypeError(`${path}.${name}: required`);
-      for (const name of Object.keys(value)) if (!names.includes(name)) throw new TypeError(`${path}.${name}: not allowed`);
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) throw new TypeError(`${path}: plain JSON data required`);
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const snapshot = {};
+      for (const name of names) {
+        const descriptor = descriptors[name];
+        if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value') || !descriptor.enumerable) throw new TypeError(`${path}.${name}: own data property required`);
+        snapshot[name] = descriptor.value;
+      }
+      for (const name of Object.keys(descriptors)) if (!names.includes(name)) throw new TypeError(`${path}.${name}: not allowed`);
+      return snapshot;
     }
-    exact(raw, top, 'settings');
-    exact(raw.channels, CHANNEL_NAMES, 'settings.channels');
-    exact(raw.runtimeBudgets, budgets, 'settings.runtimeBudgets');
+    raw = exact(raw, top, 'settings');
+    raw.channels = exact(raw.channels, CHANNEL_NAMES, 'settings.channels');
+    raw.runtimeBudgets = exact(raw.runtimeBudgets, budgets, 'settings.runtimeBudgets');
     if (raw.schemaVersion !== 2 || typeof raw.profileId !== 'string' || !raw.profileId.trim() ||
         !Number.isSafeInteger(raw.profileRevision) || raw.profileRevision < 0 || typeof raw.enabled !== 'boolean' ||
         !LANGUAGE_MODES.has(raw.languageMode) || !TRIGGER_MODES.includes(raw.triggerMode) ||
