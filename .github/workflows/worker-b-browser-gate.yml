@@ -48,8 +48,12 @@ jobs:
       - name: Browser harness supplement
         id: harness
         continue-on-error: true
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/halo-no-browser
         run: |
           set -o pipefail
+          rm -rf "$PLAYWRIGHT_BROWSERS_PATH"
+          mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
           node --test tests/browser-harness.test.js 2>&1 | tee evidence/browser-harness.tap
 
       - name: Accessibility contract
@@ -64,7 +68,11 @@ jobs:
         continue-on-error: true
         run: |
           set -o pipefail
-          npm run test:browser 2>&1 | tee evidence/browser-e2e.tap
+          : > evidence/browser-e2e.tap
+          for file in tests/browser/*.e2e.test.js; do
+            printf '\n===== %s =====\n' "$file" | tee -a evidence/browser-e2e.tap
+            timeout 180s node --test "$file" 2>&1 | tee -a evidence/browser-e2e.tap
+          done
 
       - name: Upload Worker B evidence
         if: always()
