@@ -14,6 +14,7 @@ const linguisticsPath = path.join(extensionRoot, 'src', 'shared', 'linguistics.j
 const schedulerPath = path.join(extensionRoot, 'src', 'shared', 'runtime-scheduler.js');
 const rendererPath = path.join(extensionRoot, 'src', 'shared', 'reversible-renderer.js');
 const contractsPath = path.join(extensionRoot, 'src', 'shared', 'semantic-contracts.js');
+const sitePolicyPath = path.join(extensionRoot, 'src', 'shared', 'site-policy.js');
 const settingsPath = path.join(extensionRoot, 'src', 'shared', 'settings.js');
 const progressivePath = path.join(extensionRoot, 'src', 'shared', 'progressive-runtime.js');
 const dictionaryPath = path.join(extensionRoot, 'src', 'shared', 'dictionary-provider.js');
@@ -248,7 +249,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
       });
       for (const scriptPath of [
         progressivePath, contractsPath, dictionaryPath, semanticPath, grammarPath, projectionPath,
-        settingsPath, pipelinePath, schedulerPath, rendererPath
+        sitePolicyPath, settingsPath, pipelinePath, schedulerPath, rendererPath
       ]) {
         await page.addScriptTag({ path: scriptPath });
       }
