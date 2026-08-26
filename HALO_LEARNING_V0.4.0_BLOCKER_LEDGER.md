@@ -8,30 +8,33 @@ release:
 branch:
   name: integration/v0.4.0-final-convergence
   remote_head: self
-  source_head_before_ledger_commit: a19d9233f0e11f59da75b495fb80aa14a6cc7955
+  source_head_before_ledger_commit: 7bbdd2c2eeb840123f3f8b9a7215fdbd8eca590f
 
 last_round:
-  blocker_id: B01
-  prompt: 04_B01_DYNAMIC_CHILD_INSERTION_PROMPT.md
+  blocker_id: B02
+  prompt: 05_B02_REVERSIBLE_RENDERER_RETENTION_PROMPT.md
   result: resolved
+  restart_anchor: a1a128977bcc6853368231872c118390b24c8803
   commits:
-    - 9476a688c157581713c8c4a1323eadc5c9f8484f
-    - 317d45d5569e6230a841f7a6e756038d4af204e0
-    - 4184ef088cd20900740899b4c07432ae583dc521
-    - c2dd38a10bdb8f776c10d474cb9c7e314977ccb4
-    - 0000a2aa2de9b2feb60f1b3cc78600fe2670166b
-    - a19d9233f0e11f59da75b495fb80aa14a6cc7955
-  ci_runs: []
+    - e5fc8dd84e048145d72456015e4aed9135ec35ab
+    - 60ff90fd60735574040cf71208224eb03d8bf1ff
+    - cec727a66b43995373eeeec2971c96bca6c20ea1
+    - f1b413078763c1717ebd3a233cdfd71275592983
+    - 7bbdd2c2eeb840123f3f8b9a7215fdbd8eca590f
+  ci_runs:
+    - run: 32994115568
+      job: 98258768745
+      result: pass
   evidence:
-    - docs/validation/v0.4.0-b01-dynamic-child-insertion.md
+    - docs/validation/v0.4.0-b02-reversible-renderer-retention.md
 
 blockers:
   B01_dynamic_child_insertion:
     state: resolved
     evidence: docs/validation/v0.4.0-b01-dynamic-child-insertion.md
   B02_reversible_renderer_retention:
-    state: open
-    evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
+    state: resolved
+    evidence: docs/validation/v0.4.0-b02-reversible-renderer-retention.md
   B03_sensitive_site_status:
     state: open
     evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
@@ -58,10 +61,9 @@ blockers:
     evidence: docs/validation/v0.4.0-b10-standalone-validator-fixture.md
 
 resolved_this_round:
-  - B01
+  - B02
 
 blockers_remaining:
-  - B02
   - B03
   - B05
   - B06
