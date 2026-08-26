@@ -8,19 +8,19 @@ release:
 branch:
   name: integration/v0.4.0-final-convergence
   remote_head: self
-  source_head_before_ledger_commit: 6fd65fdaa588ae264ca81084770ae38ad19fa204
+  source_head_before_ledger_commit: 6ea7b3859a9bc3348d81069a16a0f2388b648782
 
 last_round:
-  blocker_id: B10
-  prompt: 02_B10_STANDALONE_VALIDATOR_FIXTURE_PROMPT.md
+  blocker_id: B04
+  prompt: 03_B04_SENTENCE_PIPELINE_CHROME_ISOLATION_PROMPT.md
   result: resolved
   commits:
-    - 51b030c32acbc663ca7b9290fba0f8c5f74c2359
-    - 81ffbd3c3658d85f31b1fa17df40bc6e9bceb686
-    - 6fd65fdaa588ae264ca81084770ae38ad19fa204
+    - 03296e0c9f7b212c82c6554a4c41f441806b7428
+    - b6aa2377064877f9f4da882be1fa388b3acc5cec
+    - 6ea7b3859a9bc3348d81069a16a0f2388b648782
   ci_runs: []
   evidence:
-    - docs/validation/v0.4.0-b10-standalone-validator-fixture.md
+    - docs/validation/v0.4.0-b04-sentence-pipeline-chrome-isolation.md
 
 blockers:
   B01_dynamic_child_insertion:
@@ -33,8 +33,8 @@ blockers:
     state: open
     evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
   B04_sentence_pipeline_chrome:
-    state: open
-    evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
+    state: resolved
+    evidence: docs/validation/v0.4.0-b04-sentence-pipeline-chrome-isolation.md
   B05_trigger_controller_panel:
     state: open
     evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
@@ -55,13 +55,12 @@ blockers:
     evidence: docs/validation/v0.4.0-b10-standalone-validator-fixture.md
 
 resolved_this_round:
-  - B10
+  - B04
 
 blockers_remaining:
   - B01
   - B02
   - B03
-  - B04
   - B05
   - B06
   - B07
@@ -72,7 +71,8 @@ release_debt:
   - no unified C/D/E evidence envelope
   - legacy Worker B/E push workflows remain noisy beside the canonical Architect workflow
 
-future_hardening: []
+future_hardening:
+  - run canonical browser lanes on a CI Chromium host without local administrator URL blocking
 
 main_merge_allowed: false
 ```
