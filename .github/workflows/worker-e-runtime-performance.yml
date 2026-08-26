@@ -27,6 +27,7 @@ jobs:
       - name: Apply minimal GREEN implementation after verified RED
         run: |
           python scripts/worker-e-apply-green.py
+          python scripts/worker-e-apply-decomposition.py
           node --check apps/extension/src/shared/runtime-shard-browser.js
           node --check scripts/profile-browser-runtime.js
           git diff --check
@@ -43,7 +44,7 @@ jobs:
             git config user.name 'Halo Worker E'
             git config user.email 'worker-e@users.noreply.github.com'
             git add apps/extension/src/shared/runtime-shard-browser.js scripts/profile-browser-runtime.js
-            git commit -m 'perf: instrument browser shard cold path'
+            git commit -m 'perf: add browser shard causal decomposition'
             git push origin HEAD:parallel/v0.4.0-runtime-performance
           fi
 
@@ -73,6 +74,7 @@ jobs:
                 bucketCount: candidate.bucketCount,
                 sizes: candidate.sizes,
                 measurements: candidate.measurements,
+                bottleneckDecomposition: candidate.bottleneckDecomposition,
                 gates: candidate.gates,
                 allBlockingPassed: candidate.allBlockingPassed,
                 coldSamples: candidate.conditions.cold.samples.map((sample) => sample.durationMs),
