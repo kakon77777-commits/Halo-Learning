@@ -1,6 +1,6 @@
 {
   "name": "halo-learning",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Local-first, provider-agnostic Halo Learning reference implementation",
   "scripts": {
@@ -13,9 +13,9 @@
     "quality:verify": "node --max-old-space-size=1024 scripts/run-semantic-quality.js --verify",
     "benchmark:index": "node --expose-gc scripts/benchmark-lexical-index.js",
     "validate:v0.2": "node scripts/validate-v0.2.0.js",
-    "validate": "node scripts/validate-v0.3.0.js --development",
-    "validate:standalone": "node scripts/validate-v0.3.0.js --standalone",
-    "package:release": "node scripts/package-v0.3.0.js",
+    "validate": "node scripts/validate-v0.4.0.js --development",
+    "validate:standalone": "node scripts/validate-v0.4.0.js --standalone",
+    "package:release": "node scripts/package-v0.4.0.js",
     "browser:install": "playwright install chromium",
     "test:browser": "node --test tests/browser/*.e2e.test.js",
     "profile:browser": "node scripts/profile-browser-runtime.js --write"
