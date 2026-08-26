@@ -373,12 +373,39 @@
     return source;
   }
 
+  function segmentationSourceForRuns(source, runs, options) {
+    const settings = options || {};
+    const isProtected = typeof settings.isSentenceTerminatorProtected === 'function'
+      ? settings.isSentenceTerminatorProtected
+      : null;
+    if (!isProtected) return source;
+    let masked = null;
+    for (const run of runs) {
+      for (let offset = 0; offset < run.text.length; offset += 1) {
+        const character = run.text[offset];
+        if (!SENTENCE_TERMINATORS.has(character)) continue;
+        let protectedTerminator = false;
+        try {
+          protectedTerminator = isProtected(run.node, offset, character) === true;
+        } catch (_error) {
+          protectedTerminator = false;
+        }
+        if (!protectedTerminator) continue;
+        if (!masked) masked = source.split('');
+        masked[run.start + offset] = 'a';
+      }
+    }
+    return masked ? masked.join('') : source;
+  }
+
   function buildSentenceRecords(rootNode, options) {
     const settings = options || {};
     const runs = createTextRuns(rootNode, settings);
     const source = aggregateText(runs);
+    const segmentationSource = segmentationSourceForRuns(source, runs, settings);
     const rootRevision = Number.isInteger(settings.rootRevision) ? settings.rootRevision : 0;
-    const records = segmentSentences(source, settings).map((sentence) => {
+    const records = segmentSentences(segmentationSource, settings).map((sentence) => {
+      const text = source.slice(sentence.start, sentence.end);
       const fragments = mapAggregateSpanToFragments(runs, sentence.start, sentence.end)
         .map((fragment) => Object.freeze({
           nodeId: fragment.nodeId,
@@ -387,10 +414,10 @@
         }));
       return Object.freeze({
         id: `${rootRevision}:${sentence.start}:${sentence.end}`,
-        text: sentence.text,
+        text,
         start: sentence.start,
         end: sentence.end,
-        language: detectLanguage(sentence.text),
+        language: detectLanguage(text),
         rootRevision,
         fragments: freezeArray(fragments)
       });
