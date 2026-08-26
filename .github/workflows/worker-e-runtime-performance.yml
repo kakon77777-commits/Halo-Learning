@@ -27,6 +27,7 @@ jobs:
       - name: Apply minimal GREEN implementation after verified RED
         run: |
           python scripts/worker-e-apply-green.py
+          python scripts/worker-e-fix-decomposition-driver.py
           python scripts/worker-e-apply-decomposition.py
           node --check apps/extension/src/shared/runtime-shard-browser.js
           node --check scripts/profile-browser-runtime.js
