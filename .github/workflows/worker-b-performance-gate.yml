@@ -10,14 +10,23 @@ permissions:
   contents: write
 
 jobs:
-  repair-collector-source:
-    if: github.event.head_commit.message == 'ci: repair Worker B collector source'
+  real-chromium-evidence:
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
           ref: parallel/v0.4.0-browser-ux
-      - name: Align collector with CDP helper return contract
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Align collector source with CDP helper contract
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -25,50 +34,41 @@ jobs:
           s = p.read_text(encoding='utf-8')
           old = "details.workerRestart = { stopped, status };\n    gates.workerRestart = Boolean(stopped && stopped.runningStatus === 'stopped' && restartedWorker !== worker && status && status.mode === 'ready');"
           new = "details.workerRestart = { stoppedVersionId: stopped, status };\n    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) && restartedWorker !== worker && status && status.mode === 'ready');"
-          if old not in s:
-              raise SystemExit('expected collector helper-contract pattern not found')
-          p.write_text(s.replace(old, new, 1), encoding='utf-8', newline='\n')
+          if old in s:
+              p.write_text(s.replace(old, new, 1), encoding='utf-8', newline='\n')
+              print('collector source repaired')
+          elif new in s:
+              print('collector source already repaired')
+          else:
+              raise SystemExit('collector helper-contract pattern not recognized')
           PY
           node --check scripts/collect-worker-b-browser-evidence.js
           git diff --check
-      - name: Commit collector source repair
-        run: |
-          git config user.name 'Halo Worker B'
-          git config user.email 'worker-b@users.noreply.github.com'
-          git add scripts/collect-worker-b-browser-evidence.js
-          git commit -m 'fix: align MV3 collector with CDP helper contract'
-          git push origin HEAD:parallel/v0.4.0-browser-ux
+          if ! git diff --quiet -- scripts/collect-worker-b-browser-evidence.js; then
+            git config user.name 'Halo Worker B'
+            git config user.email 'worker-b@users.noreply.github.com'
+            git add scripts/collect-worker-b-browser-evidence.js
+            git commit -m 'fix: align MV3 collector with CDP helper contract'
+            git push origin HEAD:parallel/v0.4.0-browser-ux
+          fi
 
-  acceptance-model:
-    if: github.event.head_commit.message != 'ci: repair Worker B collector source'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
       - name: Browser performance acceptance model
         run: node --test tests/browser-performance-metrics.test.js
 
-  shard-diagnostic:
-    if: github.event.head_commit.message != 'ci: repair Worker B collector source'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - name: Run fixed 64/128 real Chromium comparison
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare evidence directories
         run: |
-          mkdir -p evidence/shard-diagnostic
-          node - <<'NODE' | tee evidence/shard-diagnostic/summary.txt
+          rm -rf evidence/worker-b-final evidence/shard-diagnostic
+          mkdir -p evidence/worker-b-final evidence/shard-diagnostic
+
+      - name: Run fixed 64/128 real Chromium diagnostic
+        id: shard
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node - <<'NODE' 2>&1 | tee evidence/shard-diagnostic/summary.txt
           const fs = require('node:fs');
           const { chromium } = require('playwright');
           const { runShardComparison, verifyBrowserShardComparison } = require('./scripts/profile-browser-runtime');
@@ -99,44 +99,31 @@ jobs:
             process.exitCode = 1;
           });
           NODE
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: worker-b-shard-diagnostic
-          path: evidence/shard-diagnostic/
-          if-no-files-found: error
-          retention-days: 14
 
-  real-chromium-evidence:
-    if: github.event.head_commit.message != 'ci: repair Worker B collector source'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
       - name: Collect real Chromium performance and MV3 evidence
+        id: collector
+        continue-on-error: true
         run: |
-          rm -rf evidence/worker-b-final
-          mkdir -p evidence/worker-b-final
-          timeout 1500s node scripts/collect-worker-b-browser-evidence.js evidence/worker-b-final | tee evidence/worker-b-final.log
+          set -o pipefail
+          timeout 1500s node scripts/collect-worker-b-browser-evidence.js evidence/worker-b-final 2>&1 | tee evidence/worker-b-final.log
+
       - name: Verify generated performance and lifecycle evidence
+        id: verify
+        continue-on-error: true
         run: |
           node - <<'NODE'
           const fs = require('node:fs');
           const { evaluateBrowserPerformance, evaluateMv3Lifecycle } = require('./packages/quality/browser-performance');
           const performance = JSON.parse(fs.readFileSync('evidence/worker-b-final/v0.4.0-worker-b-browser-performance.json', 'utf8'));
           const mv3 = JSON.parse(fs.readFileSync('evidence/worker-b-final/v0.4.0-worker-b-mv3-lifecycle.json', 'utf8'));
-          if (!evaluateBrowserPerformance(performance).allBlockingPassed) throw new Error('performance evidence does not pass frozen gates');
-          if (!evaluateMv3Lifecycle(mv3).allBlockingPassed) throw new Error('MV3 evidence does not pass frozen gates');
+          const perf = evaluateBrowserPerformance(performance);
+          const lifecycle = evaluateMv3Lifecycle(mv3);
+          if (!perf.allBlockingPassed) throw new Error('performance evidence does not pass frozen gates');
+          if (!lifecycle.allBlockingPassed) throw new Error('MV3 evidence does not pass frozen gates');
           if (!mv3.details || mv3.details.routeNavigation !== true) throw new Error('route-navigation evidence is missing');
-          console.log('fresh Worker B real Chromium evidence verified');
+          console.log(JSON.stringify({ performance: perf.measurements, performanceGates: perf.gates, mv3Gates: lifecycle.gates }, null, 2));
           NODE
+
       - name: Upload Worker B performance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -145,5 +132,18 @@ jobs:
           path: |
             evidence/worker-b-final/
             evidence/worker-b-final.log
+            evidence/shard-diagnostic/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Enforce Worker B performance gate
+        if: always()
+        env:
+          SHARD: ${{ steps.shard.outcome }}
+          COLLECTOR: ${{ steps.collector.outcome }}
+          VERIFY: ${{ steps.verify.outcome }}
+        run: |
+          printf 'shard=%s\ncollector=%s\nverify=%s\n' "$SHARD" "$COLLECTOR" "$VERIFY"
+          test "$SHARD" = success
+          test "$COLLECTOR" = success
+          test "$VERIFY" = success
