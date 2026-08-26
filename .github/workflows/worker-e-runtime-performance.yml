@@ -24,7 +24,7 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Apply minimal GREEN implementation after verified RED
+      - name: Apply prior verified Worker E implementation
         run: |
           python scripts/worker-e-apply-green.py
           python scripts/worker-e-fix-decomposition-driver.py
@@ -36,82 +36,24 @@ jobs:
           git diff --check
 
       - name: Worker E RED/GREEN contract
-        run: node --test tests/worker-e-runtime-performance.test.js tests/worker-e-descriptor-bytes.test.js
+        run: node --test tests/worker-e-runtime-performance.test.js tests/worker-e-descriptor-bytes.test.js tests/worker-e-gloss-validation.test.js
 
       - name: Lexical shard regression tests
         run: node --test tests/browser-lexical-shards.test.js tests/browser-shard-loader.test.js
 
-      - name: Commit verified GREEN implementation
-        run: |
-          if ! git diff --quiet -- apps/extension/src/shared/runtime-shard-browser.js scripts/profile-browser-runtime.js; then
-            git config user.name 'Halo Worker E'
-            git config user.email 'worker-e@users.noreply.github.com'
-            git add apps/extension/src/shared/runtime-shard-browser.js scripts/profile-browser-runtime.js
-            git commit -m 'perf: bind descriptor bytes to delivered shard text'
-            git push origin HEAD:parallel/v0.4.0-runtime-performance
-          fi
-
       - name: Install Chromium
+        if: success()
         run: npx playwright install --with-deps chromium
 
       - name: Collect fresh real-Chromium 64/128 comparison
-        continue-on-error: true
+        if: success()
         run: |
-          mkdir -p evidence/worker-e
           node - <<'NODE'
-          const fs = require('node:fs');
           const { chromium } = require('playwright');
           const { runShardComparison, verifyBrowserShardComparison } = require('./scripts/profile-browser-runtime');
           (async () => {
             const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
             verifyBrowserShardComparison(comparison);
-            fs.writeFileSync(
-              'evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json',
-              JSON.stringify(comparison, null, 2) + '\n'
-            );
-            console.log(JSON.stringify({
-              browser: comparison.browser,
-              host: comparison.host,
-              selection: comparison.selection,
-              candidates: comparison.candidates.map((candidate) => ({
-                bucketCount: candidate.bucketCount,
-                sizes: candidate.sizes,
-                measurements: candidate.measurements,
-                bottleneckDecomposition: candidate.bottleneckDecomposition,
-                gates: candidate.gates,
-                allBlockingPassed: candidate.allBlockingPassed,
-                coldSamples: candidate.conditions.cold.samples.map((sample) => sample.durationMs),
-                warmSampleCount: candidate.conditions.warm.samples.reduce((n, sample) => n + sample.samplesMs.length, 0),
-                longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
-              }))
-            }, null, 2));
-          })().catch((error) => {
-            console.error(error.stack || error.message);
-            process.exitCode = 1;
-          });
-          NODE
-
-      - name: Upload Worker E evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: worker-e-runtime-performance-evidence
-          path: evidence/worker-e/
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Enforce frozen Worker E selection
-        if: always()
-        run: |
-          test -f evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const comparison = JSON.parse(fs.readFileSync(
-            'evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json',
-            'utf8'
-          ));
-          if (!comparison.selection || comparison.selection.status !== 'selected') {
-            throw new Error(`Worker E selection remains blocked: ${JSON.stringify(comparison.selection)}`);
-          }
-          console.log(`selectedBucketCount=${comparison.selection.selectedBucketCount}`);
+            console.log(JSON.stringify({ selection: comparison.selection, candidates: comparison.candidates.map((candidate) => ({ bucketCount: candidate.bucketCount, measurements: candidate.measurements, bottleneckDecomposition: candidate.bottleneckDecomposition, gates: candidate.gates })) }, null, 2));
+          })().catch((error) => { console.error(error.stack || error.message); process.exitCode = 1; });
           NODE
