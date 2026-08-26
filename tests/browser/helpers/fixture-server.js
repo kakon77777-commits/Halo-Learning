@@ -6,6 +6,13 @@ function closeServer(server) {
   });
 }
 
+async function closeFixtureServer(server) {
+  const closing = closeServer(server);
+  if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+  if (typeof server.closeAllConnections === 'function') server.closeAllConnections();
+  await closing;
+}
+
 function listen(server) {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -57,7 +64,7 @@ async function withFixtureServer(fixtures, callback) {
   try {
     return await callback(Object.freeze({ origin, port: address.port }));
   } finally {
-    await closeServer(server);
+    await closeFixtureServer(server);
   }
 }
 
