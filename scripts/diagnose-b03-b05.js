@@ -1,6 +1,6 @@
 'use strict';
-// B05 route-cleanup diagnostic: exercise the native extension shortcut, then
-// drive the same popup/apply/token/SPA transition used by the canonical E2E.
+// B05 causal probe: verify whether Chromium's Navigation API reports a
+// main-world History API transition to the extension ISOLATED world.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -14,32 +14,8 @@ function pressNativeShortcut(windowTitle) {
   const windows = output.split(/\s+/).filter(Boolean);
   if (!windows.length) throw new Error(`B05 native shortcut window not found: ${windowTitle}`);
   const windowId = windows[windows.length - 1];
-  console.log('DIAG xdotool-window', JSON.stringify({ windowTitle, windowId, windows }));
   execFileSync('xdotool', ['windowfocus', '--sync', windowId], { stdio: 'inherit' });
   execFileSync('xdotool', ['key', '--window', windowId, '--clearmodifiers', 'alt+shift+h'], { stdio: 'inherit' });
-}
-
-async function workerFor(context) {
-  return context.serviceWorkers()[0] || context.waitForEvent('serviceworker');
-}
-
-async function selectFixture(page) {
-  await page.evaluate(() => {
-    const range = document.createRange();
-    range.selectNodeContents(document.getElementById('selection'));
-    const selection = getSelection();
-    selection.removeAllRanges();
-    selection.addRange(range);
-  });
-}
-
-async function activateFixture(extensionPage, origin) {
-  return extensionPage.evaluate(async (url) => {
-    const tabs = await chrome.tabs.query({ url: `${url}/*` });
-    if (!tabs.length || !Number.isInteger(tabs[0].id)) throw new Error('fixture tab unavailable');
-    await chrome.tabs.update(tabs[0].id, { active: true });
-    return tabs[0].id;
-  }, origin);
 }
 
 (async () => {
@@ -49,92 +25,72 @@ async function activateFixture(extensionPage, origin) {
     exists: fs.existsSync,
     playwrightExecutable: chromium.executablePath()
   });
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-command-diagnostic-'));
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-navigation-probe-'));
   const context = await launchExtension({ extensionRoot, userDataDir, headless: false, executablePath: executable.path });
   try {
-    const worker = await workerFor(context);
-    const match = /^chrome-extension:\/\/([^/]+)\//.exec(worker.url());
-    if (!match) throw new Error(`extension worker URL unavailable: ${worker.url()}`);
-    const extensionId = match[1];
-
+    const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
     await withFixtureServer({
-      '/diagnostic.html': {
+      '/probe.html': {
         contentType: 'text/html',
-        body: '<!doctype html><html lang="en"><head><title>Halo B05 Diagnostic</title></head><body><main><p id="lesson">The public model learns quickly.</p><p id="selection">Selected local sentence.</p></main></body></html>'
+        body: '<!doctype html><html lang="en"><head><title>Halo B05 Navigation Probe</title></head><body><main><p id="selection">Selected local sentence.</p></main></body></html>'
       }
     }, async ({ origin }) => {
       const page = await context.newPage();
-      await page.goto(origin + '/diagnostic.html');
-      await selectFixture(page);
-      await page.bringToFront();
-
-      const before = await worker.evaluate(async () => ({
-        commands: await chrome.commands.getAll(),
-        tab: (await chrome.tabs.query({ active: true, currentWindow: true }))[0]
-      }));
-      console.log('DIAG before', JSON.stringify(before));
-      pressNativeShortcut('Halo B05 Diagnostic');
-      await page.locator('[data-halo-owned="panel"] .halo-core-panel').waitFor({ state: 'visible', timeout: 5000 });
-
-      const afterNative = await worker.evaluate(async (url) => {
-        const [tab] = await chrome.tabs.query({ url: `${url}/*` });
-        return { tab, status: await chrome.tabs.sendMessage(tab.id, { type: 'HALO_STATUS' }) };
-      }, origin);
-      console.log('DIAG after-native-keyboard', JSON.stringify(afterNative));
-      console.log('DIAG panel-after-native-keyboard', await page.locator('[data-halo-owned="panel"]').count());
-      await page.keyboard.press('Escape');
-
-      const popup = await context.newPage();
-      await popup.goto(`chrome-extension://${extensionId}/src/popup.html`);
-      await popup.waitForSelector('#applyButton:not([disabled])');
-      await popup.selectOption('#triggerMode', 'explicit-only');
-      await activateFixture(popup, origin);
-      await popup.click('#applyButton');
-      await page.waitForSelector('#lesson [data-halo-owned="token"]');
-
-      const token = page.locator('#lesson [data-halo-owned="token"]').first();
-      await token.click();
-      await page.locator('[data-halo-owned="panel"] .halo-core-panel').waitFor({ state: 'visible', timeout: 5000 });
-      const beforeRoute = await worker.evaluate(async (url) => {
-        const [tab] = await chrome.tabs.query({ url: `${url}/*` });
-        return chrome.tabs.sendMessage(tab.id, { type: 'HALO_STATUS' });
-      }, origin);
-      console.log('DIAG before-route', JSON.stringify(beforeRoute));
-
-      await page.evaluate(() => history.pushState({}, '', '/route-two'));
-      await page.waitForTimeout(500);
-
-      const dom = await page.evaluate(() => {
-        const hosts = [...document.querySelectorAll('[data-halo-owned="panel"]')];
-        return {
-          href: location.href,
-          hostCount: hosts.length,
-          hosts: hosts.map((host) => {
-            const panel = host.shadowRoot && host.shadowRoot.querySelector('.halo-core-panel');
-            const rect = panel ? panel.getBoundingClientRect() : null;
-            const style = panel ? getComputedStyle(panel) : null;
-            return {
-              connected: host.isConnected,
-              panelPresent: Boolean(panel),
-              panelRect: rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null,
-              panelDisplay: style && style.display,
-              panelVisibility: style && style.visibility,
-              panelOpacity: style && style.opacity
-            };
-          })
-        };
+      await page.goto(origin + '/probe.html');
+      await page.evaluate(() => {
+        const range = document.createRange();
+        range.selectNodeContents(document.getElementById('selection'));
+        const selection = getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
       });
-      const afterRoute = await worker.evaluate(async (url) => {
-        const [tab] = await chrome.tabs.query({ url: `${url}/*` });
-        if (!tab || !Number.isInteger(tab.id)) return { error: 'fixture tab unavailable' };
-        try { return await chrome.tabs.sendMessage(tab.id, { type: 'HALO_STATUS' }); }
-        catch (error) { return { error: String(error) }; }
-      }, origin);
-      const evidence = { dom, beforeRoute, afterRoute };
-      console.log('B05 ROUTE CLEANUP DIAGNOSTIC', JSON.stringify(evidence));
+      await page.bringToFront();
+      pressNativeShortcut('Halo B05 Navigation Probe');
+      await page.locator('[data-halo-owned="panel"] .halo-core-panel').waitFor({ state: 'visible', timeout: 5000 });
 
-      if (dom.hostCount !== 0) {
-        throw new Error(`B05 route cleanup left Halo panel host attached: ${JSON.stringify(evidence)}`);
+      const installed = await worker.evaluate(async (url) => {
+        const [tab] = await chrome.tabs.query({ url: `${url}/*` });
+        if (!tab || !Number.isInteger(tab.id)) throw new Error('fixture tab unavailable');
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          world: 'ISOLATED',
+          func: () => {
+            const supported = Boolean(globalThis.navigation && typeof globalThis.navigation.addEventListener === 'function');
+            globalThis.__haloNavigationProbe = { supported, count: 0, urls: [] };
+            if (supported) {
+              globalThis.navigation.addEventListener('currententrychange', () => {
+                globalThis.__haloNavigationProbe.count += 1;
+                globalThis.__haloNavigationProbe.urls.push(String(location.href));
+              });
+            }
+            return { ...globalThis.__haloNavigationProbe };
+          }
+        });
+        return { tabId: tab.id, probe: results[0] && results[0].result };
+      }, origin);
+      console.log('B05 NAVIGATION PROBE installed', JSON.stringify(installed));
+
+      await page.evaluate(() => history.pushState({ halo: 1 }, '', '/route-two'));
+      await page.waitForTimeout(200);
+
+      const observed = await worker.evaluate(async (tabId) => {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId },
+          world: 'ISOLATED',
+          func: () => ({
+            href: String(location.href),
+            probe: globalThis.__haloNavigationProbe || null
+          })
+        });
+        return results[0] && results[0].result;
+      }, installed.tabId);
+      console.log('B05 NAVIGATION PROBE observed', JSON.stringify(observed));
+
+      if (!installed.probe || installed.probe.supported !== true) {
+        throw new Error(`Navigation API unavailable in ISOLATED world: ${JSON.stringify({ installed, observed })}`);
+      }
+      if (!observed || !observed.probe || observed.probe.count < 1 || !observed.probe.urls.includes(`${origin}/route-two`)) {
+        throw new Error(`Navigation API did not observe main-world pushState: ${JSON.stringify({ installed, observed })}`);
       }
     });
   } finally {
