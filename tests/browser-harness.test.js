@@ -392,13 +392,16 @@ test('service-worker restart measures only after observing a distinct running wo
 test('legacy ZIP measurements use the packaged index entry sizes', () => {
   const path = require('node:path');
   const { readZipEntrySizes } = require('../scripts/profile-browser-runtime');
-  assert.deepEqual(
-    readZipEntrySizes(
-      path.join(__dirname, '..', 'dist', 'halo-learning-magic-hand-v0.3.0.zip'),
-      'data/lexical-runtime-index.json'
-    ),
-    { compressedBytes: 11367634, uncompressedBytes: 48544255 }
-  );
+  const { createLegacyV030Fixture } = require('./helpers/legacy-v030-fixture');
+  const fixture = createLegacyV030Fixture(path.join(__dirname, '..'));
+  try {
+    assert.deepEqual(
+      readZipEntrySizes(fixture.archivePath, 'data/lexical-runtime-index.json'),
+      { compressedBytes: 11367634, uncompressedBytes: 48544255 }
+    );
+  } finally {
+    fixture.dispose();
+  }
 });
 
 test('legacy runtime instrumentation preserves the loader API and profiling sink', () => {
@@ -427,12 +430,11 @@ test('legacy profiler extracts and instruments a temporary v0.3.0 extension copy
   const os = require('node:os');
   const path = require('node:path');
   const { prepareLegacyExtension } = require('../scripts/profile-browser-runtime');
+  const { createLegacyV030Fixture } = require('./helpers/legacy-v030-fixture');
+  const fixture = createLegacyV030Fixture(path.join(__dirname, '..'));
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-profile-test-'));
   try {
-    const extensionRoot = prepareLegacyExtension(
-      path.join(__dirname, '..', 'dist', 'halo-learning-magic-hand-v0.3.0.zip'),
-      temporaryRoot
-    );
+    const extensionRoot = prepareLegacyExtension(fixture.archivePath, temporaryRoot);
     const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
     const instrumented = fs.readFileSync(
       path.join(extensionRoot, 'src', 'shared', 'runtime-index-browser.js'),
@@ -445,6 +447,7 @@ test('legacy profiler extracts and instruments a temporary v0.3.0 extension copy
       'f2a63b7b5af3673a7faea6acaed53776cb94bcf4146949d965a37b76003fca21'
     );
   } finally {
+    fixture.dispose();
     fs.rmSync(temporaryRoot, { recursive: true, force: true });
   }
 });
