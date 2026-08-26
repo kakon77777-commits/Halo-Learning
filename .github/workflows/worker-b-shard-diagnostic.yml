@@ -1,4 +1,4 @@
-name: Worker E Current vs Base Regression Diagnostic
+name: Worker E Repair And Final Verification
 
 on:
   push:
@@ -6,12 +6,12 @@ on:
       - parallel/v0.4.0-runtime-performance
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  compare-regressions:
+  repair-and-verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,56 +21,96 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - name: Install current dependencies
-        run: npm ci
-      - name: Run current full suite without masking output
-        id: current
-        shell: bash
+      - run: npm ci
+
+      - name: Restore exact base browser harness and patch only enriched measurement fixture
         run: |
-          set +e
-          npm test > current-test.log 2>&1
-          code=$?
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          echo "CURRENT_EXIT=$code"
-          echo '=== CURRENT FAILING LINES ==='
-          grep -nE '(^not ok|# fail|AssertionError|ERR_|Error:|FAIL|failed|failure)' current-test.log | tail -n 160 || true
-          echo '=== CURRENT TAIL ==='
-          tail -n 180 current-test.log
-          exit 0
-      - name: Prepare exact base worktree
+          git show b6cd8ccfd705563bad7dcea87900d50fa8ca0b80:tests/browser-harness.test.js > tests/browser-harness.test.js
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/browser-harness.test.js')
+          source = path.read_text(encoding='utf-8')
+          old = "measurements: { coldRequiredShardsP95Ms: 10, warmLookupP95Ms: 1, longTaskMaxMs: 0 },"
+          new = """measurements: {
+        coldRequiredShardsP50Ms: 10,
+        coldRequiredShardsP95Ms: 10,
+        coldRequiredShardsMaxMs: 10,
+        warmLookupP50Ms: 1,
+        warmLookupP95Ms: 1,
+        warmLookupMaxMs: 1,
+        longTaskP50Ms: 0,
+        longTaskP95Ms: 0,
+        longTaskMaxMs: 0
+      },"""
+          count = source.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one legacy measurement fixture, found {count}')
+          source = source.replace(old, new, 1)
+          path.write_text(source, encoding='utf-8', newline='\n')
+          PY
+          git diff --check
+
+      - name: Full Node regression suite
+        run: npm test
+
+      - name: Verify canonical lexical runtime
+        run: npm run verify:runtime
+
+      - name: Commit repaired test fixture
         run: |
-          git worktree add /tmp/halo-worker-e-base b6cd8ccfd705563bad7dcea87900d50fa8ca0b80
-          cd /tmp/halo-worker-e-base
-          npm ci
-      - name: Run exact base full suite
-        id: base
-        shell: bash
-        run: |
-          set +e
-          cd /tmp/halo-worker-e-base
-          npm test > "$GITHUB_WORKSPACE/base-test.log" 2>&1
-          code=$?
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          echo "BASE_EXIT=$code"
-          echo '=== BASE FAILING LINES ==='
-          grep -nE '(^not ok|# fail|AssertionError|ERR_|Error:|FAIL|failed|failure)' "$GITHUB_WORKSPACE/base-test.log" | tail -n 160 || true
-          echo '=== BASE TAIL ==='
-          tail -n 180 "$GITHUB_WORKSPACE/base-test.log"
-          exit 0
-      - name: Compare outcomes
-        run: |
-          echo "current=${{ steps.current.outputs.exit_code }} base=${{ steps.base.outputs.exit_code }}"
-          if [ "${{ steps.current.outputs.exit_code }}" != "${{ steps.base.outputs.exit_code }}" ]; then
-            echo 'OUTCOME_DIFFERENCE=true'
-          else
-            echo 'OUTCOME_DIFFERENCE=false'
+          git config user.name 'Halo Worker E'
+          git config user.email 'worker-e@users.noreply.github.com'
+          git add tests/browser-harness.test.js
+          if ! git diff --cached --quiet; then
+            git commit -m 'test: align shard comparison fixture with enriched measurements'
+            git push origin HEAD:parallel/v0.4.0-runtime-performance
           fi
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Fresh real-Chromium Worker E evidence
+        run: |
+          mkdir -p evidence/worker-e
+          node - <<'NODE' | tee evidence/worker-e/summary.txt
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const { runShardComparison, verifyBrowserShardComparison } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            verifyBrowserShardComparison(comparison);
+            fs.writeFileSync(
+              'evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json',
+              JSON.stringify(comparison, null, 2) + '\n'
+            );
+            console.log(JSON.stringify({
+              browser: comparison.browser,
+              host: comparison.host,
+              selection: comparison.selection,
+              candidates: comparison.candidates.map((candidate) => ({
+                bucketCount: candidate.bucketCount,
+                manifestHash: candidate.manifestHash,
+                manifestRootHash: candidate.manifestRootHash,
+                sizes: candidate.sizes,
+                measurements: candidate.measurements,
+                bottleneckDecomposition: candidate.bottleneckDecomposition,
+                gates: candidate.gates,
+                allBlockingPassed: candidate.allBlockingPassed,
+                coldRawMs: candidate.conditions.cold.samples.map((sample) => sample.durationMs),
+                warmSampleCount: candidate.conditions.warm.samples.reduce((count, sample) => count + sample.samplesMs.length, 0),
+                longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
+              }))
+            }, null, 2));
+          })().catch((error) => {
+            console.error(error.stack || error.message);
+            process.exitCode = 1;
+          });
+          NODE
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: worker-e-current-vs-base-regression-logs
-          path: |
-            current-test.log
-            base-test.log
+          name: worker-e-final-verification
+          path: evidence/worker-e/
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
