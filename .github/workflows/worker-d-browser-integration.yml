@@ -1,3 +1,4 @@
+# Worker D executes the immutable Worker-B frozen SHA; this workflow file is orchestration only.
 name: Worker D Browser Integration Baseline
 
 on:
