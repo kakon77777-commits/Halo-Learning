@@ -127,3 +127,89 @@ jobs:
           path: evidence/architect-performance/
           if-no-files-found: error
           retention-days: 14
+
+  release-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Build deterministic candidate twice and compare bytes
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/architect-release /tmp/halo-release-first
+          npm run package:release | tee evidence/architect-release/package-first.log
+          cp dist/halo-learning-magic-hand-v0.4.0.zip /tmp/halo-release-first/extension.zip
+          cp releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip /tmp/halo-release-first/source.zip
+          cp dist/halo-learning-v0.4.0-package-manifest.json /tmp/halo-release-first/manifest.json
+          sha256sum \
+            dist/halo-learning-magic-hand-v0.4.0.zip \
+            releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip \
+            dist/halo-learning-v0.4.0-package-manifest.json \
+            > evidence/architect-release/first.sha256
+          npm run package:release | tee evidence/architect-release/package-second.log
+          sha256sum \
+            dist/halo-learning-magic-hand-v0.4.0.zip \
+            releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip \
+            dist/halo-learning-v0.4.0-package-manifest.json \
+            > evidence/architect-release/second.sha256
+          cmp /tmp/halo-release-first/extension.zip dist/halo-learning-magic-hand-v0.4.0.zip
+          cmp /tmp/halo-release-first/source.zip releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
+          cmp /tmp/halo-release-first/manifest.json dist/halo-learning-v0.4.0-package-manifest.json
+          cmp evidence/architect-release/first.sha256 evidence/architect-release/second.sha256
+          printf 'deterministic=true\n' > evidence/architect-release/package-byte-comparison.txt
+      - name: Extract standalone source and prove Git metadata absent
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/halo-v040-standalone
+          mkdir -p /tmp/halo-v040-standalone
+          unzip -q releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip -d /tmp/halo-v040-standalone
+          if find /tmp/halo-v040-standalone -name .git -print -quit | grep -q .; then
+            echo 'standalone contains prohibited .git metadata' >&2
+            exit 1
+          fi
+          printf 'git_metadata_present=false\n' > evidence/architect-release/standalone-git-audit.txt
+      - name: Run development and extracted standalone validators without hiding failure
+        run: |
+          set +e
+          npm run validate > evidence/architect-release/development-validator.log 2>&1
+          DEV_EXIT=$?
+          set -e
+          (cd /tmp/halo-v040-standalone && npm ci)
+          set +e
+          (cd /tmp/halo-v040-standalone && npm run validate:standalone) > evidence/architect-release/standalone-validator.log 2>&1
+          STANDALONE_EXIT=$?
+          set -e
+          python - "$DEV_EXIT" "$STANDALONE_EXIT" <<'PY'
+          import json, sys
+          from pathlib import Path
+          dev = int(sys.argv[1])
+          standalone = int(sys.argv[2])
+          payload = {
+              'schemaVersion': 1,
+              'release': 'v0.4.0',
+              'developmentValidator': {'exitCode': dev, 'passed': dev == 0},
+              'standaloneValidator': {'exitCode': standalone, 'passed': standalone == 0},
+              'deterministicPackageBytes': True,
+              'standaloneGitMetadataPresent': False,
+          }
+          Path('evidence/architect-release/release-validation-summary.json').write_text(
+              json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(payload, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: architect-v0.4.0-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence/architect-release/
+            dist/halo-learning-magic-hand-v0.4.0.zip
+            dist/halo-learning-v0.4.0-package-manifest.json
+            releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
+          if-no-files-found: warn
+          retention-days: 14
