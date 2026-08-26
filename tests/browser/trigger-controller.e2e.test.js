@@ -36,6 +36,12 @@ async function selectFixture(page) {
   });
 }
 
+async function waitForVisiblePanel(page, options) {
+  const panel = page.locator('[data-halo-owned="panel"]').locator('.halo-core-panel');
+  await panel.waitFor({ state: 'visible', ...(options || {}) });
+  return panel;
+}
+
 async function runAndObserveWorkerRecovery(session, scriptUrl, action, timeoutMs = 5000) {
   let listener;
   let timer;
@@ -88,7 +94,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       await selectFixture(page);
       await page.bringToFront();
       await page.keyboard.press('Alt+Shift+H');
-      await page.waitForSelector('[data-halo-owned="panel"]');
+      await waitForVisiblePanel(page);
       assert.equal(await page.evaluate(() => document.querySelector('[data-halo-owned="panel"]').shadowRoot.querySelector('.halo-core-body').textContent), 'Selected local sentence.');
       await page.keyboard.press('Escape');
 
@@ -128,7 +134,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       await applyMode('hybrid');
       let token = page.locator('#lesson [data-halo-owned="token"]').first();
       await token.click();
-      await page.waitForSelector('[data-halo-owned="panel"]');
+      await waitForVisiblePanel(page);
       await page.locator('#outside').click();
       await page.waitForSelector('[data-halo-owned="panel"]', { state: 'detached' });
 
@@ -169,7 +175,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
         await applyMode(mode);
         token = page.locator('#lesson [data-halo-owned="token"]').first();
         await token.hover();
-        await page.waitForSelector('[data-halo-owned="panel"]', { timeout: 1600 });
+        await waitForVisiblePanel(page, { timeout: 1600 });
         await page.keyboard.press('Escape');
       }
 
@@ -181,7 +187,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       await page.evaluate(() => document.querySelector('#lesson [data-halo-owned="token"]').dispatchEvent(
         new PointerEvent('pointerover', { bubbles: true, altKey: true })
       ));
-      await page.waitForSelector('[data-halo-owned="panel"]');
+      await waitForVisiblePanel(page);
       await page.keyboard.press('Escape');
 
       token = page.locator('#lesson [data-halo-owned="token"]').first();
@@ -193,7 +199,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       await selectFixture(page);
       await activateFixture(popup, origin);
       await popup.click('#analyzeSelectionButton');
-      await page.waitForSelector('[data-halo-owned="panel"]');
+      await waitForVisiblePanel(page);
       assert.equal(await page.locator('[data-halo-owned="panel"]').count(), 1);
       assert.equal(await page.evaluate(() => document.querySelector('[data-halo-owned="panel"]').shadowRoot.querySelector('.halo-core-body').textContent), 'Selected local sentence.');
       await page.keyboard.press('Escape');
@@ -201,7 +207,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       await selectFixture(page);
       await page.bringToFront();
       await page.keyboard.press('Alt+Shift+H');
-      await page.waitForSelector('[data-halo-owned="panel"]');
+      await waitForVisiblePanel(page);
       await page.keyboard.press('Escape');
 
       for (let index = 0; index < 2; index += 1) {
@@ -220,7 +226,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
         globalThis.__haloPanelObserver.observe(document.documentElement, { childList: true, subtree: true });
       });
       await page.locator('#lesson [data-halo-owned="token"]').first().click();
-      await page.waitForSelector('[data-halo-owned="panel"]');
+      await waitForVisiblePanel(page);
       assert.equal(await page.evaluate(() => { __haloPanelObserver.disconnect(); return __haloPanelAdds; }), 1);
       await page.keyboard.press('Escape');
 
@@ -234,7 +240,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
         await selectFixture(page);
         await page.bringToFront();
         await page.keyboard.press('Alt+Shift+H');
-        await page.waitForSelector('[data-halo-owned="panel"]');
+        await waitForVisiblePanel(page);
       });
       assert.equal(recoveredVersion.scriptURL, workerBeforeTermination.url());
       assert.equal(recoveredVersion.status, 'activated');
