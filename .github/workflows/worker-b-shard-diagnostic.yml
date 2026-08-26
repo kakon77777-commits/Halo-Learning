@@ -1,73 +1,56 @@
-name: Worker E Registered Diagnostic Runner
+name: Worker B Shard Diagnostic
 
 on:
   push:
     branches:
-      - parallel/v0.4.0-runtime-performance
+      - parallel/v0.4.0-browser-ux
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  worker-e:
+  diagnose:
+    if: github.event.head_commit.message == 'ci: diagnose Worker B shard budgets'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Apply verified GREEN patch
+      - run: npx playwright install --with-deps chromium
+      - name: Run fixed 64/128 real Chromium comparison
         run: |
-          python scripts/worker-e-apply-green.py
-          node --check apps/extension/src/shared/runtime-shard-browser.js
-          node --check scripts/profile-browser-runtime.js
-          git diff --check
-      - name: Worker E contract
-        run: node --test tests/worker-e-runtime-performance.test.js
-      - name: Shard regressions
-        run: node --test tests/browser-lexical-shards.test.js tests/browser-shard-loader.test.js
-      - name: Commit GREEN production changes
-        run: |
-          if ! git diff --quiet -- apps/extension/src/shared/runtime-shard-browser.js scripts/profile-browser-runtime.js; then
-            git config user.name 'Halo Worker E'
-            git config user.email 'worker-e@users.noreply.github.com'
-            git add apps/extension/src/shared/runtime-shard-browser.js scripts/profile-browser-runtime.js
-            git commit -m 'perf: instrument browser shard cold path'
-            git push origin HEAD:parallel/v0.4.0-runtime-performance
-          fi
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-      - name: Real Chromium comparison
-        continue-on-error: true
-        run: |
-          mkdir -p evidence/worker-e
-          node - <<'NODE' | tee evidence/worker-e/summary.txt
+          mkdir -p evidence/shard-diagnostic
+          node - <<'NODE' | tee evidence/shard-diagnostic/summary.txt
           const fs = require('node:fs');
           const { chromium } = require('playwright');
           const { runShardComparison, verifyBrowserShardComparison } = require('./scripts/profile-browser-runtime');
           (async () => {
             const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
             verifyBrowserShardComparison(comparison);
-            fs.writeFileSync('evidence/worker-e/comparison.json', JSON.stringify(comparison, null, 2) + '\n');
-            console.log(JSON.stringify({
+            fs.writeFileSync(
+              'evidence/shard-diagnostic/v0.4.0-browser-shard-comparison.json',
+              JSON.stringify(comparison, null, 2) + '\n'
+            );
+            const summary = {
               browser: comparison.browser,
               host: comparison.host,
               selection: comparison.selection,
               candidates: comparison.candidates.map((candidate) => ({
                 bucketCount: candidate.bucketCount,
                 measurements: candidate.measurements,
+                budgets: candidate.budgets,
                 gates: candidate.gates,
+                allBlockingPassed: candidate.allBlockingPassed,
                 coldRawMs: candidate.conditions.cold.samples.map((sample) => sample.durationMs),
                 warmSampleCount: candidate.conditions.warm.samples.reduce((n, sample) => n + sample.samplesMs.length, 0),
                 longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
               }))
-            }, null, 2));
+            };
+            console.log(JSON.stringify(summary, null, 2));
           })().catch((error) => {
             console.error(error.stack || error.message);
             process.exitCode = 1;
@@ -76,7 +59,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: worker-e-registered-diagnostic
-          path: evidence/worker-e/
-          if-no-files-found: warn
+          name: worker-b-shard-diagnostic
+          path: evidence/shard-diagnostic/
+          if-no-files-found: error
           retention-days: 14
