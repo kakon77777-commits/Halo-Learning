@@ -981,6 +981,221 @@ test('cleanup retains and retries only failed listener, observer, and history ca
   assert.equal(pushRestoreAttempts, 2);
 });
 
+function inheritedHistoryRestorationHarness(wrapHistory) {
+  const errors = [];
+  const nativeCalls = { pushState: 0, replaceState: 0 };
+  const prototype = {
+    pushState() {
+      nativeCalls.pushState += 1;
+      return 'native-push';
+    },
+    replaceState() {
+      nativeCalls.replaceState += 1;
+      return 'native-replace';
+    }
+  };
+  const target = Object.create(prototype);
+  const history = typeof wrapHistory === 'function' ? wrapHistory(target) : target;
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver: observerFixture([]),
+    eventTarget: eventTarget(),
+    history,
+    location: { href: 'https://example.test/a' },
+    onError(error, metadata) { errors.push([error.message, metadata.phase]); }
+  });
+  controller.observe({ body: element('body') });
+  return { controller, errors, history, nativeCalls, prototype, target };
+}
+
+for (const methodName of ['pushState', 'replaceState']) {
+  test(`cleanup removes the own Halo ${methodName} wrapper from an inherited history method`, () => {
+    const harness = inheritedHistoryRestorationHarness();
+    const nativeMethod = harness.prototype[methodName];
+    const capturedWrapper = harness.history[methodName];
+    assert.equal(Object.hasOwn(harness.target, methodName), true);
+    assert.notEqual(capturedWrapper, nativeMethod);
+
+    const cleaned = harness.controller.cleanup();
+
+    assert.equal(cleaned.cleaned, true);
+    assert.equal(Object.hasOwn(harness.target, methodName), false);
+    assert.equal(harness.history[methodName], nativeMethod);
+    const epoch = harness.controller.routeEpoch();
+    assert.equal(capturedWrapper.call(harness.history),
+      methodName === 'pushState' ? 'native-push' : 'native-replace');
+    assert.equal(harness.nativeCalls[methodName], 1);
+    assert.equal(harness.controller.routeEpoch(), epoch,
+      'a captured Halo wrapper remains inactive after exact topology restoration');
+  });
+
+  test(`cleanup exposes a replacement inherited ${methodName} method without a stale own shadow`, () => {
+    const harness = inheritedHistoryRestorationHarness();
+    const updatedMethod = function () { return `updated-${methodName}`; };
+    harness.prototype[methodName] = updatedMethod;
+
+    const cleaned = harness.controller.cleanup();
+
+    assert.equal(cleaned.cleaned, true);
+    assert.equal(Object.hasOwn(harness.target, methodName), false);
+    assert.equal(harness.history[methodName], updatedMethod);
+    assert.equal(harness.history[methodName](), `updated-${methodName}`);
+  });
+
+  test(`failed deletion of an inherited ${methodName} wrapper stays pending and retries exactly`, () => {
+    let rejectDelete = true;
+    let deleteAttempts = 0;
+    const harness = inheritedHistoryRestorationHarness((target) => new Proxy(target, {
+      deleteProperty(innerTarget, property) {
+        if (property === methodName) {
+          deleteAttempts += 1;
+          if (rejectDelete) return false;
+        }
+        return Reflect.deleteProperty(innerTarget, property);
+      }
+    }));
+    const capturedWrapper = harness.history[methodName];
+
+    const pending = harness.controller.cleanup();
+
+    assert.equal(pending.cleaned, false);
+    assert.equal(pending.cleanupPending, true);
+    assert.deepEqual(pending.pendingStages,
+      [methodName === 'pushState' ? 'push-state-hook' : 'replace-state-hook']);
+    assert.equal(deleteAttempts, 1);
+    assert.deepEqual(harness.errors, [[
+      `${methodName} wrapper deletion failed`,
+      `cleanup-${methodName === 'pushState' ? 'push-state' : 'replace-state'}-hook`
+    ]]);
+    assert.equal(Object.hasOwn(harness.target, methodName), true);
+    assert.equal(harness.history[methodName], capturedWrapper);
+    const epoch = harness.controller.routeEpoch();
+    assert.equal(capturedWrapper.call(harness.history),
+      methodName === 'pushState' ? 'native-push' : 'native-replace');
+    assert.equal(harness.controller.routeEpoch(), epoch);
+
+    rejectDelete = false;
+    const cleaned = harness.controller.cleanup();
+    assert.equal(cleaned.cleaned, true);
+    assert.equal(cleaned.cleanupPending, false);
+    assert.equal(deleteAttempts, 2);
+    assert.equal(Object.hasOwn(harness.target, methodName), false);
+    assert.equal(harness.history[methodName], harness.prototype[methodName]);
+    harness.controller.cleanup();
+    assert.equal(deleteAttempts, 2, 'verified deletion is never repeated');
+  });
+
+  test(`failed post-delete verification for ${methodName} stays pending without recreating a shadow`, () => {
+    let rejectVerification = false;
+    let verificationFailures = 0;
+    const harness = inheritedHistoryRestorationHarness((target) => new Proxy(target, {
+      deleteProperty(innerTarget, property) {
+        const deleted = Reflect.deleteProperty(innerTarget, property);
+        if (property === methodName && deleted) rejectVerification = true;
+        return deleted;
+      },
+      getOwnPropertyDescriptor(innerTarget, property) {
+        if (property === methodName && rejectVerification) {
+          rejectVerification = false;
+          verificationFailures += 1;
+          throw new Error(`${methodName} topology verification failed`);
+        }
+        return Reflect.getOwnPropertyDescriptor(innerTarget, property);
+      }
+    }));
+
+    const pending = harness.controller.cleanup();
+
+    assert.equal(pending.cleaned, false);
+    assert.equal(pending.cleanupPending, true);
+    assert.deepEqual(pending.pendingStages,
+      [methodName === 'pushState' ? 'push-state-hook' : 'replace-state-hook']);
+    assert.equal(verificationFailures, 1);
+    assert.deepEqual(harness.errors, [[
+      `${methodName} topology verification failed`,
+      `cleanup-${methodName === 'pushState' ? 'push-state' : 'replace-state'}-hook`
+    ]]);
+    assert.equal(Object.hasOwn(harness.target, methodName), false,
+      'a verification failure must not recreate the deleted own wrapper');
+    assert.equal(harness.history[methodName], harness.prototype[methodName]);
+
+    const cleaned = harness.controller.cleanup();
+    assert.equal(cleaned.cleaned, true);
+    assert.equal(cleaned.cleanupPending, false);
+    assert.equal(Object.hasOwn(harness.target, methodName), false);
+    assert.equal(harness.history[methodName], harness.prototype[methodName]);
+  });
+}
+
+test('cleanup restores original own history data descriptors after hostile assignment semantics', () => {
+  const originals = {
+    pushState() { return 'native-push'; },
+    replaceState() { return 'native-replace'; }
+  };
+  const target = {};
+  for (const methodName of ['pushState', 'replaceState']) {
+    Object.defineProperty(target, methodName, {
+      value: originals[methodName],
+      writable: false,
+      enumerable: false,
+      configurable: true
+    });
+  }
+  const originalDescriptors = Object.freeze({
+    pushState: Object.freeze({ ...Object.getOwnPropertyDescriptor(target, 'pushState') }),
+    replaceState: Object.freeze({ ...Object.getOwnPropertyDescriptor(target, 'replaceState') })
+  });
+  const history = new Proxy(target, {
+    set(innerTarget, property, value) {
+      if (property === 'pushState' || property === 'replaceState') {
+        Object.defineProperty(innerTarget, property, {
+          value,
+          writable: true,
+          enumerable: true,
+          configurable: true
+        });
+        return true;
+      }
+      return Reflect.set(innerTarget, property, value);
+    }
+  });
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver: observerFixture([]),
+    eventTarget: eventTarget(),
+    history,
+    location: { href: 'https://example.test/a' }
+  });
+  controller.observe({ body: element('body') });
+  for (const methodName of ['pushState', 'replaceState']) {
+    const installed = Object.getOwnPropertyDescriptor(target, methodName);
+    assert.equal(installed.enumerable, true);
+    assert.equal(installed.writable, true);
+    assert.notEqual(installed.value, originals[methodName]);
+  }
+
+  const cleaned = controller.cleanup();
+
+  assert.equal(cleaned.cleaned, true);
+  for (const methodName of ['pushState', 'replaceState']) {
+    assert.deepEqual(Object.getOwnPropertyDescriptor(target, methodName), originalDescriptors[methodName]);
+    assert.equal(history[methodName], originals[methodName]);
+  }
+});
+
+test('cleanup never deletes a third-party own method installed over an inherited Halo wrapper', () => {
+  for (const methodName of ['pushState', 'replaceState']) {
+    const harness = inheritedHistoryRestorationHarness();
+    const thirdParty = function () { return `third-party-${methodName}`; };
+    harness.history[methodName] = thirdParty;
+
+    const cleaned = harness.controller.cleanup();
+
+    assert.equal(cleaned.cleaned, true, methodName);
+    assert.equal(Object.hasOwn(harness.target, methodName), true, methodName);
+    assert.equal(harness.history[methodName], thirdParty, methodName);
+    assert.equal(harness.history[methodName](), `third-party-${methodName}`, methodName);
+  }
+});
+
 function assertCapturedHistoryWrapperStaysNativeAfterCleanup(methodName) {
   const calls = [];
   const MutationObserver = observerFixture(calls);

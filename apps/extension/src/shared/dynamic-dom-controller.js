@@ -18,6 +18,45 @@
     ownershipLost: 'ownership-lost',
     released: 'released'
   });
+  const HISTORY_HOOK_MODE = Object.freeze({
+    createdOwnData: 'created-own-data',
+    inheritedSetter: 'inherited-setter',
+    ownAccessor: 'own-accessor',
+    ownData: 'own-data',
+    uncertain: 'uncertain'
+  });
+
+  function snapshotPropertyDescriptor(descriptor) {
+    if (!descriptor) return null;
+    if (Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+      return Object.freeze({
+        value: descriptor.value,
+        writable: descriptor.writable === true,
+        enumerable: descriptor.enumerable === true,
+        configurable: descriptor.configurable === true
+      });
+    }
+    return Object.freeze({
+      get: descriptor.get,
+      set: descriptor.set,
+      enumerable: descriptor.enumerable === true,
+      configurable: descriptor.configurable === true
+    });
+  }
+
+  function isDataDescriptor(descriptor) {
+    return Boolean(descriptor && Object.prototype.hasOwnProperty.call(descriptor, 'value'));
+  }
+
+  function samePropertyDescriptor(left, right) {
+    if (!left || !right) return left === right;
+    if (isDataDescriptor(left) !== isDataDescriptor(right)) return false;
+    if (left.enumerable !== right.enumerable || left.configurable !== right.configurable) return false;
+    if (isDataDescriptor(left)) {
+      return left.value === right.value && left.writable === right.writable;
+    }
+    return left.get === right.get && left.set === right.set;
+  }
 
   function defaultIsHaloOwned() {
     return false;
@@ -359,15 +398,24 @@
       routeChanged(observedUrl, currentUrl());
     }
 
-    function createHistoryHookRecord(nativeCallable) {
-      const stateCell = { active: false, installation: HISTORY_HOOK_STATE.prepared };
+    function historyOwnDescriptor(methodName) {
+      return snapshotPropertyDescriptor(Object.getOwnPropertyDescriptor(history, methodName));
+    }
+
+    function createHistoryHookRecord(nativeCallable, originalOwnDescriptor) {
+      const stateCell = {
+        active: false,
+        installation: HISTORY_HOOK_STATE.prepared,
+        installationMode: HISTORY_HOOK_MODE.uncertain,
+        installedOwnDescriptor: null
+      };
       const wrapper = function (...args) {
         const previousUrl = stateCell.active ? currentUrl() : null;
         const result = nativeCallable.apply(this, args);
         if (stateCell.active) routeChanged(previousUrl, currentUrl());
         return result;
       };
-      return Object.freeze({ nativeCallable, stateCell, wrapper });
+      return Object.freeze({ nativeCallable, originalOwnDescriptor, stateCell, wrapper });
     }
 
     function historyHookRecord(methodName) {
@@ -379,9 +427,25 @@
       else replaceStateHookRecord = record;
     }
 
+    function rememberHistoryInstallation(record, installedOwnDescriptor) {
+      record.stateCell.installedOwnDescriptor = installedOwnDescriptor;
+      if (record.originalOwnDescriptor) {
+        record.stateCell.installationMode = isDataDescriptor(record.originalOwnDescriptor)
+          ? HISTORY_HOOK_MODE.ownData
+          : HISTORY_HOOK_MODE.ownAccessor;
+      } else if (isDataDescriptor(installedOwnDescriptor) && installedOwnDescriptor.value === record.wrapper) {
+        record.stateCell.installationMode = HISTORY_HOOK_MODE.createdOwnData;
+      } else if (!installedOwnDescriptor) {
+        record.stateCell.installationMode = HISTORY_HOOK_MODE.inheritedSetter;
+      } else {
+        record.stateCell.installationMode = HISTORY_HOOK_MODE.uncertain;
+      }
+    }
+
     function markHistoryInstallFailure(methodName, record) {
       record.stateCell.active = false;
       try {
+        rememberHistoryInstallation(record, historyOwnDescriptor(methodName));
         const current = history[methodName];
         if (current === record.wrapper) record.stateCell.installation = HISTORY_HOOK_STATE.installed;
         else if (current === record.nativeCallable) record.stateCell.installation = HISTORY_HOOK_STATE.retryable;
@@ -401,7 +465,9 @@
         throw new Error(`${methodName} changed before hook retry`);
       }
       let current;
+      let currentOwnDescriptor;
       try {
+        currentOwnDescriptor = historyOwnDescriptor(methodName);
         current = history[methodName];
       } catch (error) {
         if (record) {
@@ -412,9 +478,10 @@
       }
       if (!record) {
         if (typeof current !== 'function') return;
-        record = createHistoryHookRecord(current);
+        record = createHistoryHookRecord(current, currentOwnDescriptor);
         storeHistoryHookRecord(methodName, record);
       } else if (current === record.wrapper) {
+        rememberHistoryInstallation(record, currentOwnDescriptor);
         record.stateCell.installation = HISTORY_HOOK_STATE.installed;
         record.stateCell.active = true;
         return;
@@ -434,6 +501,7 @@
       }
       let retained;
       try {
+        rememberHistoryInstallation(record, historyOwnDescriptor(methodName));
         retained = history[methodName];
       } catch (error) {
         record.stateCell.installation = HISTORY_HOOK_STATE.uncertain;
@@ -479,18 +547,116 @@
       return null;
     }
 
+    function restoreCreatedOwnDataHook(methodName, record) {
+      const currentOwnDescriptor = historyOwnDescriptor(methodName);
+      if (!currentOwnDescriptor) return releaseHistoryHook(record);
+      const installedOwnDescriptor = record.stateCell.installedOwnDescriptor;
+      if (!isDataDescriptor(currentOwnDescriptor) || currentOwnDescriptor.value !== record.wrapper) {
+        return releaseHistoryHook(record);
+      }
+      if (installedOwnDescriptor && !samePropertyDescriptor(currentOwnDescriptor, installedOwnDescriptor)) {
+        return releaseHistoryHook(record);
+      }
+      if (!Reflect.deleteProperty(history, methodName)) {
+        throw new TypeError(`${methodName} wrapper deletion failed`);
+      }
+      const verifiedOwnDescriptor = historyOwnDescriptor(methodName);
+      if (verifiedOwnDescriptor) {
+        if (!isDataDescriptor(verifiedOwnDescriptor) || verifiedOwnDescriptor.value !== record.wrapper) {
+          return releaseHistoryHook(record);
+        }
+        throw new Error(`${methodName} wrapper deletion was not retained`);
+      }
+      return releaseHistoryHook(record);
+    }
+
+    function restoreOwnDataHook(methodName, record) {
+      const currentOwnDescriptor = historyOwnDescriptor(methodName);
+      if (samePropertyDescriptor(currentOwnDescriptor, record.originalOwnDescriptor)) {
+        return releaseHistoryHook(record);
+      }
+      if (!isDataDescriptor(currentOwnDescriptor) || currentOwnDescriptor.value !== record.wrapper) {
+        return releaseHistoryHook(record);
+      }
+      const installedOwnDescriptor = record.stateCell.installedOwnDescriptor;
+      if (installedOwnDescriptor && !samePropertyDescriptor(currentOwnDescriptor, installedOwnDescriptor)) {
+        return releaseHistoryHook(record);
+      }
+      Object.defineProperty(history, methodName, record.originalOwnDescriptor);
+      if (!samePropertyDescriptor(historyOwnDescriptor(methodName), record.originalOwnDescriptor)) {
+        throw new Error(`${methodName} descriptor restoration was not retained`);
+      }
+      return releaseHistoryHook(record);
+    }
+
+    function restoreAccessorHook(methodName, record, inherited) {
+      const currentOwnDescriptor = historyOwnDescriptor(methodName);
+      if (inherited) {
+        if (currentOwnDescriptor) return releaseHistoryHook(record);
+      } else {
+        const installedOwnDescriptor = record.stateCell.installedOwnDescriptor || record.originalOwnDescriptor;
+        if (!samePropertyDescriptor(currentOwnDescriptor, installedOwnDescriptor)) {
+          return releaseHistoryHook(record);
+        }
+      }
+
+      const current = history[methodName];
+      if (current === record.nativeCallable) return releaseHistoryHook(record);
+      if (current !== record.wrapper) return releaseHistoryHook(record);
+      history[methodName] = record.nativeCallable;
+
+      const verifiedOwnDescriptor = historyOwnDescriptor(methodName);
+      if (inherited) {
+        if (verifiedOwnDescriptor) {
+          if (!isDataDescriptor(verifiedOwnDescriptor) || verifiedOwnDescriptor.value !== record.wrapper) {
+            return releaseHistoryHook(record);
+          }
+          throw new Error(`${methodName} inherited topology restoration was not retained`);
+        }
+      } else if (!samePropertyDescriptor(verifiedOwnDescriptor, record.originalOwnDescriptor)) {
+        throw new Error(`${methodName} accessor descriptor restoration was not retained`);
+      }
+
+      const retained = history[methodName];
+      if (retained === record.nativeCallable) return releaseHistoryHook(record);
+      if (retained !== record.wrapper) return releaseHistoryHook(record);
+      throw new Error(`${methodName} restoration was not retained`);
+    }
+
     function restoreHistoryHook(methodName, record, metadata) {
       if (!record) return null;
       record.stateCell.active = false;
       try {
         if (!history) throw new TypeError(`${methodName} restoration is unavailable`);
-        if (history[methodName] === record.wrapper) {
-          history[methodName] = record.nativeCallable;
-          if (history[methodName] !== record.nativeCallable) {
-            throw new Error(`${methodName} restoration was not retained`);
-          }
+        if (record.stateCell.installationMode === HISTORY_HOOK_MODE.createdOwnData) {
+          return restoreCreatedOwnDataHook(methodName, record);
         }
-        return releaseHistoryHook(record);
+        if (record.stateCell.installationMode === HISTORY_HOOK_MODE.ownData) {
+          return restoreOwnDataHook(methodName, record);
+        }
+        if (record.stateCell.installationMode === HISTORY_HOOK_MODE.ownAccessor) {
+          return restoreAccessorHook(methodName, record, false);
+        }
+        if (record.stateCell.installationMode === HISTORY_HOOK_MODE.inheritedSetter) {
+          return restoreAccessorHook(methodName, record, true);
+        }
+
+        const currentOwnDescriptor = historyOwnDescriptor(methodName);
+        if (!record.originalOwnDescriptor && isDataDescriptor(currentOwnDescriptor) &&
+            currentOwnDescriptor.value === record.wrapper) {
+          rememberHistoryInstallation(record, currentOwnDescriptor);
+          return restoreCreatedOwnDataHook(methodName, record);
+        }
+        if (record.originalOwnDescriptor && isDataDescriptor(record.originalOwnDescriptor)) {
+          record.stateCell.installationMode = HISTORY_HOOK_MODE.ownData;
+          return restoreOwnDataHook(methodName, record);
+        }
+        if (record.originalOwnDescriptor) {
+          record.stateCell.installationMode = HISTORY_HOOK_MODE.ownAccessor;
+          return restoreAccessorHook(methodName, record, false);
+        }
+        record.stateCell.installationMode = HISTORY_HOOK_MODE.inheritedSetter;
+        return restoreAccessorHook(methodName, record, true);
       } catch (error) {
         record.stateCell.installation = HISTORY_HOOK_STATE.uncertain;
         reportError(error, `cleanup-${methodName === 'pushState' ? 'push-state' : 'replace-state'}-hook`, metadata);
