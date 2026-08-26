@@ -7,7 +7,8 @@ const Shards = require('../packages/lexical-index/browser-lexical-shards');
 const BrowserLoader = require('../apps/extension/src/shared/runtime-shard-browser');
 const {
   SHARD_COMPARISON_BUDGETS,
-  evaluateShardCandidate
+  evaluateShardCandidate,
+  summarizeShardColdDecomposition
 } = require('../scripts/profile-browser-runtime');
 
 function artifacts() {
@@ -103,4 +104,29 @@ test('frozen Worker E shard gates accept measurements exactly on every budget bo
     longTask: true
   });
   assert.equal(evaluated.allBlockingPassed, true);
+});
+
+test('cold-path decomposition reports stable p50 p95 max stage statistics and load context', () => {
+  const samples = [1, 2, 3, 4, 5].map((value) => ({
+    decomposition: {
+      stageMs: {
+        manifestFetchMs: value,
+        shardValidationMs: value * 10
+      },
+      bytesLoaded: value * 100,
+      shardCount: value,
+      usedJsHeapBytes: value === 5 ? 5000 : 'unknown'
+    }
+  }));
+
+  assert.deepEqual(summarizeShardColdDecomposition(samples), {
+    sampleCount: 5,
+    stages: [
+      { name: 'manifestFetchMs', p50Ms: 3, p95Ms: 5, maxMs: 5 },
+      { name: 'shardValidationMs', p50Ms: 30, p95Ms: 50, maxMs: 50 }
+    ],
+    bytesLoaded: { p50: 300, p95: 500, max: 500 },
+    shardCount: { p50: 3, p95: 5, max: 5 },
+    usedJsHeapBytes: { measurableSamples: 1, max: 5000 }
+  });
 });
