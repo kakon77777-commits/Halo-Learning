@@ -1,0 +1,175 @@
+name: Worker D Browser Integration Verification
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-integration
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parallel/v0.4.0-browser-integration
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Install real Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare isolated evidence
+        run: |
+          set -euo pipefail
+          root="$GITHUB_WORKSPACE/evidence/worker-d-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$root"
+          echo "EVIDENCE_ROOT=$root" >> "$GITHUB_ENV"
+          git rev-parse HEAD | tee "$root/tested-sha.txt"
+          node - <<'NODE' | tee "$root/chromium.txt"
+          const fs = require('node:fs');
+          const { spawnSync } = require('node:child_process');
+          const { chromium } = require('playwright');
+          const executable = chromium.executablePath();
+          if (!fs.existsSync(executable)) throw new Error(`Chromium missing: ${executable}`);
+          const version = spawnSync(executable, ['--version'], { encoding: 'utf8' });
+          const observed = String(version.stdout || version.stderr || '').trim();
+          if (version.status !== 0 || !observed) throw new Error('Cannot resolve Chromium version');
+          console.log('source=playwright');
+          console.log(`version=${observed}`);
+          console.log(`executable=${executable}`);
+          fs.appendFileSync(process.env.GITHUB_ENV, `HALO_CHROMIUM_EXECUTABLE=${executable}\n`);
+          NODE
+
+      - name: Focused dynamic DOM
+        id: dynamic
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 180s node --test tests/browser/dynamic-dom.e2e.test.js 2>&1 | tee "$EVIDENCE_ROOT/dynamic-dom.tap"
+
+      - name: Browser harness
+        id: harness
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/halo-no-browser
+        run: |
+          set -o pipefail
+          rm -rf "$PLAYWRIGHT_BROWSERS_PATH"
+          mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+          node --test tests/browser-harness.test.js 2>&1 | tee "$EVIDENCE_ROOT/browser-harness.tap"
+
+      - name: Accessibility contract
+        id: accessibility
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test tests/accessibility-contract.test.js 2>&1 | tee "$EVIDENCE_ROOT/accessibility-contract.tap"
+
+      - name: Serialized real browser gate
+        id: browser
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -u
+          : > "$EVIDENCE_ROOT/browser-e2e.tap"
+          overall=0
+          for file in tests/browser/*.e2e.test.js; do
+            printf '\n===== %s =====\n' "$file" | tee -a "$EVIDENCE_ROOT/browser-e2e.tap"
+            set +e
+            timeout 180s node --test "$file" 2>&1 | tee -a "$EVIDENCE_ROOT/browser-e2e.tap"
+            rc=${PIPESTATUS[0]}
+            set -e
+            printf 'exit_code=%s file=%s\n' "$rc" "$file" | tee -a "$EVIDENCE_ROOT/browser-e2e.tap"
+            if [ "$rc" -ne 0 ]; then overall=1; fi
+          done
+          exit "$overall"
+
+      - name: MV3 lifecycle collector
+        id: mv3
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 2400s node scripts/collect-worker-b-browser-evidence.js "$EVIDENCE_ROOT/collector" 2>&1 | tee "$EVIDENCE_ROOT/collector.log"
+
+      - name: Summarize verification
+        if: always()
+        env:
+          DYNAMIC: ${{ steps.dynamic.outcome }}
+          HARNESS: ${{ steps.harness.outcome }}
+          ACCESSIBILITY: ${{ steps.accessibility.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+          MV3: ${{ steps.mv3.outcome }}
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.env.EVIDENCE_ROOT;
+          const readJson = (file) => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+          const mv3ReportPath = path.join(root, 'collector', 'v0.4.0-worker-b-mv3-lifecycle.json');
+          const mv3EvalPath = path.join(root, 'collector', 'v0.4.0-worker-b-mv3-lifecycle-evaluation.json');
+          const perfEvalPath = path.join(root, 'collector', 'v0.4.0-worker-b-browser-performance-evaluation.json');
+          const result = {
+            schemaVersion: 1,
+            reportFormat: 'WorkerDVerification/v1',
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            testedSha: fs.readFileSync(path.join(root, 'tested-sha.txt'), 'utf8').trim(),
+            outcomes: {
+              dynamicDom: process.env.DYNAMIC,
+              browserHarness: process.env.HARNESS,
+              accessibility: process.env.ACCESSIBILITY,
+              browserGate: process.env.BROWSER,
+              mv3Collector: process.env.MV3
+            },
+            performanceEvaluation: readJson(perfEvalPath),
+            mv3Report: readJson(mv3ReportPath),
+            mv3Evaluation: readJson(mv3EvalPath)
+          };
+          fs.writeFileSync(path.join(root, 'verification.json'), JSON.stringify(result, null, 2) + '\n');
+          console.log(JSON.stringify(result, null, 2));
+          NODE
+
+      - name: Upload Worker D verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-d-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce Worker D gate
+        if: always()
+        env:
+          DYNAMIC: ${{ steps.dynamic.outcome }}
+          HARNESS: ${{ steps.harness.outcome }}
+          ACCESSIBILITY: ${{ steps.accessibility.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+          MV3: ${{ steps.mv3.outcome }}
+        run: |
+          set -euo pipefail
+          test "$DYNAMIC" = success
+          test "$HARNESS" = success
+          test "$ACCESSIBILITY" = success
+          test "$BROWSER" = success
+          test "$MV3" = success
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.env.EVIDENCE_ROOT;
+          const evalPath = path.join(root, 'collector', 'v0.4.0-worker-b-mv3-lifecycle-evaluation.json');
+          if (!fs.existsSync(evalPath)) throw new Error('MV3 evaluation evidence missing');
+          const evaluation = JSON.parse(fs.readFileSync(evalPath, 'utf8'));
+          if (evaluation.allBlockingPassed !== true) throw new Error('MV3 blocking gates did not all pass');
+          NODE
