@@ -176,9 +176,10 @@ test('public token and panel markers are not permanent observer authority', () =
 test('external token text, children, and semantic attributes invalidate synchronously', () => {
   const clock = fakeClock();
   const invalidated = [];
+  const changed = [];
   const calls = [];
   const MutationObserver = observerFixture(calls);
-  const token = element('token');
+  const token = element('token', { owned: true });
   token.dataset = { haloOwned: 'token' };
   const tokenText = textNode(token);
   const inserted = element('third-party', { parent: token });
@@ -186,7 +187,9 @@ test('external token text, children, and semantic attributes invalidate synchron
     MutationObserver,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
-    onRootsInvalidated: (roots) => invalidated.push(roots)
+    isHaloOwned: isPrivatelyOwned,
+    onRootsInvalidated: (roots) => invalidated.push(roots),
+    onRootsChanged: (roots) => changed.push(roots)
   });
   controller.observe({ body: element('body') });
   const observer = MutationObserver.instances[0];
@@ -201,6 +204,8 @@ test('external token text, children, and semantic attributes invalidate synchron
   observer.emit([{ type: 'attributes', target: token, attributeName: 'data-halo-pos' }]);
 
   assert.deepEqual(invalidated, [[token], [inserted], [token]]);
+  clock.tick(80);
+  assert.deepEqual(changed, [[token]]);
 });
 
 test('operation-scoped sanitation subtracts only private nodes and exact renderer records', () => {

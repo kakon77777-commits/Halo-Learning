@@ -330,7 +330,7 @@
       const records = pendingRecords;
       pendingRecords = [];
       if (cleanupStarted || suppressionDepth || !records.length) return;
-      const result = coalesceMutations(records, isHaloOwned);
+      const result = coalesceMutations(records);
       if (result.roots.length || result.removedRoots.length) {
         onRootsChanged(result.roots, Object.freeze({
           epoch,
@@ -366,7 +366,7 @@
         reportError(error, 'mutation-policy', { epoch });
       }
       if (policyOnly) return;
-      const invalidated = coalesceMutations(retained, isHaloOwned);
+      const invalidated = coalesceMutations(retained);
       if (invalidated.roots.length || invalidated.removedRoots.length) {
         try {
           onRootsInvalidated(invalidated.roots, Object.freeze({
