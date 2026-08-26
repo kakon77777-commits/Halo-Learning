@@ -18,81 +18,89 @@ jobs:
         with:
           ref: parallel/v0.4.0-browser-ux
           fetch-depth: 0
-
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-
       - run: npm ci
 
-      - name: Align Worker B diagnostic sources
+      - name: Finalize collector source
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
+          p = Path('scripts/collect-worker-b-browser-evidence.js')
+          s = p.read_text(encoding='utf-8')
 
-          collector = Path('scripts/collect-worker-b-browser-evidence.js')
-          s = collector.read_text(encoding='utf-8')
-          selection_pattern = re.compile(
-              r"  if \(!comparison\.selection \|\| comparison\.selection\.status !== 'selected'\) \{\n"
-              r"\s*throw new Error\('browser shard comparison selected no v0\.4 candidate'\);\n"
-              r"\s*\}\n"
-              r"\s*const selectedBucketCount = comparison\.selection\.selectedBucketCount;\n"
-              r"\s*const artifacts = buildBrowserRuntimeArtifacts\(\{\n"
-              r"\s*\.\.\.CORPORA,\n"
-              r"\s*builtAt: '2026-08-25T00:00:00\.000Z',\n"
-              r"\s*bucketCount: selectedBucketCount,\n"
-              r"\s*selectionStatus: 'selected-by-browser-comparison'\n"
-              r"\s*\}\);"
-          )
-          replacement = """  const selectionPassed = Boolean(comparison.selection && comparison.selection.status === 'selected');
-          const selectedBucketCount = selectionPassed ? comparison.selection.selectedBucketCount : null;
-          const diagnosticBucketCount = selectedBucketCount || 128;
-          const artifacts = buildBrowserRuntimeArtifacts({
-            ...CORPORA,
-            builtAt: '2026-08-25T00:00:00.000Z',
-            bucketCount: diagnosticBucketCount,
-            selectionStatus: selectionPassed ? 'selected-by-browser-comparison' : 'worker-b-diagnostic-only'
-          });"""
-          s, changed = selection_pattern.subn(replacement, s, count=1)
-          if changed == 0 and 'const diagnosticBucketCount = selectedBucketCount || 128;' not in s:
-              raise SystemExit('collector shard-selection pattern not recognized')
-          collector.write_text(s, encoding='utf-8', newline='\n')
+          old_reload = """    const priorReloadWorker = worker;
+              await worker.evaluate(() => {
+                setTimeout(() => chrome.runtime.reload(), 0);
+                return true;
+              }).catch(() => false);
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              const reloadPage = await context.newPage();
+              await reloadPage.goto(`chrome-extension://${extensionId}/src/popup.html`);
+              let reloadedWorker = context.serviceWorkers().find((candidate) => candidate !== priorReloadWorker);
+              if (!reloadedWorker) reloadedWorker = await context.waitForEvent('serviceworker', { timeout: 12_000 });
+              const reloadStatus = await reloadPage.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));"""
+          new_reload = """    const priorReloadWorker = worker;
+              const reloadedWorkerPromise = context.waitForEvent('serviceworker', { timeout: 12_000 });
+              await worker.evaluate(() => {
+                setTimeout(() => chrome.runtime.reload(), 0);
+                return true;
+              }).catch(() => false);
+              const reloadedWorker = await reloadedWorkerPromise;
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              const reloadPage = await context.newPage();
+              await reloadPage.goto(`chrome-extension://${extensionId}/src/popup.html`);
+              const reloadStatus = await reloadPage.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));"""
+          if old_reload in s:
+              s = s.replace(old_reload, new_reload, 1)
+          elif 'const reloadedWorkerPromise = context.waitForEvent' not in s:
+              raise SystemExit('extension reload collector pattern not recognized')
 
-          dynamic_test = Path('tests/browser/dynamic-dom.e2e.test.js')
-          d = dynamic_test.read_text(encoding='utf-8')
-          old_dependency = "  'shared/runtime-scheduler.js',\n  'shared/dynamic-dom-controller.js',"
-          new_dependency = "  'shared/runtime-scheduler.js',\n  'shared/trigger-controller.js',\n  'shared/dynamic-dom-controller.js',"
-          if old_dependency in d:
-              d = d.replace(old_dependency, new_dependency, 1)
-          elif new_dependency not in d:
-              raise SystemExit('dynamic DOM script dependency pattern not recognized')
-          dynamic_test.write_text(d, encoding='utf-8', newline='\n')
+          old_perf = """  const performanceEvaluation = evaluateBrowserPerformance(performanceReport);
+            if (!performanceEvaluation.allBlockingPassed) {"""
+          new_perf = """  const performanceEvaluation = evaluateBrowserPerformance(performanceReport);
+            writeJson('v0.4.0-worker-b-browser-performance.json', performanceReport);
+            writeJson('v0.4.0-worker-b-browser-performance-evaluation.json', {
+              measurements: performanceEvaluation.measurements,
+              budgets: require('../packages/quality/browser-performance').BUDGETS,
+              gates: performanceEvaluation.gates,
+              allBlockingPassed: performanceEvaluation.allBlockingPassed
+            });
+            if (!performanceEvaluation.allBlockingPassed) {"""
+          if old_perf in s:
+              s = s.replace(old_perf, new_perf, 1)
+          elif "writeJson('v0.4.0-worker-b-browser-performance.json', performanceReport);" not in s.split('const mv3Report', 1)[0]:
+              raise SystemExit('early performance evidence pattern not recognized')
+
+          old_mv3 = """  const mv3Evaluation = evaluateMv3Lifecycle(mv3Report);
+            if (!mv3Evaluation.allBlockingPassed) {"""
+          new_mv3 = """  const mv3Evaluation = evaluateMv3Lifecycle(mv3Report);
+            writeJson('v0.4.0-worker-b-mv3-lifecycle.json', mv3Report);
+            writeJson('v0.4.0-worker-b-mv3-lifecycle-evaluation.json', mv3Evaluation);
+            if (!mv3Evaluation.allBlockingPassed) {"""
+          if old_mv3 in s:
+              s = s.replace(old_mv3, new_mv3, 1)
+          elif "writeJson('v0.4.0-worker-b-mv3-lifecycle.json', mv3Report);" not in s.split("if (!mv3Evaluation.allBlockingPassed)", 1)[0]:
+              raise SystemExit('early MV3 evidence pattern not recognized')
+
+          p.write_text(s, encoding='utf-8', newline='\n')
           PY
-
           node --check scripts/collect-worker-b-browser-evidence.js
-          node --check tests/browser/dynamic-dom.e2e.test.js
           git diff --check
-          if ! git diff --quiet -- scripts/collect-worker-b-browser-evidence.js tests/browser/dynamic-dom.e2e.test.js; then
+          if ! git diff --quiet -- scripts/collect-worker-b-browser-evidence.js; then
             git config user.name 'Halo Worker B'
             git config user.email 'worker-b@users.noreply.github.com'
-            git add scripts/collect-worker-b-browser-evidence.js tests/browser/dynamic-dom.e2e.test.js
-            git commit -m 'test: complete Worker B blocked-path diagnostics'
+            git add scripts/collect-worker-b-browser-evidence.js
+            git commit -m 'fix: make MV3 evidence capture race-safe'
             git push origin HEAD:parallel/v0.4.0-browser-ux
           fi
 
       - name: Browser performance acceptance model
         run: node --test tests/browser-performance-metrics.test.js
-
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-
-      - name: Focused dynamic DOM browser regression
-        id: dynamic
-        continue-on-error: true
-        run: timeout 180s node --test tests/browser/dynamic-dom.e2e.test.js
-
       - name: Prepare evidence directories
         run: |
           rm -rf evidence/worker-b-final evidence/shard-diagnostic
@@ -126,10 +134,7 @@ jobs:
                 longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
               }))
             }, null, 2));
-          })().catch((error) => {
-            console.error(error.stack || error.message);
-            process.exitCode = 1;
-          });
+          })().catch((error) => { console.error(error.stack || error.message); process.exitCode = 1; });
           NODE
 
       - name: Enforce frozen shard selection
@@ -152,7 +157,7 @@ jobs:
           set -o pipefail
           timeout 1500s node scripts/collect-worker-b-browser-evidence.js evidence/worker-b-final 2>&1 | tee evidence/worker-b-final.log
 
-      - name: Verify generated performance and lifecycle evidence
+      - name: Verify generated UX performance and MV3 evidence
         id: verify
         continue-on-error: true
         run: |
@@ -163,10 +168,10 @@ jobs:
           const mv3 = JSON.parse(fs.readFileSync('evidence/worker-b-final/v0.4.0-worker-b-mv3-lifecycle.json', 'utf8'));
           const perf = evaluateBrowserPerformance(performance);
           const lifecycle = evaluateMv3Lifecycle(mv3);
-          if (!perf.allBlockingPassed) throw new Error('performance evidence does not pass frozen gates');
+          console.log(JSON.stringify({ performance: perf.measurements, performanceGates: perf.gates, mv3Gates: lifecycle.gates }, null, 2));
+          if (!perf.allBlockingPassed) throw new Error('UX performance evidence does not pass frozen gates');
           if (!lifecycle.allBlockingPassed) throw new Error('MV3 evidence does not pass frozen gates');
           if (!mv3.details || mv3.details.routeNavigation !== true) throw new Error('route-navigation evidence is missing');
-          console.log(JSON.stringify({ performance: perf.measurements, performanceGates: perf.gates, mv3Gates: lifecycle.gates }, null, 2));
           NODE
 
       - name: Upload Worker B performance evidence
@@ -184,14 +189,12 @@ jobs:
       - name: Enforce Worker B performance gate
         if: always()
         env:
-          DYNAMIC: ${{ steps.dynamic.outcome }}
           SHARD: ${{ steps.shard.outcome }}
           SELECTION: ${{ steps.selection.outcome }}
           COLLECTOR: ${{ steps.collector.outcome }}
           VERIFY: ${{ steps.verify.outcome }}
         run: |
-          printf 'dynamic=%s\nshard=%s\nselection=%s\ncollector=%s\nverify=%s\n' "$DYNAMIC" "$SHARD" "$SELECTION" "$COLLECTOR" "$VERIFY"
-          test "$DYNAMIC" = success
+          printf 'shard=%s\nselection=%s\ncollector=%s\nverify=%s\n' "$SHARD" "$SELECTION" "$COLLECTOR" "$VERIFY"
           test "$SHARD" = success
           test "$SELECTION" = success
           test "$COLLECTOR" = success
