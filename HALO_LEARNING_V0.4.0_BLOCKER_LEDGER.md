@@ -8,31 +8,38 @@ release:
 branch:
   name: integration/v0.4.0-final-convergence
   remote_head: self
-  source_head_before_ledger_commit: 312730a9f2d22e2523993743cfdf81f5f54629f7
+  source_head_before_ledger_commit: 392a2c67995925d9b582b8b70b63e43648df0075
 
 last_round:
-  blocker_id: B03
-  prompt: 06_B03_SENSITIVE_SITE_STATUS_PROMPT.md
+  blocker_id: B05
+  prompt: 07_B05_TRIGGER_CONTROLLER_PANEL_PROMPT.md
   result: blocked
-  restart_anchor: a1a128977bcc6853368231872c118390b24c8803
+  restart_anchor: bdc20369cc603d82f9b6ce00b8432aafd0dba83e
   rounds_consumed: 2
   commits:
-    - 67c6a66a73d07899bb25f2f61ffc43448699dc6c
-    - 231c6aec234f774141914052561f8e187dc8b9d7
-    - a40eda9530c59912767f401f5b0145df3ede77a1
-    - df247149eb73d0073e4d33058ef959b387951640
-    - 709cfc87212b0e1ff3007f551a0a9bc582801fc7
-    - 312730a9f2d22e2523993743cfdf81f5f54629f7
+    - f32b01edf15df0c3b1013808c400d978f0d17943
+    - f90366a4540018945c4636400812ed573488a068
+    - 42e5d64688e568c7bbf6edbb1edf21036039f5d6
+    - 392a2c67995925d9b582b8b70b63e43648df0075
   ci_runs:
-    - run: 32995367747
+    - run: 32996197609
+      job: 98266020920
       result: fail
-      evidence: production handler direct invocation lacked activeTab user-gesture authority
-    - run: 32995877994
-      job: 98264839319
+      evidence: baseline trigger-controller browser lane timed out waiting for a visible Halo panel at line 91
+    - run: 32996197405
+      job: 98266019346
       result: fail
-      evidence: original status-unavailable point passed; later allowed lexical network accounting assertion failed
+      evidence: command registered but Playwright renderer keyboard event produced no content receiver and panel count zero
+    - run: 32998966552
+      job: 98275440514
+      result: pass
+      evidence: X11 native shortcut reached content status and produced exactly one panel in the bounded diagnostic
+    - run: 32999533292
+      job: 98277398112
+      result: fail
+      evidence: trigger/browser-entry units 28/28 pass; installed-browser lifecycle reaches a Halo panel element but it remains hidden and line 91 times out
   evidence:
-    - docs/validation/v0.4.0-b03-sensitive-site-status.md
+    - docs/validation/v0.4.0-b05-trigger-controller-panel.md
 
 blockers:
   B01_dynamic_child_insertion:
@@ -48,8 +55,8 @@ blockers:
     state: resolved
     evidence: docs/validation/v0.4.0-b04-sentence-pipeline-chrome-isolation.md
   B05_trigger_controller_panel:
-    state: open
-    evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
+    state: blocked
+    evidence: docs/validation/v0.4.0-b05-trigger-controller-panel.md
   B06_mv3_reload_lifecycle:
     state: open
     evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
@@ -82,6 +89,7 @@ release_debt:
 
 future_hardening:
   - B03 requires separately authorized continuation beyond the exhausted two-round budget
+  - B05 requires separately authorized continuation beyond the exhausted two-round budget; restart from the panel-exists-but-hidden native-command observation
   - run canonical browser lanes on a CI Chromium host without local administrator URL blocking
 
 main_merge_allowed: false
