@@ -17,6 +17,7 @@
     'src/shared/sentence-pipeline.js',
     'src/shared/runtime-scheduler.js',
     'src/shared/dynamic-dom-controller.js',
+    'src/shared/token-child-continuity.js',
     'src/shared/reversible-renderer.js',
     'src/shared/trigger-controller.js',
     'src/content.js'
