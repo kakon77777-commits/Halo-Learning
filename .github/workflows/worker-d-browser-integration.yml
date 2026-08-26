@@ -52,45 +52,17 @@ jobs:
           let source = fs.readFileSync(target, 'utf8');
           const pageAnchor = '      const page = await context.newPage();';
           if (!source.includes(pageAnchor)) throw new Error('dynamic-DOM page anchor missing');
-          source = source.replace(
-            '    context = await launchExtension({',
-            "    console.error('[D-DIAG] launchExtension:start');\n    context = await launchExtension({"
-          );
-          source = source.replace(
-            '    await withFixtureServer({',
-            "    console.error('[D-DIAG] launchExtension:end');\n    console.error('[D-DIAG] withFixtureServer:start');\n    await withFixtureServer({"
-          );
-          source = source.replace(pageAnchor, `${pageAnchor}
-      console.error('[D-DIAG] page:new:end');
-      let __haloDiagSeq = 0;
-      for (const __haloDiagMethod of ['goto', 'evaluate', 'addScriptTag', 'waitForSelector', 'waitForFunction', 'waitForTimeout']) {
-        const __haloDiagOriginal = page[__haloDiagMethod].bind(page);
-        page[__haloDiagMethod] = async (...args) => {
-          const id = ++__haloDiagSeq;
-          const head = args[0];
-          const detail = typeof head === 'string'
-            ? head
-            : typeof head === 'function'
-              ? String(head).replace(/\\s+/g, ' ').slice(0, 120)
-              : head && typeof head === 'object' && head.path
-                ? head.path
-                : typeof head;
-          console.error('[D-DIAG] ' + id + ' ' + __haloDiagMethod + ':start ' + detail);
-          try {
-            const value = await __haloDiagOriginal(...args);
-            console.error('[D-DIAG] ' + id + ' ' + __haloDiagMethod + ':end');
-            return value;
-          } catch (error) {
-            console.error('[D-DIAG] ' + id + ' ' + __haloDiagMethod + ':error ' + (error && error.message));
-            throw error;
-          }
-        };
-      }`);
-          source = source.replace(
-            "    });\n  } finally {\n    if (context) await context.close();",
-            "    });\n    console.error('[D-DIAG] withFixtureServer:end');\n  } finally {\n    console.error('[D-DIAG] contextClose:start');\n    if (context) await context.close();\n    console.error('[D-DIAG] contextClose:end');"
-          );
+          source = source.replace('    context = await launchExtension({', "    console.error('[D-DIAG] launchExtension:start');\n    context = await launchExtension({");
+          source = source.replace('    await withFixtureServer({', "    console.error('[D-DIAG] launchExtension:end');\n    console.error('[D-DIAG] withFixtureServer:start');\n    await withFixtureServer({");
+          source = source.replace(pageAnchor, "      console.error('[D-DIAG] page:new:start');\n" + pageAnchor + "\n      console.error('[D-DIAG] page:new:end');");
+          let boundary = 0;
+          source = source.replace(/^([ \t]*)(.*\bawait page\.(?:goto|evaluate|addScriptTag|waitForSelector|waitForFunction|waitForTimeout)\b.*)$/gm, (whole, indent, line) => {
+            boundary += 1;
+            return indent + "console.error('[D-DIAG] boundary:" + boundary + ":before');\n" + indent + line.trimStart();
+          });
+          source = source.replace("    });\n  } finally {\n    if (context) await context.close();", "    });\n    console.error('[D-DIAG] withFixtureServer:end');\n  } finally {\n    console.error('[D-DIAG] contextClose:start');\n    if (context) await context.close();\n    console.error('[D-DIAG] contextClose:end');");
           fs.writeFileSync(target, source);
+          console.log(`instrumented_boundaries=${boundary}`);
           NODE
 
       - name: Run focused diagnostic
