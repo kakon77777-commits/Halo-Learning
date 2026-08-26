@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   repair-matrix-test:
-    if: "${{ startsWith(github.event.head_commit.message, 'ci: apply Worker B matrix timing repair') }}"
+    if: "${{ startsWith(github.event.head_commit.message, 'ci: apply Worker B matrix dependency repair') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -23,12 +23,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - name: Remove invalid synchronous active assumptions
+      - name: Align matrix harness with runtime dependencies and async activation
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('tests/browser/browser-runtime-matrix.e2e.test.js')
           s = p.read_text(encoding='utf-8')
+          trigger_anchor = "  'shared/settings.js',\n  'shared/sentence-pipeline.js',\n"
+          trigger_replacement = "  'shared/settings.js',\n  'shared/trigger-controller.js',\n  'shared/sentence-pipeline.js',\n"
+          if s.count(trigger_anchor) != 1:
+              raise SystemExit(f'expected exactly one trigger dependency anchor, found {s.count(trigger_anchor)}')
+          s = s.replace(trigger_anchor, trigger_replacement)
           pairs = [
             ("  const firstStatus = await sendContentCommand(page, 'HALO_APPLY_MARKING');\n  assert.equal(firstStatus && firstStatus.active, true, `${fixture.id}: APPLY did not activate runtime`);\n", "  await sendContentCommand(page, 'HALO_APPLY_MARKING');\n"),
             ("  const secondStatus = await sendContentCommand(page, 'HALO_APPLY_MARKING');\n  assert.equal(secondStatus && secondStatus.active, true, `${fixture.id}: second APPLY did not activate runtime`);\n", "  await sendContentCommand(page, 'HALO_APPLY_MARKING');\n")
@@ -49,5 +54,5 @@ jobs:
           git config user.email "worker-b@users.noreply.github.com"
           git add tests/browser/browser-runtime-matrix.e2e.test.js
           git diff --cached --quiet && { echo 'No test change to commit'; exit 1; }
-          git commit -m "test: align matrix with asynchronous activation"
+          git commit -m "test: align matrix harness with runtime dependencies"
           git push origin HEAD:parallel/v0.4.0-browser-ux
