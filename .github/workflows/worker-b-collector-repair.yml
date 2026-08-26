@@ -1,0 +1,45 @@
+name: Worker B Collector Repair
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-ux
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'ci: add one-shot Worker B collector repair'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parallel/v0.4.0-browser-ux
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Repair helper return-shape assumption
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/collect-worker-b-browser-evidence.js')
+          s = p.read_text(encoding='utf-8')
+          old = "details.workerRestart = { stopped, status };\n    gates.workerRestart = Boolean(stopped && stopped.runningStatus === 'stopped' && restartedWorker !== worker && status && status.mode === 'ready');"
+          new = "details.workerRestart = { stoppedVersionId: stopped, status };\n    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) && restartedWorker !== worker && status && status.mode === 'ready');"
+          if old not in s:
+              raise SystemExit('expected collector pattern not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8', newline='\n')
+          PY
+          node --check scripts/collect-worker-b-browser-evidence.js
+          node --test tests/browser-performance-metrics.test.js
+      - name: Commit repair
+        run: |
+          git config user.name 'Halo Worker B'
+          git config user.email 'worker-b@users.noreply.github.com'
+          git add scripts/collect-worker-b-browser-evidence.js
+          git diff --cached --check
+          git commit -m 'fix: align MV3 collector with CDP helper contract'
+          git push origin HEAD:parallel/v0.4.0-browser-ux
