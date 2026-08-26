@@ -137,6 +137,18 @@
     }
   }
 
+  function assertCanonicalUtf8Strings(name, values) {
+    if (values.length < 2) return;
+    let previous = bytesFor(values[0]);
+    for (let index = 1; index < values.length; index += 1) {
+      const current = bytesFor(values[index]);
+      if (compareBytes(previous, current) > 0) {
+        fail('NON_CANONICAL_ORDER', `${name} is not canonical`);
+      }
+      previous = current;
+    }
+  }
+
   function validateManifest(raw) {
     if (raw.schemaVersion !== SCHEMA_VERSION || raw.manifestFormat !== MANIFEST_FORMAT ||
         !raw.builder || raw.builder.id !== BUILDER.id || raw.builder.version !== BUILDER.version) {
@@ -276,7 +288,7 @@
         raw.statistics.glossCount !== raw.glosses.length) {
       fail('SHARD_INVALID', 'Browser lexical shard metadata is invalid');
     }
-    assertCanonical('shard glosses', raw.glosses, compareUtf8);
+    assertCanonicalUtf8Strings('shard glosses', raw.glosses);
     assertCanonicalRows('shard lexical rows', raw.lexicalRows);
     assertCanonicalRows('shard morphology rows', raw.morphologyRows);
     for (const [index, row] of raw.lexicalRows.entries()) {
