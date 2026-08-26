@@ -1303,7 +1303,7 @@ test('normalization descriptors consume the DOM Standard record topology without
     trailingEmpty,
     standalone
   ]);
-  const containers = new Set([dom.link, nested]);
+  const containers = new Set([wrapper, dom.link, nested]);
   const normalizationOperations = removalPhase.operations.filter((operation) =>
     (operation.type === 'characterData' && textNodes.has(operation.target)) ||
     (operation.type === 'childList' && containers.has(operation.target) &&
@@ -1318,18 +1318,19 @@ test('normalization descriptors consume the DOM Standard record topology without
   });
   const characterChange = (target, oldValue) => ({ type: 'characterData', target, oldValue });
   const normativeRecords = [
+    childRemoval(wrapper, ownedText),
     childRemoval(dom.link, leadingEmpty),
-    characterChange(first, 'A'),
     childRemoval(dom.link, middleEmpty),
+    characterChange(first, 'A'),
     childRemoval(dom.link, ownedText),
+    characterChange(first, 'Amodel'),
     childRemoval(dom.link, following),
     characterChange(second, 'C'),
     childRemoval(dom.link, secondFollowing),
-    characterChange(nestedFirst, 'E'),
     childRemoval(nested, nestedEmpty),
+    characterChange(nestedFirst, 'E'),
     childRemoval(nested, nestedFollowing),
-    childRemoval(dom.link, trailingEmpty),
-    characterChange(standalone, 'S')
+    childRemoval(dom.link, trailingEmpty)
   ];
 
   const exactSanitizer = Dynamic.createRendererMutationSanitizer();
@@ -1347,7 +1348,7 @@ test('normalization descriptors consume the DOM Standard record topology without
   const mixedSanitizer = Dynamic.createRendererMutationSanitizer();
   for (const operation of normalizationOperations) mixedSanitizer.expect(operation);
   const legitimateExtra = dom.document.createElement('strong');
-  const mixedRecords = normativeRecords.map((record, index) => index === 0
+  const mixedRecords = normativeRecords.map((record, index) => index === 1
     ? { ...record, addedNodes: [legitimateExtra] }
     : record);
   const retainedMixedRecords = mixedRecords

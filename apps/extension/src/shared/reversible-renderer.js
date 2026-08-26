@@ -632,6 +632,9 @@
           metadata && children[0].nodeValue === metadata.original;
         parents.set(parent, (parents.get(parent) ?? true) && cleanOwnership);
         track(wrapper);
+        // replaceWith(...children) first detaches every child from the owned wrapper,
+        // then replaces the wrapper in its parent. Chromium reports both records.
+        expectChildList(wrapper, [], children);
         expectChildList(parent, children, [wrapper]);
         if (typeof wrapper.replaceWith === 'function') wrapper.replaceWith(...children);
         else {
@@ -660,8 +663,16 @@
           } else {
             for (const node of group.slice(0, survivorIndex)) expectChildList(container, [], [node]);
             const survivor = group[survivorIndex];
-            expectMutation({ type: 'characterData', target: survivor, oldValue: survivor.nodeValue });
-            for (const node of group.slice(survivorIndex + 1)) expectChildList(container, [], [node]);
+            let survivorValue = survivor.nodeValue;
+            for (const node of group.slice(survivorIndex + 1)) {
+              // DOM normalize mutates the survivor once for each non-empty text node
+              // that it merges; empty nodes are removed without a characterData record.
+              if (node.nodeValue !== '') {
+                expectMutation({ type: 'characterData', target: survivor, oldValue: survivorValue });
+                survivorValue += node.nodeValue;
+              }
+              expectChildList(container, [], [node]);
+            }
           }
           group = [];
         };
