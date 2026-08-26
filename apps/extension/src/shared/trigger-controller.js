@@ -74,6 +74,7 @@
     let dismissTimer = null;
     let transitionGeneration = 0;
     let dispatchSerial = 0;
+    let panelOpenTarget = null;
 
     function safeEffect(effect) {
       try {
@@ -148,24 +149,28 @@
     function open(targetId, source, serial) {
       current = frozenState({ name: 'core-open', targetId, source });
       const transition = ++transitionGeneration;
-      if (!cancelTimers(transition) || transition !== transitionGeneration) return current;
-      safeEffect(() => openPanel(Object.freeze({ targetId, source })));
+      cancelTimers(transition);
+      if (current.name === 'core-open' && current.targetId === targetId && panelOpenTarget !== targetId) {
+        panelOpenTarget = targetId;
+        safeEffect(() => openPanel(Object.freeze({ targetId, source })));
+      }
       return current;
     }
 
     function dismiss(reason, serial) {
       if (current.name === 'idle' || current.name === 'dismissed') return current;
       const targetId = current.targetId;
-      const wasOpen = current.name === 'core-open';
+      const wasOpen = current.name === 'core-open' && panelOpenTarget !== null;
       current = frozenState({ name: 'dismissed', targetId, reason });
       const transition = ++transitionGeneration;
       if (!cancelTimers(transition) || transition !== transitionGeneration) return current;
-      if (wasOpen) safeEffect(() => closePanel(reason));
+      if (wasOpen) { panelOpenTarget = null; safeEffect(() => closePanel(reason)); }
       return current;
     }
 
     function beginHover(targetId, serial) {
       if (current.name === 'core-open' && current.targetId === targetId) {
+        if (dismissTimer === null) return current;
         const intent = ++transitionGeneration;
         cancelDismiss(intent);
         return current;
@@ -174,11 +179,11 @@
       if ((current.name === 'candidate' || current.name === 'primed') && current.targetId === targetId) {
         return current;
       }
-      const wasOpen = current.name === 'core-open';
+      const wasOpen = current.name === 'core-open' && panelOpenTarget !== null;
       current = frozenState({ name: 'candidate', targetId });
       const transition = ++transitionGeneration;
       if (!cancelTimers(transition) || transition !== transitionGeneration) return current;
-      if (wasOpen) safeEffect(() => closePanel('target-switch'));
+      if (wasOpen) { panelOpenTarget = null; safeEffect(() => closePanel('target-switch')); }
       if (current.name !== 'candidate' || current.targetId !== targetId) return current;
       scheduleHover(targetId, primeThresholdMs, transition);
       return current;
@@ -199,11 +204,11 @@
     }
 
     function terminate(type, serial) {
-      const wasOpen = current.name === 'core-open';
+      const wasOpen = current.name === 'core-open' && panelOpenTarget !== null;
       current = frozenState({ name: 'cancelled' });
       transitionGeneration += 1;
       cancelTimers();
-      if (wasOpen) safeEffect(() => closePanel(type === 'ROUTE_CLEANUP' ? 'route-cleanup' : 'cancel'));
+      if (wasOpen) { panelOpenTarget = null; safeEffect(() => closePanel(type === 'ROUTE_CLEANUP' ? 'route-cleanup' : 'cancel')); }
       return current;
     }
 

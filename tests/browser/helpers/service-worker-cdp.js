@@ -3,43 +3,69 @@
 async function stopExtensionServiceWorker(options) {
   const { session, scriptUrl } = options || {};
   const timeoutMs = Number.isFinite(options && options.timeoutMs) ? options.timeoutMs : 5000;
-  if (!session || typeof session.send !== 'function' || typeof session.on !== 'function' ||
-      typeof scriptUrl !== 'string' || !scriptUrl.startsWith('chrome-extension://')) {
-    throw new TypeError('CDP session and extension worker script URL are required');
+  const schedule = options && options.setTimeout ? options.setTimeout : setTimeout;
+  const unschedule = options && options.clearTimeout ? options.clearTimeout : clearTimeout;
+  if (!session || typeof session.send !== 'function' || typeof session.on !== 'function' || typeof session.off !== 'function' ||
+      typeof schedule !== 'function' || typeof unschedule !== 'function' ||
+      typeof scriptUrl !== 'string' || !scriptUrl.startsWith('chrome-extension://')) throw new TypeError('CDP session with on/off and extension worker script URL is required');
+  let lookupTimer;
+  let stopTimer;
+  let lookupListener;
+  let stopListener;
+  function cleanupLookup() {
+    if (lookupTimer !== undefined) { const timer = lookupTimer; lookupTimer = undefined; unschedule(timer); }
+    if (lookupListener) { const listener = lookupListener; lookupListener = null; session.off('ServiceWorker.workerVersionUpdated', listener); }
   }
-  let timer;
-  let listener;
+  function cleanupStop() {
+    if (stopTimer !== undefined) { const timer = stopTimer; stopTimer = undefined; unschedule(timer); }
+    if (stopListener) { const listener = stopListener; stopListener = null; session.off('ServiceWorker.workerVersionUpdated', listener); }
+  }
   try {
-    let stoppedResolve;
-    let selectedVersionId = null;
-    const stopped = new Promise((resolve) => { stoppedResolve = resolve; });
     const versionId = await new Promise((resolve, reject) => {
-      listener = (event) => {
-        for (const version of event && Array.isArray(event.versions) ? event.versions : []) {
-          if (version && version.scriptURL === scriptUrl && version.versionId === selectedVersionId &&
-              version.runningStatus === 'stopped') stoppedResolve(version.versionId);
-          if (version && version.scriptURL === scriptUrl && version.status === 'activated' &&
-              version.runningStatus === 'running' && typeof version.versionId === 'string') {
-            selectedVersionId = version.versionId;
-            resolve(version.versionId);
-            return;
-          }
-        }
+      let settled = false;
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanupLookup();
+        reject(error);
       };
-      session.on('ServiceWorker.workerVersionUpdated', listener);
-      timer = setTimeout(() => reject(new Error('CDP service-worker lookup timed out')), timeoutMs);
-      Promise.resolve(session.send('ServiceWorker.enable')).catch(reject);
+      lookupListener = (event) => {
+        const live = (event && Array.isArray(event.versions) ? event.versions : []).find((version) => version && version.scriptURL === scriptUrl && version.status === 'activated' && version.runningStatus === 'running' && typeof version.versionId === 'string');
+        if (!live || settled) return;
+        settled = true;
+        const selected = live.versionId;
+        cleanupLookup();
+        resolve(selected);
+      };
+      lookupTimer = schedule(() => fail(new Error('CDP service-worker lookup timed out')), timeoutMs);
+      session.on('ServiceWorker.workerVersionUpdated', lookupListener);
+      try { Promise.resolve(session.send('ServiceWorker.enable')).catch(fail); } catch (error) { fail(error); }
     });
-    await session.send('ServiceWorker.stopWorker', { versionId });
-    const stoppedId = await Promise.race([stopped, new Promise((_resolve, reject) => {
-      timer = setTimeout(() => reject(new Error('CDP service-worker stop timed out')), timeoutMs);
-    })]);
-    if (stoppedId !== versionId) throw new Error('CDP stopped the wrong service-worker version');
+    let stopIssued = false;
+    const stopped = new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        cleanupStop();
+        if (error) reject(error); else resolve();
+      };
+      stopListener = (event) => {
+        if (!stopIssued) return;
+        const match = (event && Array.isArray(event.versions) ? event.versions : []).find((version) => version && version.versionId === versionId && version.scriptURL === scriptUrl && version.runningStatus === 'stopped');
+        if (match) finish();
+      };
+      stopTimer = schedule(() => finish(new Error('CDP service-worker stop timed out')), timeoutMs);
+      session.on('ServiceWorker.workerVersionUpdated', stopListener);
+    });
+    stopIssued = true;
+    let sent;
+    try { sent = Promise.resolve(session.send('ServiceWorker.stopWorker', { versionId })); } catch (error) { sent = Promise.reject(error); }
+    await Promise.all([sent, stopped]);
     return versionId;
   } finally {
-    clearTimeout(timer);
-    if (listener && typeof session.off === 'function') session.off('ServiceWorker.workerVersionUpdated', listener);
+    cleanupLookup();
+    cleanupStop();
   }
 }
-
 module.exports = Object.freeze({ stopExtensionServiceWorker });

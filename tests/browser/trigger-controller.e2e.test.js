@@ -36,6 +36,29 @@ async function selectFixture(page) {
   });
 }
 
+async function runAndObserveWorkerRecovery(session, scriptUrl, action, timeoutMs = 5000) {
+  let listener;
+  let timer;
+  const running = new Promise((resolve, reject) => {
+    listener = (event) => {
+      const match = (event && Array.isArray(event.versions) ? event.versions : []).find((version) =>
+        version && version.scriptURL === scriptUrl && version.status === 'activated' &&
+        version.runningStatus === 'running' && typeof version.versionId === 'string');
+      if (match) resolve(match);
+    };
+    session.on('ServiceWorker.workerVersionUpdated', listener);
+    timer = setTimeout(() => reject(new Error('restarted extension worker did not become activated/running')), timeoutMs);
+  });
+  try {
+    await session.send('ServiceWorker.enable');
+    await action();
+    return await running;
+  } finally {
+    clearTimeout(timer);
+    session.off('ServiceWorker.workerVersionUpdated', listener);
+  }
+}
+
 test('installed MV3 extension verifies popup, command, modes, dismissal, menu registration, restart, and reinjection', async () => {
   const executable = resolveChromiumExecutable({
     environment: process.env,
@@ -207,10 +230,15 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       const workerBeforeTermination = await extensionWorker(context);
       const cdp = await context.newCDPSession(page);
       await stopExtensionServiceWorker({ session: cdp, scriptUrl: workerBeforeTermination.url() });
-      await selectFixture(page);
-      await page.bringToFront();
-      await page.keyboard.press('Alt+Shift+H');
-      await page.waitForSelector('[data-halo-owned="panel"]');
+      const recoveredVersion = await runAndObserveWorkerRecovery(cdp, workerBeforeTermination.url(), async () => {
+        await selectFixture(page);
+        await page.bringToFront();
+        await page.keyboard.press('Alt+Shift+H');
+        await page.waitForSelector('[data-halo-owned="panel"]');
+      });
+      assert.equal(recoveredVersion.scriptURL, workerBeforeTermination.url());
+      assert.equal(recoveredVersion.status, 'activated');
+      assert.equal(recoveredVersion.runningStatus, 'running');
       const runningWorkers = context.serviceWorkers().filter((candidate) => candidate.url().startsWith(`chrome-extension://${extensionId}/`));
       assert.ok(runningWorkers.length >= 1);
     });

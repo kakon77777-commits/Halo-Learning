@@ -296,6 +296,54 @@ Error: Chromium executable is required for Halo browser gates
 
 `progress.md` was not edited.
 
+## Fix round 5 — panel-effect reconciliation and exact CDP stop window
+
+The final adversarial RED exposed two remaining ownership gaps. A same-target
+entry dispatched from `clearTimeout` incorrectly erased the authoritative
+outer leave timer, while a nested leave during explicit open could leave the
+controller in `core-open` without ever invoking Task 7's panel effect. The CDP
+test also proved that the stop helper did not use injectable timers, so its
+post-command acknowledgement window and zero-resource cleanup could not be
+validated deterministically.
+
+The controller now tracks panel-effect ownership separately from state/timer
+intent. Same-target entry with no pending dismiss is a material no-op. A nested
+leave keeps its newest dismiss timer while the outer explicit transition still
+reconciles exactly one required open effect; nested same-target explicit open
+does not duplicate that effect, and nested cancellation prevents it. The
+resulting delayed dismiss therefore closes a panel that was actually opened.
+
+Service-worker termination is now an explicit two-phase CDP protocol. Phase A
+selects one exact-script-URL `activated`/`running` version and immediately
+removes its lookup listener and timer. Phase B freezes that version ID, installs
+a distinct stop listener, ignores stopped observations before `stopIssued` and
+all other versions, then awaits both successful `ServiceWorker.stopWorker`
+delivery and a post-issue stopped acknowledgement. Separate injectable timers
+and listener cleanup cover success, timeout, and send rejection; sessions
+without `off` are rejected. The installed extension recovery test registers
+its observer before the native command and additionally requires an exact-URL
+`activated`/`running` worker update plus a functioning panel.
+
+Final verification:
+
+```text
+node --test tests/*.test.js
+tests 359
+pass 359
+fail 0
+skipped 0
+
+node --test tests/browser/trigger-controller.e2e.test.js
+tests 1
+pass 0
+fail 1
+skipped 0
+Error: Chromium executable is required for Halo browser gates
+```
+
+JavaScript syntax checks, manifest JSON parsing, and `git diff --check` passed.
+Chromium remains the only browser-gate blocker. `progress.md` was not edited.
+
 ## Fix round 4 — authoritative intent and live worker acknowledgement
 
 RED tests reproduced no-op dispatch starvation, reentrant scheduler handle

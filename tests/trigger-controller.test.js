@@ -348,7 +348,7 @@ test('reentry from clearTimeout wins over pointer-leave cancellation without an 
   assert.deepEqual(fixture.opened, [{ targetId: 'newer', source: 'explicit' }]);
 });
 
-test('dispatch serial preserves same-state reentrant timer intent', () => {
+test('same-target no-op during clear preserves the authoritative outer dismiss intent', () => {
   let controller;
   let reenter = false;
   const fixture = fixtureOptions();
@@ -363,10 +363,12 @@ test('dispatch serial preserves same-state reentrant timer intent', () => {
   reenter = true;
   controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'same', at: 2 });
   assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'same', source: 'explicit' });
-  assert.equal(fixture.pending().length, 0);
+  assert.equal(fixture.pending().length, 1);
+  fixture.fire(fixture.pending()[0][0], 3);
+  assert.deepEqual(fixture.closed, ['pointer-leave']);
 });
 
-test('newest nested leave during explicit open keeps its dismiss intent and suppresses outer effect', () => {
+test('nested leave during explicit open keeps its timer and reconciles the required open effect', () => {
   let controller;
   let reenter = false;
   const fixture = fixtureOptions();
@@ -381,7 +383,24 @@ test('newest nested leave during explicit open keeps its dismiss intent and supp
   controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'new', at: 1 });
   assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'new', source: 'explicit' });
   assert.equal(fixture.pending().length, 1);
-  assert.deepEqual(fixture.opened, []);
+  assert.deepEqual(fixture.opened, [{ targetId: 'new', source: 'explicit' }]);
+  fixture.fire(fixture.pending()[0][0], 100);
+  assert.deepEqual(fixture.closed, ['pointer-leave']);
+});
+
+test('nested same-target explicit reconciles one open while nested cancel reconciles none', () => {
+  for (const nestedType of ['EXPLICIT_OPEN', 'CANCEL']) {
+    let controller;
+    let nested = false;
+    const opened = [];
+    controller = Trigger.createTriggerController({ mode: 'hybrid', now: () => 1,
+      setTimeout() { return 1; }, clearTimeout() { if (!nested) { nested = true; controller.dispatch(nestedType === 'CANCEL' ? { type: 'CANCEL', at: 2 } : { type: 'EXPLICIT_OPEN', targetId: 'same', at: 2 }); } },
+      openPanel(value) { opened.push(value); }
+    });
+    controller.dispatch({ type: 'POINTER_ENTER', targetId: 'old', at: 0 });
+    controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'same', at: 1 });
+    assert.equal(opened.length, nestedType === 'CANCEL' ? 0 : 1);
+  }
 });
 
 test('irrelevant nested dispatch does not starve an authoritative explicit open', () => {
