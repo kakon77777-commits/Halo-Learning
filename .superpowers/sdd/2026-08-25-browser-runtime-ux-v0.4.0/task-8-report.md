@@ -295,3 +295,80 @@ Error: Chromium executable is required for Halo browser gates
 ```
 
 `progress.md` was not edited.
+
+## Fix round 2 — hostile boundaries and canonical parity
+
+This round began with adversarial tests for the six review areas. The focused
+RED run contained 30 tests: 24 passed and 6 failed for range-derived selection,
+throwing terminal cleanup, hostile composed-path traversal, schema/runtime
+parity, equal-time dismissal, and `clearTimeout` reentry. A seventh isolated
+RED then proved that reentry from `clearTimeout` during candidate departure was
+overwritten by the outer `POINTER_LEAVE` transition.
+
+Timer handles are now detached and generations advanced before an injected
+`clearTimeout` is called. Clear failures and even a throwing `onError` observer
+are contained. Every transition that can clear a timer commits first and uses a
+transition generation so reentrant dispatch wins. Terminal cleanup commits the
+permanent cancelled state before clearing either timer or closing Task 7's
+panel. Content cleanup independently attempts terminal dispatch and every
+listener removal, retains only failed removals for retry, and reports complete
+only once no listener remains.
+
+Explicit selection now performs all document and Selection access in one
+fail-closed boundary. It requires one non-collapsed Range, connected
+same-document start/end/common-ancestor nodes, text derived only from
+`Range.toString()` (with Selection consistency), and a callable geometry API
+returning finite coordinates and nonnegative dimensions. Missing, null, NaN,
+throwing, adopted, disconnected, inconsistent, and outside-range inputs are
+rejected without fallback coordinates.
+
+Event traversal now uses guarded property reads and per-node traversal through
+`parentElement` or Shadow DOM `host`. Hostile event targets, composed paths,
+array entries, node getters, and renderer ownership predicates cannot escape;
+a hostile early path entry does not prevent discovery of a later privately
+owned token or panel.
+
+MarkingProfile/v2 is now one strict canonical boundary. The runtime validator
+requires every schema field and rejects unknown profile, channel, and runtime
+budget fields. Compatibility cap ranges are aligned at `50..2000` text nodes
+and `100..10000` marked tokens across settings, runtime, and JSON Schema.
+Legacy stored values remain accepted only through `migrateSettings`, which
+fills defaults and emits a canonical profile. One valid/invalid corpus is run
+through both the recursive JSON Schema validator and runtime normalizer to
+prove accept/reject parity.
+
+Equal-time ordering now blocks only inferred opens or target switches that
+would displace explicit authority. Same-target entry cancels delayed dismiss,
+while pointer leave, delayed timeout, outside click, Escape, and terminal events
+remain effective at the same logical time.
+
+The installed MV3 test now makes native `Alt+Shift+H` on the active fixture tab
+the first injection attempt, establishing the `activeTab` grant before popup or
+worker scripting. It explicitly asserts outside-click closure, invalid-envelope
+rejection, stale-hover generation safety, route cleanup, and exactly one panel
+addition after repeated reinjection. Worker termination is validated by
+functional command recovery without assuming a distinct Playwright Worker
+object; forced idle suspension is identified as unavailable. Native
+context-menu UI delivery remains an explicit automation limitation, while the
+real installed menu registration is asserted through Chrome APIs.
+
+Fix-round verification:
+
+```text
+node --test tests/*.test.js
+tests 347
+pass 347
+fail 0
+cancelled 0
+skipped 0
+todo 0
+```
+
+The installed browser gate remains explicitly blocked with one failure and no
+skip because Chromium is absent:
+
+```text
+Error: Chromium executable is required for Halo browser gates
+```
+
+`progress.md` was not edited.

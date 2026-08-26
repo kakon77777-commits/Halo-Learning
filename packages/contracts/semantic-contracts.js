@@ -30,6 +30,14 @@ function objectAt(value, path) {
   return value;
 }
 
+function exactObjectAt(value, path, allowed) {
+  const result = objectAt(value, path);
+  for (const name of Object.keys(result)) {
+    if (!allowed.includes(name)) fail(`${path}.${name}`, 'is not allowed');
+  }
+  return result;
+}
+
 function stringAt(value, path) {
   if (typeof value !== 'string') fail(path, 'must be a string');
   const result = value.trim();
@@ -257,9 +265,16 @@ function normalizeAnnotationSet(value) {
 }
 
 function normalizeMarkingProfile(value) {
-  const raw = objectAt(value, 'profile');
-  const channels = objectAt(raw.channels, 'profile.channels');
-  const runtimeBudgets = objectAt(raw.runtimeBudgets, 'profile.runtimeBudgets');
+  const raw = exactObjectAt(value, 'profile', [
+    'schemaVersion', 'profileId', 'profileRevision', 'enabled', 'languageMode', 'triggerMode',
+    'channels', 'density', 'minConfidence', 'labelPosition', 'runtimeBudgets',
+    'maxTextNodes', 'maxMarkedTokens'
+  ]);
+  const channels = exactObjectAt(raw.channels, 'profile.channels', CHANNELS);
+  const runtimeBudgets = exactObjectAt(raw.runtimeBudgets, 'profile.runtimeBudgets', [
+    'maxTextNodes', 'maxCharacters', 'maxSentences', 'maxSemanticTokens',
+    'maxShardIds', 'timeSliceMs', 'maxQueuedRoots', 'viewportBufferPx'
+  ]);
   const normalizedChannels = {};
   for (const channel of CHANNELS) {
     normalizedChannels[channel] = booleanAt(channels[channel], `profile.channels.${channel}`);
@@ -271,9 +286,7 @@ function normalizeMarkingProfile(value) {
       'profile.schemaVersion'
     ),
     profileId: stringAt(raw.profileId, 'profile.profileId'),
-    profileRevision: raw.profileRevision === undefined
-      ? 0
-      : integerAt(raw.profileRevision, 'profile.profileRevision', 0, Number.MAX_SAFE_INTEGER),
+    profileRevision: integerAt(raw.profileRevision, 'profile.profileRevision', 0, Number.MAX_SAFE_INTEGER),
     enabled: booleanAt(raw.enabled, 'profile.enabled'),
     languageMode: enumAt(raw.languageMode, LANGUAGE_MODES, 'profile.languageMode'),
     triggerMode: enumAt(raw.triggerMode, TRIGGER_MODES, 'profile.triggerMode'),
@@ -291,8 +304,8 @@ function normalizeMarkingProfile(value) {
       maxQueuedRoots: integerAt(runtimeBudgets.maxQueuedRoots, 'profile.runtimeBudgets.maxQueuedRoots', 1, 200),
       viewportBufferPx: integerAt(runtimeBudgets.viewportBufferPx, 'profile.runtimeBudgets.viewportBufferPx', 0, 1200)
     },
-    maxTextNodes: integerAt(raw.maxTextNodes, 'profile.maxTextNodes', 1, 10000),
-    maxMarkedTokens: integerAt(raw.maxMarkedTokens, 'profile.maxMarkedTokens', 1, 100000)
+    maxTextNodes: integerAt(raw.maxTextNodes, 'profile.maxTextNodes', 50, 2000),
+    maxMarkedTokens: integerAt(raw.maxMarkedTokens, 'profile.maxMarkedTokens', 100, 10000)
   });
 }
 

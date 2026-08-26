@@ -287,7 +287,11 @@ test('equal-time inferred events cannot displace explicit authority but explicit
   controller.dispatch({ type: 'POINTER_ENTER', targetId: 'forged-tie', at: 5 });
   controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'explicit', at: 5 });
   assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'explicit', source: 'explicit' });
+  assert.equal(fixture.pending().length, 1);
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'explicit', at: 5 });
   assert.equal(fixture.pending().length, 0);
+  controller.dispatch({ type: 'OUTSIDE_CLICK', at: 5 });
+  assert.deepEqual(controller.state(), { name: 'dismissed', targetId: 'explicit', reason: 'outside-click' });
 
   controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'second', at: 5 });
   assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'second', source: 'explicit' });
@@ -298,4 +302,48 @@ test('equal-time inferred events cannot displace explicit authority but explicit
   staleController.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'stale-clock-explicit', at: 5 });
   staleController.dispatch({ type: 'POINTER_ENTER', targetId: 'inferred-tie', at: 20 });
   assert.deepEqual(staleController.state(), { name: 'core-open', targetId: 'stale-clock-explicit', source: 'explicit' });
+});
+
+test('terminal cancellation commits before hostile timer cleanup and contains every injected failure', () => {
+  const callbacks = new Map();
+  const errors = [];
+  const clears = [];
+  let sequence = 0;
+  let controller;
+  controller = Trigger.createTriggerController({
+    mode: 'hybrid',
+    now: () => 1,
+    setTimeout(callback) { callbacks.set(++sequence, callback); return sequence; },
+    clearTimeout(id) {
+      clears.push(id);
+      controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'reentrant', at: 1 });
+      throw new Error(`clear ${id}`);
+    },
+    closePanel() { throw new Error('close'); },
+    onError(error) { errors.push(error.message); throw new Error('hostile onError'); }
+  });
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'open', at: 0 });
+  controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'open', at: 0.5 });
+  assert.doesNotThrow(() => controller.dispatch({ type: 'CANCEL', at: 1 }));
+  assert.deepEqual(controller.state(), { name: 'cancelled' });
+  assert.deepEqual(clears, [1]);
+  assert.deepEqual(errors, ['clear 1', 'close']);
+  assert.doesNotThrow(() => callbacks.get(1)());
+  assert.deepEqual(controller.state(), { name: 'cancelled' });
+});
+
+test('reentry from clearTimeout wins over pointer-leave cancellation without an outer overwrite', () => {
+  let controller;
+  let reenter = false;
+  const fixture = fixtureOptions({
+    clearTimeout() {
+      if (reenter) controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'newer', at: 2 });
+    }
+  });
+  controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'candidate', at: 0 });
+  reenter = true;
+  controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'candidate', at: 1 });
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'newer', source: 'explicit' });
+  assert.deepEqual(fixture.opened, [{ targetId: 'newer', source: 'explicit' }]);
 });

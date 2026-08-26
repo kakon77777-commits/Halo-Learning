@@ -72,6 +72,7 @@
     let dismissGeneration = 0;
     let hoverTimer = null;
     let dismissTimer = null;
+    let transitionGeneration = 0;
 
     function safeEffect(effect) {
       try {
@@ -83,14 +84,16 @@
 
     function cancelHover() {
       hoverGeneration += 1;
-      if (hoverTimer !== null) unschedule(hoverTimer);
+      const handle = hoverTimer;
       hoverTimer = null;
+      if (handle !== null) safeEffect(() => unschedule(handle));
     }
 
     function cancelDismiss() {
       dismissGeneration += 1;
-      if (dismissTimer !== null) unschedule(dismissTimer);
+      const handle = dismissTimer;
       dismissTimer = null;
+      if (handle !== null) safeEffect(() => unschedule(handle));
     }
 
     function cancelTimers() {
@@ -112,7 +115,9 @@
     }
 
     function scheduleDismiss(targetId) {
+      const transition = transitionGeneration;
       cancelDismiss();
+      if (transition !== transitionGeneration) return;
       const generation = dismissGeneration;
       dismissTimer = schedule(() => {
         dismissTimer = null;
@@ -126,18 +131,22 @@
     }
 
     function open(targetId, source) {
-      cancelTimers();
       current = frozenState({ name: 'core-open', targetId, source });
+      const transition = ++transitionGeneration;
+      cancelTimers();
+      if (transition !== transitionGeneration) return current;
       safeEffect(() => openPanel(Object.freeze({ targetId, source })));
       return current;
     }
 
     function dismiss(reason) {
-      cancelTimers();
       if (current.name === 'idle' || current.name === 'dismissed') return current;
       const targetId = current.targetId;
       const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'dismissed', targetId, reason });
+      const transition = ++transitionGeneration;
+      cancelTimers();
+      if (transition !== transitionGeneration) return current;
       if (wasOpen) safeEffect(() => closePanel(reason));
       return current;
     }
@@ -152,8 +161,10 @@
         return current;
       }
       const wasOpen = current.name === 'core-open';
-      cancelTimers();
       current = frozenState({ name: 'candidate', targetId });
+      const transition = ++transitionGeneration;
+      cancelTimers();
+      if (transition !== transitionGeneration) return current;
       if (wasOpen) safeEffect(() => closePanel('target-switch'));
       if (current.name !== 'candidate' || current.targetId !== targetId) return current;
       scheduleHover(targetId, primeThresholdMs);
@@ -174,9 +185,10 @@
     }
 
     function terminate(type) {
-      cancelTimers();
       const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'cancelled' });
+      transitionGeneration += 1;
+      cancelTimers();
       if (wasOpen) safeEffect(() => closePanel(type === 'ROUTE_CLEANUP' ? 'route-cleanup' : 'cancel'));
       return current;
     }
@@ -191,7 +203,14 @@
       const explicit = rawEvent.type === 'EXPLICIT_OPEN' || rawEvent.type === 'MODIFIER_HOVER';
       const terminal = rawEvent.type === 'ROUTE_CLEANUP' || rawEvent.type === 'CANCEL';
       const priority = terminal ? 2 : (explicit ? 1 : 0);
-      if (!explicit && !terminal && (at < lastAt || (at === lastAt && lastPriority > priority))) return current;
+      if (!explicit && !terminal && at < lastAt) return current;
+      if (!explicit && !terminal && at === lastAt && lastPriority > priority) {
+        if (rawEvent.type === 'HOVER_THRESHOLD') return current;
+        if (rawEvent.type === 'POINTER_ENTER') {
+          const targetId = targetIdOf(rawEvent);
+          if (current.name !== 'core-open' || current.source !== 'explicit' || current.targetId !== targetId) return current;
+        }
+      }
       if (at > lastAt) {
         lastAt = at;
         lastPriority = priority;
@@ -210,8 +229,9 @@
         const targetId = targetIdOf(rawEvent);
         if (current.targetId !== targetId) return current;
         if (current.name === 'candidate' || current.name === 'primed') {
-          cancelHover();
           current = frozenState({ name: 'idle' });
+          transitionGeneration += 1;
+          cancelHover();
         } else if (current.name === 'core-open') {
           scheduleDismiss(targetId);
         }

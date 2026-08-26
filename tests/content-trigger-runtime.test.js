@@ -100,7 +100,8 @@ test('explicit-selection envelope is exact and selection must be live, ranged, a
     startContainer: boundary,
     endContainer: boundary,
     commonAncestorContainer: boundary,
-    getBoundingClientRect: () => ({ left: 12, bottom: 24 })
+    toString: () => '  selected locally  ',
+    getBoundingClientRect: () => ({ left: 12, top: 10, right: 42, bottom: 24, width: 30, height: 14 })
   };
   const selection = {
     rangeCount: 1,
@@ -132,12 +133,20 @@ test('explicit-selection envelope is exact and selection must be live, ranged, a
     { ...selection, getRangeAt: () => null },
     { ...selection, getRangeAt: () => ({ ...range, collapsed: true }) },
     { ...selection, getRangeAt: () => ({ ...range, startContainer: { isConnected: false, ownerDocument: document } }) },
-    { ...selection, getRangeAt: () => ({ ...range, commonAncestorContainer: { isConnected: true, ownerDocument: {} } }) }
+    { ...selection, getRangeAt: () => ({ ...range, commonAncestorContainer: { isConnected: true, ownerDocument: {} } }) },
+    { ...selection, toString: () => 'outside range' },
+    { ...selection, getRangeAt: () => ({ ...range, toString: () => '   ' }) },
+    { ...selection, getRangeAt: () => ({ ...range, getBoundingClientRect: undefined }) },
+    { ...selection, getRangeAt: () => ({ ...range, getBoundingClientRect: () => null }) },
+    { ...selection, getRangeAt: () => ({ ...range, getBoundingClientRect: () => ({ left: NaN, top: 0, right: 1, bottom: 1, width: 1, height: 1 }) }) }
   ]) assert.equal(Content.readExplicitSelection({ document, getSelection: () => invalid }), null);
   assert.equal(Content.readExplicitSelection({
     document,
     getSelection: () => ({ ...selection, getRangeAt() { throw new Error('range override'); } })
   }), null);
+  assert.equal(Content.readExplicitSelection(new Proxy({}, {
+    get(_target, name) { if (name === 'getSelection') throw new Error('getter override'); return undefined; }
+  })), null);
   assert.equal(Content.readExplicitSelection({
     document,
     getSelection: () => ({ ...selection, getRangeAt: () => ({ ...range, getBoundingClientRect() { throw new Error('geometry override'); } }) })
@@ -327,4 +336,49 @@ test('cleanup retains a live runtime until hostile listener teardown can be retr
   assert.equal(runtime.isCleaned(), true);
   assert.equal(events.listenerCount(), 0);
   assert.deepEqual(errors, ['temporary teardown failure']);
+});
+
+test('cleanup attempts every listener removal when terminal dispatch and error reporting throw', () => {
+  const events = eventTargetFixture();
+  const removed = [];
+  events.removeEventListener = (type) => { removed.push(type); };
+  const renderer = rendererFixture(new Set());
+  const triggerModule = {
+    createTriggerController() {
+      return { state: () => ({ name: 'idle' }), dispatch() { throw new Error('terminal failure'); } };
+    }
+  };
+  const runtime = Content.createContentTriggerRuntime({
+    eventTarget: events,
+    renderer,
+    triggerModule,
+    mode: 'hybrid',
+    onError() { throw new Error('hostile error observer'); }
+  });
+  assert.doesNotThrow(() => runtime.cleanup('CANCEL'));
+  assert.deepEqual(removed.sort(), ['click', 'focusin', 'focusout', 'keydown', 'pointerout', 'pointerover']);
+  assert.equal(runtime.isCleaned(), true);
+});
+
+test('hostile event and path getters fail closed while later private path entries remain discoverable', () => {
+  const events = eventTargetFixture();
+  const token = elementFixture({ textContent: 'later', attributes: { 'data-halo-pos': 'n' } });
+  const owned = new Set([token]);
+  const renderer = rendererFixture(owned);
+  const hostileNode = new Proxy({}, { get() { throw new Error('node getter'); } });
+  const originalOwnsToken = renderer.ownsToken;
+  renderer.ownsToken = (node) => {
+    if (node === hostileNode) throw new Error('predicate');
+    return originalOwnsToken(node);
+  };
+  const runtime = Content.createContentTriggerRuntime({ eventTarget: events, renderer, triggerModule: Trigger, mode: 'hybrid', now: () => 10 });
+  const retargeted = eventFor(null, { composedPath: () => [hostileNode, token] });
+  Object.defineProperty(retargeted, 'target', { get() { throw new Error('target getter'); } });
+  assert.doesNotThrow(() => events.emit('click', retargeted));
+  assert.equal(renderer.opened.length, 1);
+  assert.doesNotThrow(() => events.emit('click', new Proxy({}, { get() { throw new Error('event getter'); } })));
+  const modifier = eventFor(token);
+  Object.defineProperty(modifier, 'altKey', { get() { throw new Error('modifier getter'); } });
+  assert.doesNotThrow(() => events.emit('pointerover', modifier));
+  runtime.cleanup('CANCEL');
 });

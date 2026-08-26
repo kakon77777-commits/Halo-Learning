@@ -22,8 +22,8 @@
   }
 
   function readExplicitSelection(windowLike) {
-    if (!windowLike || typeof windowLike.getSelection !== 'function') return null;
     try {
+      if (!windowLike || typeof windowLike.getSelection !== 'function') return null;
       const document = windowLike.document;
       if (!document || typeof document !== 'object') return null;
       const selection = windowLike.getSelection();
@@ -35,11 +35,16 @@
       for (const node of [range.startContainer, range.endContainer, range.commonAncestorContainer]) {
         if (!node || typeof node !== 'object' || node.isConnected !== true || node.ownerDocument !== document) return null;
       }
-      const text = String(selection.toString()).trim();
+      if (typeof range.toString !== 'function') return null;
+      const text = String(range.toString()).trim();
       if (!text || text.length > 4000) return null;
-      const rect = typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
-      const x = rect && Number.isFinite(Number(rect.left)) ? Number(rect.left) : 8;
-      const bottom = rect && Number.isFinite(Number(rect.bottom)) ? Number(rect.bottom) : 8;
+      if (typeof selection.toString !== 'function' || String(selection.toString()).trim() !== text) return null;
+      if (typeof range.getBoundingClientRect !== 'function') return null;
+      const rect = range.getBoundingClientRect();
+      if (!rect || typeof rect !== 'object') return null;
+      const values = ['left', 'top', 'right', 'bottom', 'width', 'height'].map((name) => Number(rect[name]));
+      if (!values.every(Number.isFinite) || values[4] < 0 || values[5] < 0 || values[2] < values[0] || values[3] < values[1]) return null;
+      const [x, , , bottom] = values;
       return Object.freeze({
         text,
         anchor: Object.freeze({ x, y: bottom + 8 })
@@ -140,32 +145,52 @@
       listeners.push([type, listener]);
     }
 
-    function closestToken(node) {
-      for (let current = node && node.nodeType === 1 ? node : node && node.parentElement;
-        current;
-        current = current.parentElement) {
-        if (renderer.ownsToken(current)) return current;
+    function safeGet(value, name) {
+      try { return value == null ? undefined : value[name]; } catch (_error) { return undefined; }
+    }
+
+    function safeOwnership(predicate, value) {
+      try { return Boolean(predicate(value)); } catch (_error) { return false; }
+    }
+
+    function safeReport(error) {
+      if (typeof settings.onError !== 'function') return;
+      try { settings.onError(error); } catch (_ignored) {}
+    }
+
+    function closestOwned(node, predicate) {
+      const visited = new Set();
+      let current = node;
+      while (current && (typeof current === 'object' || typeof current === 'function') && !visited.has(current)) {
+        visited.add(current);
+        if (safeGet(current, 'nodeType') === 1 && safeOwnership(predicate, current)) return current;
+        current = safeGet(current, 'parentElement') || safeGet(current, 'host') || null;
       }
       return null;
     }
 
-    function closestPanel(node) {
-      for (let current = node && node.nodeType === 1 ? node : node && node.parentElement;
-        current;
-        current = current.parentElement) {
-        if (renderer.ownsPanel(current)) return current;
-      }
-      return null;
-    }
+    const closestToken = (node) => closestOwned(node, renderer.ownsToken.bind(renderer));
+    const closestPanel = (node) => closestOwned(node, renderer.ownsPanel.bind(renderer));
 
     function eventPath(event) {
-      try {
-        if (event && typeof event.composedPath === 'function') {
-          const path = event.composedPath();
-          if (Array.isArray(path)) return path;
+      const result = [];
+      const composedPath = safeGet(event, 'composedPath');
+      if (typeof composedPath === 'function') {
+        try {
+          const path = composedPath.call(event);
+          if (Array.isArray(path)) {
+            let length;
+            try { length = path.length; } catch (_error) { length = 0; }
+            for (let index = 0; index < length; index += 1) {
+              try { result.push(path[index]); } catch (_error) {}
+            }
+            if (result.length) return result;
+          }
+        } catch (_error) {
         }
-      } catch (_error) {}
-      return event && event.target ? [event.target] : [];
+      }
+      const target = safeGet(event, 'target');
+      return target === undefined ? [] : [target];
     }
 
     function tokenForEvent(event) {
@@ -177,7 +202,9 @@
     }
 
     function isPanelEvent(event) {
-      return eventPath(event).some((node) => Boolean(closestPanel(node)));
+      const path = eventPath(event);
+      for (let index = 0; index < path.length; index += 1) if (closestPanel(path[index])) return true;
+      return false;
     }
 
     function dispatch(event) {
@@ -185,7 +212,7 @@
       try {
         return controller.dispatch({ ...event, at: clock() });
       } catch (error) {
-        if (typeof settings.onError === 'function') settings.onError(error);
+        safeReport(error);
         return controller.state();
       }
     }
@@ -200,7 +227,7 @@
       if (token) {
         const targetId = targetIdFor(token);
         dispatch({
-          type: event.altKey || event.shiftKey ? 'MODIFIER_HOVER' : 'POINTER_ENTER',
+          type: safeGet(event, 'altKey') || safeGet(event, 'shiftKey') ? 'MODIFIER_HOVER' : 'POINTER_ENTER',
           targetId
         });
         return;
@@ -214,7 +241,8 @@
     function leave(event) {
       const sourceToken = tokenForEvent(event);
       if (!sourceToken && !isPanelEvent(event)) return;
-      if (closestToken(event && event.relatedTarget) || closestPanel(event && event.relatedTarget)) return;
+      const relatedTarget = safeGet(event, 'relatedTarget');
+      if (closestToken(relatedTarget) || closestPanel(relatedTarget)) return;
       const targetId = sourceToken ? targetIdFor(sourceToken) : activeTargetId();
       if (targetId) dispatch({ type: 'POINTER_LEAVE', targetId });
     }
@@ -226,15 +254,17 @@
     add('click', (event) => {
       const token = tokenForEvent(event);
       if (token) {
-        if (typeof event.preventDefault === 'function') event.preventDefault();
-        if (typeof event.stopPropagation === 'function') event.stopPropagation();
+        const preventDefault = safeGet(event, 'preventDefault');
+        const stopPropagation = safeGet(event, 'stopPropagation');
+        try { if (typeof preventDefault === 'function') preventDefault.call(event); } catch (_error) {}
+        try { if (typeof stopPropagation === 'function') stopPropagation.call(event); } catch (_error) {}
         dispatch({ type: 'EXPLICIT_OPEN', targetId: targetIdFor(token) });
         return;
       }
       if (!isPanelEvent(event)) dispatch({ type: 'OUTSIDE_CLICK' });
     });
     add('keydown', (event) => {
-      if (event && event.key === 'Escape') dispatch({ type: 'ESCAPE' });
+      if (safeGet(event, 'key') === 'Escape') dispatch({ type: 'ESCAPE' });
     });
 
     function openSelection(request) {
@@ -254,16 +284,18 @@
 
     function cleanup(type) {
       if (cleaned) return controller.state();
-      controller.dispatch({ type: type === 'ROUTE_CLEANUP' ? 'ROUTE_CLEANUP' : 'CANCEL', at: clock() });
+      try {
+        controller.dispatch({ type: type === 'ROUTE_CLEANUP' ? 'ROUTE_CLEANUP' : 'CANCEL', at: clock() });
+      } catch (error) {
+        safeReport(error);
+      }
       const retained = [];
       for (const [eventType, listener] of listeners.splice(0)) {
         try {
           eventTarget.removeEventListener(eventType, listener);
         } catch (error) {
           retained.push([eventType, listener]);
-          if (typeof settings.onError === 'function') {
-            try { settings.onError(error); } catch (_ignored) {}
-          }
+          safeReport(error);
         }
       }
       listeners.push(...retained);

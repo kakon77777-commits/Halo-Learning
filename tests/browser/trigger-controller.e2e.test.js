@@ -16,8 +16,8 @@ async function extensionWorker(context) {
   return context.serviceWorkers()[0] || context.waitForEvent('serviceworker');
 }
 
-async function activateFixture(worker, origin) {
-  return worker.evaluate(async (url) => {
+async function activateFixture(extensionPage, origin) {
+  return extensionPage.evaluate(async (url) => {
     const tabs = await chrome.tabs.query({ url: `${url}/*` });
     if (!tabs.length || !Number.isInteger(tabs[0].id)) throw new Error('fixture tab unavailable');
     await chrome.tabs.update(tabs[0].id, { active: true });
@@ -53,11 +53,29 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
     await withFixtureServer({
       '/triggers.html': {
         contentType: 'text/html',
-        body: '<!doctype html><html lang="en"><body><main><p id="lesson">The model learns quickly.</p><a id="normal-link" href="#native-link">Ordinary navigation</a><p id="selection">Selected local sentence.</p></main></body></html>'
+        body: '<!doctype html><html lang="en"><body><main><p id="lesson">The model learns quickly.</p><a id="normal-link" href="#native-link">Ordinary navigation</a><button id="outside" type="button">Outside</button><p id="selection">Selected local sentence.</p></main></body></html>'
       }
     }, async ({ origin }) => {
       const page = await context.newPage();
       await page.goto(`${origin}/triggers.html`);
+
+      // The command is the first injection attempt: its native gesture grants
+      // activeTab for this fixture before popup or worker scripting is used.
+      await selectFixture(page);
+      await page.bringToFront();
+      await page.keyboard.press('Alt+Shift+H');
+      await page.waitForSelector('[data-halo-owned="panel"]');
+      assert.equal(await page.evaluate(() => document.querySelector('[data-halo-owned="panel"]').shadowRoot.querySelector('.halo-core-body').textContent), 'Selected local sentence.');
+      await page.keyboard.press('Escape');
+
+      const invalidEnvelope = await worker.evaluate(async (url) => {
+        const [tab] = await chrome.tabs.query({ url: `${url}/*` });
+        return chrome.tabs.sendMessage(tab.id, {
+          type: 'HALO_EXPLICIT_SELECTION', action: 'analyze-selection', text: 'must stay local'
+        });
+      }, origin);
+      assert.deepEqual(invalidEnvelope, { accepted: false, code: 'INVALID_ACTION' });
+
       const popup = await context.newPage();
       await popup.goto(`chrome-extension://${extensionId}/src/popup.html`);
       await popup.waitForSelector('#applyButton:not([disabled])');
@@ -78,7 +96,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
 
       async function applyMode(mode) {
         await popup.selectOption('#triggerMode', mode);
-        await activateFixture(worker, origin);
+        await activateFixture(popup, origin);
         await popup.click('#applyButton');
         await page.waitForSelector('#lesson [data-halo-owned="token"]');
       }
@@ -87,7 +105,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       let token = page.locator('#lesson [data-halo-owned="token"]').first();
       await token.click();
       await page.waitForSelector('[data-halo-owned="panel"]');
-      await page.keyboard.press('Escape');
+      await page.locator('#outside').click();
       await page.waitForSelector('[data-halo-owned="panel"]', { state: 'detached' });
 
       const nativeLink = await page.evaluate(() => {
@@ -97,6 +115,16 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
         return { prevented: event.defaultPrevented, hash: location.hash };
       });
       assert.deepEqual(nativeLink, { prevented: false, hash: '#native-link' });
+
+      // A cancelled hover generation cannot replace a newer explicit target.
+      const markedTokens = page.locator('#lesson [data-halo-owned="token"]');
+      await markedTokens.first().hover();
+      await page.waitForTimeout(100);
+      await markedTokens.nth(1).click();
+      const explicitTitle = await page.evaluate(() => document.querySelector('#lesson [data-halo-owned="token"]:nth-of-type(2)')?.textContent || document.querySelectorAll('#lesson [data-halo-owned="token"]')[1].textContent);
+      await page.waitForTimeout(1100);
+      assert.equal(await page.evaluate(() => document.querySelector('[data-halo-owned="panel"]').shadowRoot.querySelector('#halo-panel-title').textContent), explicitTitle);
+      await page.keyboard.press('Escape');
 
       await token.click();
       await page.evaluate(() => {
@@ -132,8 +160,14 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       await page.waitForSelector('[data-halo-owned="panel"]');
       await page.keyboard.press('Escape');
 
+      token = page.locator('#lesson [data-halo-owned="token"]').first();
+      await token.click();
+      await page.evaluate(() => history.pushState({}, '', '/route-two'));
+      await page.waitForSelector('[data-halo-owned="panel"]', { state: 'detached' });
+      await page.waitForSelector('#lesson [data-halo-owned="token"]');
+
       await selectFixture(page);
-      await activateFixture(worker, origin);
+      await activateFixture(popup, origin);
       await popup.click('#analyzeSelectionButton');
       await page.waitForSelector('[data-halo-owned="panel"]');
       assert.equal(await page.locator('[data-halo-owned="panel"]').count(), 1);
@@ -148,22 +182,37 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
 
       for (let index = 0; index < 2; index += 1) {
         await selectFixture(page);
-        await activateFixture(worker, origin);
+        await activateFixture(popup, origin);
         await popup.click('#analyzeSelectionButton');
+        await page.keyboard.press('Escape');
       }
-      assert.equal(await page.locator('[data-halo-owned="panel"]').count(), 1);
+      await page.evaluate(() => {
+        globalThis.__haloPanelAdds = 0;
+        globalThis.__haloPanelObserver = new MutationObserver((records) => {
+          for (const record of records) for (const node of record.addedNodes) {
+            if (node.nodeType === 1 && node.getAttribute('data-halo-owned') === 'panel') globalThis.__haloPanelAdds += 1;
+          }
+        });
+        globalThis.__haloPanelObserver.observe(document.documentElement, { childList: true, subtree: true });
+      });
+      await page.locator('#lesson [data-halo-owned="token"]').first().click();
+      await page.waitForSelector('[data-halo-owned="panel"]');
+      assert.equal(await page.evaluate(() => { __haloPanelObserver.disconnect(); return __haloPanelAdds; }), 1);
       await page.keyboard.press('Escape');
 
-      const closed = new Promise((resolve) => worker.once('close', resolve));
-      await worker.evaluate(() => self.close());
+      // Playwright cannot force Chrome's idle suspension policy. Explicitly
+      // terminate the worker, then assert the command wakes a functioning
+      // worker; worker-object identity is deliberately not asserted.
+      const workerBeforeTermination = await extensionWorker(context);
+      const closed = new Promise((resolve) => workerBeforeTermination.once('close', resolve));
+      await workerBeforeTermination.evaluate(() => self.close());
       await closed;
-      const restartedPromise = context.waitForEvent('serviceworker');
       await selectFixture(page);
       await page.bringToFront();
       await page.keyboard.press('Alt+Shift+H');
-      const restarted = await restartedPromise;
-      assert.match(restarted.url(), new RegExp(`^chrome-extension://${extensionId}/`));
       await page.waitForSelector('[data-halo-owned="panel"]');
+      const runningWorkers = context.serviceWorkers().filter((candidate) => candidate.url().startsWith(`chrome-extension://${extensionId}/`));
+      assert.ok(runningWorkers.length >= 1);
     });
   } finally {
     if (context) await context.close();

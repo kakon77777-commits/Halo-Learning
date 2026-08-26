@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const Settings = require('../apps/extension/src/shared/settings');
+const Contracts = require('../packages/contracts/semantic-contracts');
 
 const schema = JSON.parse(fs.readFileSync(path.join(
   __dirname, '..', 'packages', 'contracts', 'schemas', 'marking-profile.schema.json'
@@ -33,7 +34,12 @@ function errorsFor(value, rule, location = '$') {
   if (typeof value === 'number' && rule.minimum !== undefined && value < rule.minimum) errors.push(`${location}: minimum`);
   if (typeof value === 'number' && rule.maximum !== undefined && value > rule.maximum) errors.push(`${location}: maximum`);
   if (typeof value === 'string' && rule.minLength !== undefined && value.length < rule.minLength) errors.push(`${location}: minLength`);
+  if (typeof value === 'string' && rule.pattern !== undefined && !(new RegExp(rule.pattern)).test(value)) errors.push(`${location}: pattern`);
   return errors;
+}
+
+function runtimeAccepts(value) {
+  try { Contracts.normalizeMarkingProfile(value); return true; } catch { return false; }
 }
 
 test('marking-profile schema accepts the exact canonical normalized serialization', () => {
@@ -42,6 +48,38 @@ test('marking-profile schema accepts the exact canonical normalized serializatio
   assert.ok(schema.required.includes('profileRevision'));
   assert.ok(schema.required.includes('runtimeBudgets'));
   assert.equal(schema.properties.runtimeBudgets.additionalProperties, false);
+});
+
+test('canonical runtime and JSON schema accept and reject the identical closed corpus', () => {
+  const valid = Settings.normalizeSettings({ profileRevision: 3 });
+  const invalid = [];
+  for (const name of schema.required) {
+    const candidate = { ...valid };
+    delete candidate[name];
+    invalid.push(candidate);
+  }
+  invalid.push(
+    { ...valid, extra: true },
+    { ...valid, profileId: '   ' },
+    { ...valid, channels: { ...valid.channels, extra: true } },
+    { ...valid, runtimeBudgets: { ...valid.runtimeBudgets, extra: 1 } },
+    { ...valid, maxTextNodes: 49 },
+    { ...valid, maxTextNodes: 2001 },
+    { ...valid, maxMarkedTokens: 99 },
+    { ...valid, maxMarkedTokens: 10001 }
+  );
+  for (const candidate of [valid, ...invalid]) {
+    assert.equal(runtimeAccepts(candidate), errorsFor(candidate, schema).length === 0, JSON.stringify(candidate));
+  }
+});
+
+test('legacy settings pass only through migration and emerge canonical', () => {
+  const legacy = { posLabels: false, languageMode: 'zh', maxTextNodes: 12 };
+  assert.equal(runtimeAccepts(legacy), false);
+  const migrated = Settings.migrateSettings(legacy);
+  assert.equal(runtimeAccepts(migrated), true);
+  assert.deepEqual(errorsFor(migrated, schema), []);
+  assert.equal(migrated.maxTextNodes, 50);
 });
 
 test('marking-profile schema rejects missing, extra, noninteger, and out-of-range runtime budgets', () => {
