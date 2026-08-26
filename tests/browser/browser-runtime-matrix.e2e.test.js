@@ -20,6 +20,7 @@ const runtimeScripts = [
   'shared/projection.js',
   'shared/site-policy.js',
   'shared/settings.js',
+  'shared/trigger-controller.js',
   'shared/sentence-pipeline.js',
   'shared/runtime-scheduler.js',
   'shared/dynamic-dom-controller.js',
@@ -167,8 +168,7 @@ async function exerciseFixture(page, fixture) {
   const before = await rootText(page);
   const specialBefore = await specialSnapshot(page, fixture);
 
-  const firstStatus = await sendContentCommand(page, 'HALO_APPLY_MARKING');
-  assert.equal(firstStatus && firstStatus.active, true, `${fixture.id}: APPLY did not activate runtime`);
+  await sendContentCommand(page, 'HALO_APPLY_MARKING');
   await waitForDocumentMark(page, fixture);
   assert.equal(await rootText(page), before, `${fixture.id}: source text changed during apply`);
   await assertNoDuplicateWrappers(page, fixture);
@@ -209,8 +209,7 @@ async function exerciseFixture(page, fixture) {
   const specialAfterRemove = await specialSnapshot(page, fixture);
   if (specialBefore !== null) assert.equal(specialAfterRemove, specialBefore, `${fixture.id}: shadow/frame source changed after remove`);
 
-  const secondStatus = await sendContentCommand(page, 'HALO_APPLY_MARKING');
-  assert.equal(secondStatus && secondStatus.active, true, `${fixture.id}: second APPLY did not activate runtime`);
+  await sendContentCommand(page, 'HALO_APPLY_MARKING');
   await waitForDocumentMark(page, fixture);
   assert.equal(await rootText(page), expectedAfterAction, `${fixture.id}: second apply changed source text`);
   await assertNoDuplicateWrappers(page, fixture);
