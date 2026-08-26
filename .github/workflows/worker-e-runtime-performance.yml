@@ -1,0 +1,99 @@
+name: Worker E Runtime Performance Gate
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-runtime-performance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      - name: Worker E RED/GREEN contract
+        run: node --test tests/worker-e-runtime-performance.test.js
+
+      - name: Lexical shard regression tests
+        run: node --test tests/browser-lexical-shards.test.js tests/browser-shard-loader.test.js
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Collect fresh real-Chromium 64/128 comparison
+        id: comparison
+        continue-on-error: true
+        run: |
+          mkdir -p evidence/worker-e
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const {
+            runShardComparison,
+            verifyBrowserShardComparison
+          } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            verifyBrowserShardComparison(comparison);
+            fs.writeFileSync(
+              'evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json',
+              JSON.stringify(comparison, null, 2) + '\n'
+            );
+            console.log(JSON.stringify({
+              browser: comparison.browser,
+              host: comparison.host,
+              selection: comparison.selection,
+              candidates: comparison.candidates.map((candidate) => ({
+                bucketCount: candidate.bucketCount,
+                sizes: candidate.sizes,
+                measurements: candidate.measurements,
+                gates: candidate.gates,
+                allBlockingPassed: candidate.allBlockingPassed,
+                coldSamples: candidate.conditions.cold.samples,
+                warmSampleCount: candidate.conditions.warm.samples.reduce((n, sample) => n + sample.samplesMs.length, 0),
+                longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
+              }))
+            }, null, 2));
+          })().catch((error) => {
+            console.error(error.stack || error.message);
+            process.exitCode = 1;
+          });
+          NODE
+
+      - name: Upload Worker E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-e-runtime-performance-evidence
+          path: evidence/worker-e/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Enforce frozen Worker E selection
+        if: always()
+        run: |
+          test -f evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const comparison = JSON.parse(fs.readFileSync(
+            'evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json',
+            'utf8'
+          ));
+          if (!comparison.selection || comparison.selection.status !== 'selected') {
+            throw new Error(`Worker E selection remains blocked: ${JSON.stringify(comparison.selection)}`);
+          }
+          console.log(`selectedBucketCount=${comparison.selection.selectedBucketCount}`);
+          NODE
