@@ -38,6 +38,7 @@ jobs:
       - name: Collect real Chromium performance and MV3 evidence
         run: |
           rm -rf evidence/worker-b-final
+          mkdir -p evidence/worker-b-final
           timeout 1500s node scripts/collect-worker-b-browser-evidence.js evidence/worker-b-final | tee evidence/worker-b-final.log
       - name: Verify generated performance and lifecycle evidence
         run: |
