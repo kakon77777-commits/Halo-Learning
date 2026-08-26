@@ -10,6 +10,20 @@ permissions:
   contents: read
 
 jobs:
+  command-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Diagnose native command delivery
+        run: node scripts/diagnose-b03-b05.js
+
   core:
     runs-on: ubuntu-latest
     timeout-minutes: 20
