@@ -1,4 +1,4 @@
-name: Worker D Frozen Source Snapshot
+name: Worker D Repair Round 1
 
 on:
   push:
@@ -7,28 +7,134 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  source-snapshot:
+  repair-round-1:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Checkout exact frozen Worker B base
+      - name: Checkout Worker D branch
         uses: actions/checkout@v4
         with:
-          ref: b6cd8ccfd705563bad7dcea87900d50fa8ca0b80
+          ref: parallel/v0.4.0-browser-integration
+          fetch-depth: 0
 
-      - name: Verify frozen source SHA
-        run: test "$(git rev-parse HEAD)" = "b6cd8ccfd705563bad7dcea87900d50fa8ca0b80"
+      - name: Verify frozen base ancestry
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor b6cd8ccfd705563bad7dcea87900d50fa8ca0b80 HEAD
 
-      - name: Upload D-owned source snapshot
-        uses: actions/upload-artifact@v4
-        with:
-          name: worker-d-frozen-sources-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            tests/browser/dynamic-dom.e2e.test.js
-            scripts/collect-worker-b-browser-evidence.js
-            tests/browser/helpers/service-worker-cdp.js
-          if-no-files-found: error
-          retention-days: 14
+      - name: Apply minimal D-owned repairs
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          dynamic_path = Path('tests/browser/dynamic-dom.e2e.test.js')
+          dynamic = dynamic_path.read_text(encoding='utf-8')
+          old_dynamic = """        Object.defineProperty(globalThis, 'chrome', {
+          configurable: true,
+          value: {
+            runtime: {
+              onMessage: { addListener: (listener) => listeners.push(listener) },
+              sendMessage: async (message) => {
+                if (message.type === 'HALO_CANCEL_REQUEST') {
+                  cancelRequests.push(message.requestId);
+                  return { status: 'cancelled' };
+                }
+                if (message.type !== 'HALO_ENRICH_BATCH') return null;
+                semanticRequests.push(message);
+                if (message.items.some((item) => item.text === 'Pending semantic response.')) {
+                  return new Promise((resolve) => pendingResponses.set(message.requestId, { resolve, message }));
+                }
+                return responseFor(message);
+              }
+            }
+          }
+        });
+"""
+          new_dynamic = """        const chromeNamespace = globalThis.chrome && typeof globalThis.chrome === 'object'
+          ? globalThis.chrome
+          : {};
+        if (globalThis.chrome !== chromeNamespace) {
+          Object.defineProperty(globalThis, 'chrome', { configurable: true, value: chromeNamespace });
+        }
+        Object.defineProperty(chromeNamespace, 'runtime', {
+          configurable: true,
+          writable: true,
+          value: {
+            onMessage: { addListener: (listener) => listeners.push(listener) },
+            sendMessage: async (message) => {
+              if (message.type === 'HALO_CANCEL_REQUEST') {
+                cancelRequests.push(message.requestId);
+                return { status: 'cancelled' };
+              }
+              if (message.type !== 'HALO_ENRICH_BATCH') return null;
+              semanticRequests.push(message);
+              if (message.items.some((item) => item.text === 'Pending semantic response.')) {
+                return new Promise((resolve) => pendingResponses.set(message.requestId, { resolve, message }));
+              }
+              return responseFor(message);
+            }
+          }
+        });
+"""
+          if dynamic.count(old_dynamic) != 1:
+              raise SystemExit(f'dynamic fixture replacement count={dynamic.count(old_dynamic)}; expected 1')
+          dynamic_path.write_text(dynamic.replace(old_dynamic, new_dynamic), encoding='utf-8', newline='\n')
+
+          collector_path = Path('scripts/collect-worker-b-browser-evidence.js')
+          collector = collector_path.read_text(encoding='utf-8')
+          old_collector = """    const restartEvent = context.waitForEvent('serviceworker', { timeout: 12_000 });
+    const statusResponse = page.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
+    const restartedWorker = await restartEvent;
+    status = await statusResponse;
+    details.workerRestart = { stoppedVersionId: stopped, status };
+    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) && restartedWorker !== worker && status && status.mode === 'ready');
+    const restartedLifetime = status && status.networkActivity && status.networkActivity.lifetimeId;
+    gates.cacheLossReload = Boolean(initialLifetime && restartedLifetime && initialLifetime !== restartedLifetime &&
+      status.networkActivity.fetchAttempts >= 1);
+    worker = restartedWorker;
+"""
+          new_collector = """    // Playwright keeps the same Worker handle across MV3 idle/restart cycles and does not
+    // emit a second `serviceworker` event. The CDP stop above proves suspension; a successful
+    // runtime message on the retained handle proves browser-driven restart, while the runtime
+    // lifetime id proves a fresh service-worker lifetime/cache reload.
+    status = await page.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
+    const restartedLifetime = status && status.networkActivity && status.networkActivity.lifetimeId;
+    details.workerRestart = {
+      stoppedVersionId: stopped,
+      workerHandleReused: true,
+      initialLifetime,
+      restartedLifetime,
+      status
+    };
+    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) &&
+      status && status.mode === 'ready' && initialLifetime && restartedLifetime &&
+      initialLifetime !== restartedLifetime);
+    gates.cacheLossReload = Boolean(initialLifetime && restartedLifetime && initialLifetime !== restartedLifetime &&
+      status.networkActivity.fetchAttempts >= 1);
+"""
+          if collector.count(old_collector) != 1:
+              raise SystemExit(f'MV3 collector replacement count={collector.count(old_collector)}; expected 1')
+          collector_path.write_text(collector.replace(old_collector, new_collector), encoding='utf-8', newline='\n')
+          PY
+
+      - name: Validate repair source before commit
+        run: |
+          set -euo pipefail
+          node --check tests/browser/dynamic-dom.e2e.test.js
+          node --check scripts/collect-worker-b-browser-evidence.js
+          git diff --check
+          git diff -- tests/browser/dynamic-dom.e2e.test.js scripts/collect-worker-b-browser-evidence.js
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n%s\n' scripts/collect-worker-b-browser-evidence.js tests/browser/dynamic-dom.e2e.test.js | sort)"
+
+      - name: Commit and push repair round 1
+        run: |
+          set -euo pipefail
+          git config user.name 'EveMissLab Worker D'
+          git config user.email 'worker-d@users.noreply.github.com'
+          git add tests/browser/dynamic-dom.e2e.test.js scripts/collect-worker-b-browser-evidence.js
+          git commit -m 'fix: close Worker D browser lifecycle blockers'
+          git push origin HEAD:parallel/v0.4.0-browser-integration
+          echo "repair_head=$(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
