@@ -1,11 +1,11 @@
 # Halo Learning v0.4.0 — Architect Final Focused Repair Closure
 
-**Date:** 2026-08-26  
-**Repository:** `kakon77777-commits/Halo-Learning`  
-**Canonical integration branch:** `integration/v0.4.0-final-convergence`  
-**Validated source HEAD:** `c3079d34fb39828826eb6b1038a3c9382e979c02`  
-**Fresh integrated run:** [Architect v0.4.0 Final Convergence / 32980858892](https://github.com/kakon77777-commits/Halo-Learning/actions/runs/32980858892)  
-**Disposition:** **BLOCKED — checkpoint published; `main` merge prohibited**
+- **Date:** 2026-08-26
+- **Repository:** `kakon77777-commits/Halo-Learning`
+- **Canonical integration branch:** `integration/v0.4.0-final-convergence`
+- **Validated source HEAD:** `c3079d34fb39828826eb6b1038a3c9382e979c02`
+- **Fresh integrated run:** [Architect v0.4.0 Final Convergence / 32980858892](https://github.com/kakon77777-commits/Halo-Learning/actions/runs/32980858892)
+- **Disposition:** **BLOCKED — checkpoint published; `main` merge prohibited**
 
 This closes the bounded v0.4.0 continuation. It preserves the accepted integration work and the exact remaining failures without weakening a frozen gate, opening a third repair round, merging `main`, or beginning v0.5.
 
