@@ -139,10 +139,18 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - name: Prepare release evidence workspace
+        run: mkdir -p evidence/architect-release /tmp/halo-release-first
+      - name: Run development validator on clean source checkout
+        run: |
+          set +e
+          npm run validate > evidence/architect-release/development-validator.log 2>&1
+          DEV_EXIT=$?
+          set -e
+          echo "DEV_EXIT=$DEV_EXIT" >> "$GITHUB_ENV"
       - name: Build deterministic candidate twice and compare bytes
         run: |
           set -euo pipefail
-          mkdir -p evidence/architect-release /tmp/halo-release-first
           npm run package:release | tee evidence/architect-release/package-first.log
           cp dist/halo-learning-magic-hand-v0.4.0.zip /tmp/halo-release-first/extension.zip
           cp releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip /tmp/halo-release-first/source.zip
@@ -174,12 +182,8 @@ jobs:
             exit 1
           fi
           printf 'git_metadata_present=false\n' > evidence/architect-release/standalone-git-audit.txt
-      - name: Run development and extracted standalone validators without hiding failure
+      - name: Run extracted standalone validator without hiding failure
         run: |
-          set +e
-          npm run validate > evidence/architect-release/development-validator.log 2>&1
-          DEV_EXIT=$?
-          set -e
           (cd /tmp/halo-v040-standalone && npm ci)
           set +e
           (cd /tmp/halo-v040-standalone && npm run validate:standalone) > evidence/architect-release/standalone-validator.log 2>&1
