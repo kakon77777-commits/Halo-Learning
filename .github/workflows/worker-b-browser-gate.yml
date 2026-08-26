@@ -45,5 +45,8 @@ jobs:
       - name: Browser harness supplement
         run: node --test tests/browser-harness.test.js
 
-      - name: Existing real-browser suites
+      - name: Accessibility contract
+        run: node --test tests/accessibility-contract.test.js
+
+      - name: Real-browser suites
         run: npm run test:browser
