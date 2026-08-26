@@ -82,23 +82,20 @@ async function installLocalSemanticRuntime(page) {
       };
     }
 
-    Object.defineProperty(globalThis, 'chrome', {
-      configurable: true,
-      value: {
-        runtime: {
-          onMessage: { addListener: (listener) => listeners.push(listener) },
-          sendMessage: async (message) => {
-            if (message.type === 'HALO_CANCEL_REQUEST') {
-              cancelRequests.push(message.requestId);
-              return { status: 'cancelled' };
-            }
-            if (message.type !== 'HALO_ENRICH_BATCH') return null;
-            semanticRequests.push(message);
-            return responseFor(message);
-          }
+    const runtime = {
+      onMessage: { addListener: (listener) => listeners.push(listener) },
+      sendMessage: async (message) => {
+        if (message.type === 'HALO_CANCEL_REQUEST') {
+          cancelRequests.push(message.requestId);
+          return { status: 'cancelled' };
         }
+        if (message.type !== 'HALO_ENRICH_BATCH') return null;
+        semanticRequests.push(message);
+        return responseFor(message);
       }
-    });
+    };
+    if (!globalThis.chrome) globalThis.chrome = {};
+    globalThis.chrome.runtime = runtime;
     globalThis.__haloFixtureRuntime = { listeners, semanticRequests, cancelRequests };
   });
 
@@ -177,8 +174,14 @@ async function exerciseFixture(page, fixture) {
   await assertNoDuplicateWrappers(page, fixture);
 
   if (fixture.excludeSelector) {
-    const excludedCount = await page.locator(`${fixture.excludeSelector} [data-halo-owned="token"], ${fixture.excludeSelector}[data-halo-owned="token"]`).count();
-    assert.equal(excludedCount, 0, `${fixture.id}: excluded code/pre content was marked`);
+    const selectors = fixture.excludeSelector.split(',').map((value) => value.trim()).filter(Boolean);
+    const excludedMarked = await page.evaluate((values) => values.some((selector) => {
+      for (const element of document.querySelectorAll(selector)) {
+        if (element.matches('[data-halo-owned="token"]') || element.querySelector('[data-halo-owned="token"]')) return true;
+      }
+      return false;
+    }), selectors);
+    assert.equal(excludedMarked, false, `${fixture.id}: excluded code/pre content was marked`);
   }
 
   if (fixture.dynamicAction) {
@@ -197,18 +200,14 @@ async function exerciseFixture(page, fixture) {
 
   const expectedAfterAction = await rootText(page);
   const specialAfterApply = await specialSnapshot(page, fixture);
-  if (specialBefore !== null) {
-    assert.equal(specialAfterApply, specialBefore, `${fixture.id}: shadow/frame source changed during apply`);
-  }
+  if (specialBefore !== null) assert.equal(specialAfterApply, specialBefore, `${fixture.id}: shadow/frame source changed during apply`);
 
   await sendContentCommand(page, 'HALO_REMOVE_MARKING');
   await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0, null, { timeout: 7000 });
   assert.equal(await rootText(page), expectedAfterAction, `${fixture.id}: REMOVE did not restore source text`);
   assert.equal(await page.locator('[data-halo-owned]').count(), 0, `${fixture.id}: owned artifacts remain after remove`);
   const specialAfterRemove = await specialSnapshot(page, fixture);
-  if (specialBefore !== null) {
-    assert.equal(specialAfterRemove, specialBefore, `${fixture.id}: shadow/frame source changed after remove`);
-  }
+  if (specialBefore !== null) assert.equal(specialAfterRemove, specialBefore, `${fixture.id}: shadow/frame source changed after remove`);
 
   const secondStatus = await sendContentCommand(page, 'HALO_APPLY_MARKING');
   assert.equal(secondStatus && secondStatus.active, true, `${fixture.id}: second APPLY did not activate runtime`);
