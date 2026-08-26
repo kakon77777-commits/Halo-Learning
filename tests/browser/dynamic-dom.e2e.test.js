@@ -21,6 +21,7 @@ const scripts = [
   'shared/settings.js',
   'shared/sentence-pipeline.js',
   'shared/runtime-scheduler.js',
+  'shared/trigger-controller.js',
   'shared/dynamic-dom-controller.js',
   'shared/reversible-renderer.js',
   'content.js'

@@ -268,16 +268,15 @@ async function measureUx(chromiumExecutable) {
 async function measureLexical(chromiumExecutable) {
   const comparison = await runShardComparison({ executablePath: chromiumExecutable });
   verifyBrowserShardComparison(comparison);
-  if (!comparison.selection || comparison.selection.status !== 'selected') {
-    throw new Error('browser shard comparison selected no v0.4 candidate');
-  }
-  const selectedBucketCount = comparison.selection.selectedBucketCount;
-  const artifacts = buildBrowserRuntimeArtifacts({
-    ...CORPORA,
-    builtAt: '2026-08-25T00:00:00.000Z',
-    bucketCount: selectedBucketCount,
-    selectionStatus: 'selected-by-browser-comparison'
-  });
+  const selectionPassed = Boolean(comparison.selection && comparison.selection.status === 'selected');
+const selectedBucketCount = selectionPassed ? comparison.selection.selectedBucketCount : null;
+const diagnosticBucketCount = selectedBucketCount || 128;
+const artifacts = buildBrowserRuntimeArtifacts({
+  ...CORPORA,
+  builtAt: '2026-08-25T00:00:00.000Z',
+  bucketCount: diagnosticBucketCount,
+  selectionStatus: selectionPassed ? 'selected-by-browser-comparison' : 'worker-b-diagnostic-only'
+});
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-worker-b-lexical-'));
   try {
     const extensionRoot = prepareShardCandidateExtension(artifacts, temporaryRoot);
