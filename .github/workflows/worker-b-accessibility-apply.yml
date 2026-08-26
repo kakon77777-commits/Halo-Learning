@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   apply-green:
-    if: startsWith(github.event.head_commit.message, 'ci: apply Worker B accessibility GREEN')
+    if: "${{ startsWith(github.event.head_commit.message, 'ci: apply Worker B accessibility GREEN') }}"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
