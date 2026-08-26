@@ -35,6 +35,18 @@ function nativeBrowserWindow() {
   return windows[windows.length - 1];
 }
 
+async function settlePanelBeforeEscape(page) {
+  if (!page || typeof page.url !== 'function' || String(page.url()).startsWith('chrome-extension://')) return;
+  try {
+    await page.locator('[data-halo-owned="panel"]').locator('.halo-core-panel').waitFor({
+      state: 'visible',
+      timeout: 2000
+    });
+  } catch (_error) {
+    // Escape still preserves raw keyboard semantics when no panel is pending.
+  }
+}
+
 function installNativeShortcutDriver(context) {
   if (process.env.HALO_NATIVE_SHORTCUT_DRIVER !== 'xdotool') return;
 
@@ -43,6 +55,10 @@ function installNativeShortcutDriver(context) {
     const keyboard = page.keyboard;
     const playwrightPress = keyboard.press.bind(keyboard);
     keyboard.press = async (key, options) => {
+      if (key === 'Escape') {
+        await settlePanelBeforeEscape(page);
+        return playwrightPress(key, options);
+      }
       if (key !== 'Alt+Shift+H') return playwrightPress(key, options);
       await page.bringToFront();
       const windowId = nativeBrowserWindow();
