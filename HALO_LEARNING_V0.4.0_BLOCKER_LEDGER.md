@@ -8,24 +8,27 @@ release:
 branch:
   name: integration/v0.4.0-final-convergence
   remote_head: self
-  source_head_before_ledger_commit: 6ea7b3859a9bc3348d81069a16a0f2388b648782
+  source_head_before_ledger_commit: a19d9233f0e11f59da75b495fb80aa14a6cc7955
 
 last_round:
-  blocker_id: B04
-  prompt: 03_B04_SENTENCE_PIPELINE_CHROME_ISOLATION_PROMPT.md
+  blocker_id: B01
+  prompt: 04_B01_DYNAMIC_CHILD_INSERTION_PROMPT.md
   result: resolved
   commits:
-    - 03296e0c9f7b212c82c6554a4c41f441806b7428
-    - b6aa2377064877f9f4da882be1fa388b3acc5cec
-    - 6ea7b3859a9bc3348d81069a16a0f2388b648782
+    - 9476a688c157581713c8c4a1323eadc5c9f8484f
+    - 317d45d5569e6230a841f7a6e756038d4af204e0
+    - 4184ef088cd20900740899b4c07432ae583dc521
+    - c2dd38a10bdb8f776c10d474cb9c7e314977ccb4
+    - 0000a2aa2de9b2feb60f1b3cc78600fe2670166b
+    - a19d9233f0e11f59da75b495fb80aa14a6cc7955
   ci_runs: []
   evidence:
-    - docs/validation/v0.4.0-b04-sentence-pipeline-chrome-isolation.md
+    - docs/validation/v0.4.0-b01-dynamic-child-insertion.md
 
 blockers:
   B01_dynamic_child_insertion:
-    state: open
-    evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
+    state: resolved
+    evidence: docs/validation/v0.4.0-b01-dynamic-child-insertion.md
   B02_reversible_renderer_retention:
     state: open
     evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
@@ -55,10 +58,9 @@ blockers:
     evidence: docs/validation/v0.4.0-b10-standalone-validator-fixture.md
 
 resolved_this_round:
-  - B04
+  - B01
 
 blockers_remaining:
-  - B01
   - B02
   - B03
   - B05
