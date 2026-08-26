@@ -1,0 +1,49 @@
+name: Worker B Browser Gate
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-ux
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chromium-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Worker B branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Record Chromium executable and version
+        run: |
+          node - <<'NODE'
+          const { chromium } = require('playwright');
+          const fs = require('node:fs');
+          const { spawnSync } = require('node:child_process');
+          const executable = chromium.executablePath();
+          console.log('HALO_CHROMIUM_EXECUTABLE=' + executable);
+          console.log('exists=' + fs.existsSync(executable));
+          const version = spawnSync(executable, ['--version'], { encoding: 'utf8' });
+          process.stdout.write(version.stdout || version.stderr || 'version unavailable\n');
+          NODE
+
+      - name: Browser harness supplement
+        run: node --test tests/browser-harness.test.js
+
+      - name: Existing real-browser suites
+        run: npm run test:browser
