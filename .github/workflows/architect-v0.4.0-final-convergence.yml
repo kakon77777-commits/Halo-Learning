@@ -131,6 +131,8 @@ jobs:
   release-evidence:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      HALO_EVIDENCE_ROOT: /tmp/halo-v040-release-evidence
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -139,19 +141,14 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - name: Prepare release evidence workspace
-        run: mkdir -p evidence/architect-release /tmp/halo-release-first
-      - name: Run development validator on clean source checkout
+      - name: Prepare isolated release evidence workspace
         run: |
-          set +e
-          npm run validate > evidence/architect-release/development-validator.log 2>&1
-          DEV_EXIT=$?
-          set -e
-          echo "DEV_EXIT=$DEV_EXIT" >> "$GITHUB_ENV"
+          rm -rf "$HALO_EVIDENCE_ROOT" /tmp/halo-release-first
+          mkdir -p "$HALO_EVIDENCE_ROOT" /tmp/halo-release-first
       - name: Build deterministic candidate twice and compare bytes
         run: |
           set -euo pipefail
-          npm run package:release | tee evidence/architect-release/package-first.log
+          npm run package:release | tee "$HALO_EVIDENCE_ROOT/package-first.log"
           cp dist/halo-learning-magic-hand-v0.4.0.zip /tmp/halo-release-first/extension.zip
           cp releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip /tmp/halo-release-first/source.zip
           cp dist/halo-learning-v0.4.0-package-manifest.json /tmp/halo-release-first/manifest.json
@@ -159,18 +156,25 @@ jobs:
             dist/halo-learning-magic-hand-v0.4.0.zip \
             releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip \
             dist/halo-learning-v0.4.0-package-manifest.json \
-            > evidence/architect-release/first.sha256
-          npm run package:release | tee evidence/architect-release/package-second.log
+            > "$HALO_EVIDENCE_ROOT/first.sha256"
+          npm run package:release | tee "$HALO_EVIDENCE_ROOT/package-second.log"
           sha256sum \
             dist/halo-learning-magic-hand-v0.4.0.zip \
             releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip \
             dist/halo-learning-v0.4.0-package-manifest.json \
-            > evidence/architect-release/second.sha256
+            > "$HALO_EVIDENCE_ROOT/second.sha256"
           cmp /tmp/halo-release-first/extension.zip dist/halo-learning-magic-hand-v0.4.0.zip
           cmp /tmp/halo-release-first/source.zip releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
           cmp /tmp/halo-release-first/manifest.json dist/halo-learning-v0.4.0-package-manifest.json
-          cmp evidence/architect-release/first.sha256 evidence/architect-release/second.sha256
-          printf 'deterministic=true\n' > evidence/architect-release/package-byte-comparison.txt
+          cmp "$HALO_EVIDENCE_ROOT/first.sha256" "$HALO_EVIDENCE_ROOT/second.sha256"
+          printf 'deterministic=true\n' > "$HALO_EVIDENCE_ROOT/package-byte-comparison.txt"
+
+          git status --porcelain --untracked-files=all > "$HALO_EVIDENCE_ROOT/post-package-source-status.txt"
+          if [ -s "$HALO_EVIDENCE_ROOT/post-package-source-status.txt" ]; then
+            echo 'source checkout is dirty after deterministic packaging' >&2
+            cat "$HALO_EVIDENCE_ROOT/post-package-source-status.txt" >&2
+            exit 1
+          fi
       - name: Extract standalone source and prove Git metadata absent
         run: |
           set -euo pipefail
@@ -181,37 +185,60 @@ jobs:
             echo 'standalone contains prohibited .git metadata' >&2
             exit 1
           fi
-          printf 'git_metadata_present=false\n' > evidence/architect-release/standalone-git-audit.txt
-      - name: Run extracted standalone validator without hiding failure
+          printf 'git_metadata_present=false\n' > "$HALO_EVIDENCE_ROOT/standalone-git-audit.txt"
+      - name: Run development and extracted standalone validators without hiding failure
         run: |
+          set -euo pipefail
+          git status --porcelain --untracked-files=all > "$HALO_EVIDENCE_ROOT/pre-development-validator-git-status.txt"
+          if [ -s "$HALO_EVIDENCE_ROOT/pre-development-validator-git-status.txt" ]; then
+            echo 'development validator source must start clean' >&2
+            cat "$HALO_EVIDENCE_ROOT/pre-development-validator-git-status.txt" >&2
+            exit 1
+          fi
+
+          set +e
+          npm run validate > "$HALO_EVIDENCE_ROOT/development-validator.log" 2>&1
+          DEV_EXIT=$?
+          set -e
+
+          git status --porcelain --untracked-files=all > "$HALO_EVIDENCE_ROOT/post-development-validator-git-status.txt"
+          if [ -s "$HALO_EVIDENCE_ROOT/post-development-validator-git-status.txt" ]; then
+            echo 'development validator dirtied source checkout' >&2
+            cat "$HALO_EVIDENCE_ROOT/post-development-validator-git-status.txt" >&2
+            exit 1
+          fi
+
           (cd /tmp/halo-v040-standalone && npm ci)
           set +e
-          (cd /tmp/halo-v040-standalone && npm run validate:standalone) > evidence/architect-release/standalone-validator.log 2>&1
+          (cd /tmp/halo-v040-standalone && npm run validate:standalone) > "$HALO_EVIDENCE_ROOT/standalone-validator.log" 2>&1
           STANDALONE_EXIT=$?
           set -e
-          python - "$DEV_EXIT" "$STANDALONE_EXIT" <<'PY'
+          python - "$DEV_EXIT" "$STANDALONE_EXIT" "$HALO_EVIDENCE_ROOT" <<'PY2'
           import json, sys
           from pathlib import Path
           dev = int(sys.argv[1])
           standalone = int(sys.argv[2])
+          evidence_root = Path(sys.argv[3])
           payload = {
               'schemaVersion': 1,
               'release': 'v0.4.0',
               'developmentValidator': {'exitCode': dev, 'passed': dev == 0},
               'standaloneValidator': {'exitCode': standalone, 'passed': standalone == 0},
               'deterministicPackageBytes': True,
+              'sourceCheckoutCleanBeforeDevelopmentValidator': True,
+              'sourceCheckoutCleanAfterDevelopmentValidator': True,
               'standaloneGitMetadataPresent': False,
           }
-          Path('evidence/architect-release/release-validation-summary.json').write_text(
+          (evidence_root / 'release-validation-summary.json').write_text(
               json.dumps(payload, indent=2) + '\n', encoding='utf-8')
           print(json.dumps(payload, indent=2))
-          PY
+          PY2
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: architect-v0.4.0-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            evidence/architect-release/
+            /tmp/halo-v040-release-evidence/
             dist/halo-learning-magic-hand-v0.4.0.zip
             dist/halo-learning-v0.4.0-package-manifest.json
             releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
