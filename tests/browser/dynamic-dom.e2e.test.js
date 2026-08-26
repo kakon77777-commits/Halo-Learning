@@ -98,23 +98,28 @@ test('real Chromium handles dynamic redraws and SPA routes without duplicate sem
             }
           };
         }
-        Object.defineProperty(globalThis, 'chrome', {
+        const chromeNamespace = globalThis.chrome && typeof globalThis.chrome === 'object'
+          ? globalThis.chrome
+          : {};
+        if (globalThis.chrome !== chromeNamespace) {
+          Object.defineProperty(globalThis, 'chrome', { configurable: true, value: chromeNamespace });
+        }
+        Object.defineProperty(chromeNamespace, 'runtime', {
           configurable: true,
+          writable: true,
           value: {
-            runtime: {
-              onMessage: { addListener: (listener) => listeners.push(listener) },
-              sendMessage: async (message) => {
-                if (message.type === 'HALO_CANCEL_REQUEST') {
-                  cancelRequests.push(message.requestId);
-                  return { status: 'cancelled' };
-                }
-                if (message.type !== 'HALO_ENRICH_BATCH') return null;
-                semanticRequests.push(message);
-                if (message.items.some((item) => item.text === 'Pending semantic response.')) {
-                  return new Promise((resolve) => pendingResponses.set(message.requestId, { resolve, message }));
-                }
-                return responseFor(message);
+            onMessage: { addListener: (listener) => listeners.push(listener) },
+            sendMessage: async (message) => {
+              if (message.type === 'HALO_CANCEL_REQUEST') {
+                cancelRequests.push(message.requestId);
+                return { status: 'cancelled' };
               }
+              if (message.type !== 'HALO_ENRICH_BATCH') return null;
+              semanticRequests.push(message);
+              if (message.items.some((item) => item.text === 'Pending semantic response.')) {
+                return new Promise((resolve) => pendingResponses.set(message.requestId, { resolve, message }));
+              }
+              return responseFor(message);
             }
           }
         });

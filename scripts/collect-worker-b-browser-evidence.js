@@ -491,16 +491,24 @@ async function measureMv3(chromiumExecutable, artifacts) {
     } finally {
       await cdp.detach().catch(() => {});
     }
-    const restartEvent = context.waitForEvent('serviceworker', { timeout: 12_000 });
-    const statusResponse = page.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
-    const restartedWorker = await restartEvent;
-    status = await statusResponse;
-    details.workerRestart = { stoppedVersionId: stopped, status };
-    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) && restartedWorker !== worker && status && status.mode === 'ready');
+    // Playwright keeps the same Worker handle across MV3 idle/restart cycles and does not
+    // emit a second `serviceworker` event. The CDP stop above proves suspension; a successful
+    // runtime message on the retained handle proves browser-driven restart, while the runtime
+    // lifetime id proves a fresh service-worker lifetime/cache reload.
+    status = await page.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
     const restartedLifetime = status && status.networkActivity && status.networkActivity.lifetimeId;
+    details.workerRestart = {
+      stoppedVersionId: stopped,
+      workerHandleReused: true,
+      initialLifetime,
+      restartedLifetime,
+      status
+    };
+    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) &&
+      status && status.mode === 'ready' && initialLifetime && restartedLifetime &&
+      initialLifetime !== restartedLifetime);
     gates.cacheLossReload = Boolean(initialLifetime && restartedLifetime && initialLifetime !== restartedLifetime &&
       status.networkActivity.fetchAttempts >= 1);
-    worker = restartedWorker;
 
     gates.inFlightCancellation = await testFactoryCancellation(worker);
     gates.versionMismatchRejected = await testVersionMismatch(worker);
