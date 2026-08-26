@@ -518,15 +518,15 @@ async function measureMv3(chromiumExecutable, artifacts) {
     await navigationTab.close();
 
     const priorReloadWorker = worker;
+    const reloadedWorkerPromise = context.waitForEvent('serviceworker', { timeout: 12_000 });
     await worker.evaluate(() => {
       setTimeout(() => chrome.runtime.reload(), 0);
       return true;
     }).catch(() => false);
+    const reloadedWorker = await reloadedWorkerPromise;
     await new Promise((resolve) => setTimeout(resolve, 500));
     const reloadPage = await context.newPage();
     await reloadPage.goto(`chrome-extension://${extensionId}/src/popup.html`);
-    let reloadedWorker = context.serviceWorkers().find((candidate) => candidate !== priorReloadWorker);
-    if (!reloadedWorker) reloadedWorker = await context.waitForEvent('serviceworker', { timeout: 12_000 });
     const reloadStatus = await reloadPage.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
     gates.extensionReload = Boolean(reloadedWorker && reloadedWorker !== priorReloadWorker && reloadStatus && reloadStatus.mode === 'ready');
     details.extensionReloadStatus = reloadStatus;
@@ -603,6 +603,13 @@ async function main() {
     memory: { heapPeakBytes: ux.heapPeakBytes }
   };
   const performanceEvaluation = evaluateBrowserPerformance(performanceReport);
+  writeJson('v0.4.0-worker-b-browser-performance.json', performanceReport);
+  writeJson('v0.4.0-worker-b-browser-performance-evaluation.json', {
+    measurements: performanceEvaluation.measurements,
+    budgets: require('../packages/quality/browser-performance').BUDGETS,
+    gates: performanceEvaluation.gates,
+    allBlockingPassed: performanceEvaluation.allBlockingPassed
+  });
   if (!performanceEvaluation.allBlockingPassed) {
     throw new Error(`browser performance gate failed: ${JSON.stringify(performanceEvaluation.gates)}`);
   }
@@ -610,6 +617,8 @@ async function main() {
   const mv3Report = await measureMv3(executable.path, lexical.artifacts);
   mv3Report.browser.version = ux.browserVersion;
   const mv3Evaluation = evaluateMv3Lifecycle(mv3Report);
+  writeJson('v0.4.0-worker-b-mv3-lifecycle.json', mv3Report);
+  writeJson('v0.4.0-worker-b-mv3-lifecycle-evaluation.json', mv3Evaluation);
   if (!mv3Evaluation.allBlockingPassed) {
     throw new Error(`MV3 lifecycle gate failed: ${JSON.stringify(mv3Evaluation.gates)}`);
   }
