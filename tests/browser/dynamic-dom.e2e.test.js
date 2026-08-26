@@ -17,6 +17,7 @@ const scripts = [
   'shared/semantic-annotations.js',
   'shared/grammar-annotations.js',
   'shared/projection.js',
+  'shared/site-policy.js',
   'shared/settings.js',
   'shared/sentence-pipeline.js',
   'shared/runtime-scheduler.js',

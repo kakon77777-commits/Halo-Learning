@@ -106,6 +106,10 @@ function markingProfileFixture(overrides) {
     enabled: true,
     languageMode: 'both',
     triggerMode: 'hybrid',
+    sitePolicy: {
+      schemaVersion: 1,
+      userDenylist: []
+    },
     channels: {
       posLabel: true,
       posColor: true,

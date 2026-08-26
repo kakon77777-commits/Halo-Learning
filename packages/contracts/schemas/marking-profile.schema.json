@@ -4,7 +4,7 @@
   "title": "MarkingProfile/v2",
   "type": "object",
   "required": [
-    "schemaVersion", "profileId", "profileRevision", "enabled", "languageMode", "triggerMode", "channels",
+    "schemaVersion", "profileId", "profileRevision", "enabled", "languageMode", "triggerMode", "sitePolicy", "channels",
     "density", "minConfidence", "labelPosition", "runtimeBudgets", "maxTextNodes", "maxMarkedTokens"
   ],
   "properties": {
@@ -14,6 +14,26 @@
     "enabled": { "type": "boolean" },
     "languageMode": { "enum": ["auto", "both", "en", "zh-Hant"] },
     "triggerMode": { "enum": ["adaptive-hover", "explicit-only", "hybrid"] },
+    "sitePolicy": {
+      "type": "object",
+      "required": ["schemaVersion", "userDenylist"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "userDenylist": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "x-haloCanonicalHostnameDenylist": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "channels": {
       "type": "object",
       "required": [

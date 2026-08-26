@@ -70,6 +70,10 @@ test('canonical browser entry injects local files in order then sends the exact 
   assert.deepEqual(result, { accepted: true });
   assert.equal(Object.isFrozen(Entry.INJECT_FILES), true);
   assert.ok(Entry.INJECT_FILES.includes('src/shared/trigger-controller.js'));
+  assert.ok(Entry.INJECT_FILES.includes('src/shared/site-policy.js'));
+  assert.ok(
+    Entry.INJECT_FILES.indexOf('src/shared/site-policy.js') < Entry.INJECT_FILES.indexOf('src/shared/settings.js')
+  );
   assert.ok(
     Entry.INJECT_FILES.indexOf('src/shared/trigger-controller.js') < Entry.INJECT_FILES.indexOf('src/content.js')
   );

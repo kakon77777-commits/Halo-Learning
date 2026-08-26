@@ -48,6 +48,32 @@ test('trigger mode normalization accepts exactly the three canonical serialized 
   }
 });
 
+test('site policy migration defaults explicitly and canonical denylist is closed and frozen', () => {
+  const defaults = Settings.migrateSettings({});
+  assert.deepEqual(defaults.sitePolicy, { schemaVersion: 1, userDenylist: [] });
+  assert.equal(Object.isFrozen(defaults.sitePolicy), true);
+  assert.equal(Object.isFrozen(defaults.sitePolicy.userDenylist), true);
+
+  const migrated = Settings.migrateSettings({
+    sitePolicy: { schemaVersion: 1, userDenylist: ['Private.Example.', 'private.example', 'A.example'] }
+  });
+  assert.deepEqual(migrated.sitePolicy, {
+    schemaVersion: 1,
+    userDenylist: ['a.example', 'private.example']
+  });
+  assert.deepEqual(Settings.normalizeSettings(migrated), migrated);
+});
+
+test('invalid present site policy never migrates to a silently narrower default', () => {
+  for (const sitePolicy of [
+    null,
+    {},
+    { schemaVersion: 2, userDenylist: [] },
+    { schemaVersion: 1, userDenylist: ['*.example'] },
+    { schemaVersion: 1, userDenylist: [], extra: true }
+  ]) assert.throws(() => Settings.migrateSettings({ sitePolicy }), /sitePolicy|denylist/i);
+});
+
 test('MarkingProfile/v2 normalization is idempotent and all channels remain explicit', () => {
   const first = Settings.migrateSettings({
     schemaVersion: 2,
@@ -134,6 +160,20 @@ test('trigger mode edits preserve compatibility fields and increment the locked 
   assert.equal(next.triggerMode, 'explicit-only');
   assert.equal(next.maxTextNodes, 913);
   assert.equal(next.maxMarkedTokens, 7123);
+  assert.deepEqual(next.runtimeBudgets, current.runtimeBudgets);
+});
+
+test('site denylist edits preserve the profile and increment the locked revision exactly once', () => {
+  const ProfileControls = require('../apps/extension/src/shared/profile-controls');
+  const current = Settings.migrateSettings({ profileId: 'private-profile', profileRevision: 4 });
+  const next = ProfileControls.mergeUiSettings(current, {
+    sitePolicy: { schemaVersion: 1, userDenylist: ['private.example'] }
+  }, Settings.normalizeSettings);
+
+  assert.equal(next.profileId, 'private-profile');
+  assert.equal(next.profileRevision, 5);
+  assert.deepEqual(next.sitePolicy, { schemaVersion: 1, userDenylist: ['private.example'] });
+  assert.deepEqual(next.channels, current.channels);
   assert.deepEqual(next.runtimeBudgets, current.runtimeBudgets);
 });
 

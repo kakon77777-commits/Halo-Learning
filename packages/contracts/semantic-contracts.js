@@ -1,6 +1,7 @@
 'use strict';
 
 const BrowserSemanticContracts = require('../../apps/extension/src/shared/semantic-contracts');
+const SitePolicy = require('../../apps/extension/src/shared/site-policy');
 
 const SEMANTIC_SCHEMA_VERSION = BrowserSemanticContracts.SEMANTIC_SCHEMA_VERSION;
 const MARKING_PROFILE_SCHEMA_VERSION = 2;
@@ -276,7 +277,7 @@ function normalizeAnnotationSet(value) {
 function normalizeMarkingProfile(value) {
   const raw = exactObjectAt(value, 'profile', [
     'schemaVersion', 'profileId', 'profileRevision', 'enabled', 'languageMode', 'triggerMode',
-    'channels', 'density', 'minConfidence', 'labelPosition', 'runtimeBudgets',
+    'sitePolicy', 'channels', 'density', 'minConfidence', 'labelPosition', 'runtimeBudgets',
     'maxTextNodes', 'maxMarkedTokens'
   ]);
   const channels = exactObjectAt(raw.channels, 'profile.channels', CHANNELS);
@@ -284,6 +285,16 @@ function normalizeMarkingProfile(value) {
     'maxTextNodes', 'maxCharacters', 'maxSentences', 'maxSemanticTokens',
     'maxShardIds', 'timeSliceMs', 'maxQueuedRoots', 'viewportBufferPx'
   ]);
+  const sitePolicy = exactObjectAt(raw.sitePolicy, 'profile.sitePolicy', ['schemaVersion', 'userDenylist']);
+  if (sitePolicy.schemaVersion !== 1) fail('profile.sitePolicy.schemaVersion', 'must equal 1');
+  let userDenylist;
+  try { userDenylist = SitePolicy.normalizeDenylist(sitePolicy.userDenylist); } catch (_error) {
+    fail('profile.sitePolicy.userDenylist', 'must be a canonical hostname denylist');
+  }
+  if (userDenylist.length !== sitePolicy.userDenylist.length ||
+      userDenylist.some((value, index) => value !== sitePolicy.userDenylist[index])) {
+    fail('profile.sitePolicy.userDenylist', 'must be sorted, deduplicated, and canonical');
+  }
   const normalizedChannels = {};
   for (const channel of CHANNELS) {
     normalizedChannels[channel] = booleanAt(channels[channel], `profile.channels.${channel}`);
@@ -299,6 +310,7 @@ function normalizeMarkingProfile(value) {
     enabled: booleanAt(raw.enabled, 'profile.enabled'),
     languageMode: enumAt(raw.languageMode, LANGUAGE_MODES, 'profile.languageMode'),
     triggerMode: enumAt(raw.triggerMode, TRIGGER_MODES, 'profile.triggerMode'),
+    sitePolicy: { schemaVersion: 1, userDenylist },
     channels: normalizedChannels,
     density: numberAt(raw.density, 'profile.density', 0, 1),
     minConfidence: numberAt(raw.minConfidence, 'profile.minConfidence', 0, 1),

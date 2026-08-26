@@ -12,6 +12,7 @@
     'src/shared/semantic-annotations.js',
     'src/shared/grammar-annotations.js',
     'src/shared/projection.js',
+    'src/shared/site-policy.js',
     'src/shared/settings.js',
     'src/shared/sentence-pipeline.js',
     'src/shared/runtime-scheduler.js',

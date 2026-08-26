@@ -504,6 +504,67 @@ test('non-Halo mutation invalidates its root synchronously before debounced disc
   assert.deepEqual(changed, [[paragraph]]);
 });
 
+test('policy-relevant form insertions and attributes are reported synchronously after renderer sanitation', () => {
+  const calls = [];
+  const observed = [];
+  const MutationObserver = observerFixture(calls);
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    onMutationsObserved: (records) => observed.push(records)
+  });
+  controller.observe({ body: element('body') });
+  const observer = MutationObserver.instances[0];
+  const input = element('input');
+
+  assert.ok(observer.options.attributeFilter.includes('type'));
+  assert.ok(observer.options.attributeFilter.includes('autocomplete'));
+  assert.ok(observer.options.attributeFilter.includes('inputmode'));
+  assert.ok(observer.options.attributeFilter.includes('name'));
+  assert.ok(observer.options.attributeFilter.includes('role'));
+  observer.emit([mutation({ addedNodes: [input] })]);
+  observer.emit([{ type: 'attributes', target: input, attributeName: 'autocomplete' }]);
+
+  assert.equal(observed.length, 2);
+  assert.equal(observed[0][0].addedNodes[0], input);
+  assert.equal(observed[1][0].attributeName, 'autocomplete');
+});
+
+test('policy-only observation excludes text and presentation attributes until a fresh allow upgrade', () => {
+  const calls = [];
+  const invalidated = [];
+  const changed = [];
+  const clock = fakeClock();
+  const MutationObserver = observerFixture(calls);
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    policyOnly: true,
+    setTimeout: clock.setTimeout,
+    clearTimeout: clock.clearTimeout,
+    onRootsInvalidated: (roots) => invalidated.push(roots),
+    onRootsChanged: (roots) => changed.push(roots)
+  });
+  controller.observe({ body: element('body') });
+  const observer = MutationObserver.instances[0];
+
+  assert.equal(observer.options.childList, true);
+  assert.equal(observer.options.characterData, false);
+  assert.deepEqual(observer.options.attributeFilter.sort(), [
+    'autocomplete', 'data-1p-ignore', 'data-bwignore', 'data-private', 'data-sensitive',
+    'inputmode', 'name', 'role', 'type'
+  ]);
+  observer.emit([mutation({ addedNodes: [element('password-input')] })]);
+  clock.tick(300);
+  assert.deepEqual(invalidated, []);
+  assert.deepEqual(changed, []);
+  assert.equal(clock.pending(), 0);
+
+  assert.equal(controller.setPolicyOnly(false), true);
+  assert.equal(observer.options.characterData, true);
+  assert.ok(observer.options.attributeFilter.includes('class'));
+  assert.ok(observer.options.attributeFilter.includes('data-halo-owned'));
+  assert.equal(controller.setPolicyOnly(false), false);
+});
+
 test('renderer suppression preserves non-Halo records before and during a throwing callback', () => {
   const clock = fakeClock();
   const changed = [];

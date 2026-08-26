@@ -30,6 +30,9 @@
     languageMode: get('languageMode'),
     labelPosition: get('labelPosition'),
     triggerMode: get('triggerMode'),
+    sitePolicyHost: get('sitePolicyHost'),
+    blockSiteButton: get('blockSiteButton'),
+    allowSiteButton: get('allowSiteButton'),
     analyzeSelectionButton: get('analyzeSelectionButton'),
     applyButton: get('applyButton'),
     removeButton: get('removeButton'),
@@ -82,6 +85,58 @@
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !Number.isInteger(tab.id)) throw new Error('No active browser tab');
     return tab;
+  }
+
+  function exactTabHostname(tab) {
+    if (!tab || typeof tab.url !== 'string') throw new Error('Current host is unavailable');
+    const url = new URL(tab.url);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('This page cannot be added');
+    return HaloSitePolicy.normalizeDenylist([url.hostname])[0];
+  }
+
+  function renderCurrentHost(hostname) {
+    const denied = Boolean(currentSettings &&
+      currentSettings.sitePolicy.userDenylist.includes(hostname));
+    controls.sitePolicyHost.value = `${hostname} · ${denied ? 'Blocked / 已封鎖' : 'Allowed / 允許'}`;
+    controls.blockSiteButton.disabled = denied;
+    controls.allowSiteButton.disabled = !denied;
+  }
+
+  async function refreshCurrentHost() {
+    const tab = await currentTab();
+    const hostname = exactTabHostname(tab);
+    renderCurrentHost(hostname);
+    return Object.freeze({ tab, hostname });
+  }
+
+  async function setCurrentHostBlocked(blocked) {
+    const result = await actionMutex.run(async () => {
+      try {
+        const { tab, hostname } = await refreshCurrentHost();
+        const denylist = new Set(currentSettings.sitePolicy.userDenylist);
+        if (blocked) denylist.add(hostname);
+        else denylist.delete(hostname);
+        const sitePolicy = {
+          schemaVersion: 1,
+          userDenylist: HaloSitePolicy.normalizeDenylist([...denylist])
+        };
+        const settings = await persistSettings({ sitePolicy });
+        try {
+          await chrome.tabs.sendMessage(tab.id, { type: 'HALO_POLICY_REEVALUATE', settings });
+        } catch (_error) {
+          // A tab without an injected Halo runtime has no work to clean up.
+        }
+        showStatus(blocked
+          ? 'Host blocked locally · 已在本機封鎖'
+          : 'Host removed from block list · 已移除封鎖', false);
+        return Object.freeze({ hostname });
+      } catch (error) {
+        showStatus(`Site policy error · ${error.message || error}`, true);
+        return null;
+      }
+    });
+    if (result && result.hostname) renderCurrentHost(result.hostname);
+    return result;
   }
 
   async function inject(tabId) {
@@ -140,6 +195,11 @@
   async function init() {
     const settings = await profilePersistence.load();
     renderSettings(settings);
+    try { await refreshCurrentHost(); } catch (_error) {
+      controls.sitePolicyHost.value = 'Unavailable · 無法取得';
+      controls.blockSiteButton.disabled = true;
+      controls.allowSiteButton.disabled = true;
+    }
     showStatus('Ready · 就緒', false);
   }
 
@@ -169,6 +229,8 @@
       .catch((error) => showStatus(`Settings error · ${error.message || error}`, true));
   });
   controls.analyzeSelectionButton.addEventListener('click', analyzeSelection);
+  controls.blockSiteButton.addEventListener('click', () => setCurrentHostBlocked(true));
+  controls.allowSiteButton.addEventListener('click', () => setCurrentHostBlocked(false));
   controls.applyButton.addEventListener('click', apply);
   controls.removeButton.addEventListener('click', remove);
 

@@ -428,3 +428,27 @@ test('reentrant scheduling never overwrites the newest timer handle', () => {
   assert.deepEqual(controller.state(), { name: 'cancelled' });
   assert.deepEqual([...active], []);
 });
+
+test('terminal cleanup closes an independently tracked panel after reentry leaves dismissed state', () => {
+  let controller;
+  let reenter = false;
+  const fixture = fixtureOptions();
+  const clear = fixture.options.clearTimeout;
+  fixture.options.clearTimeout = (id) => {
+    clear(id);
+    if (reenter) controller.dispatch({ type: 'ESCAPE', at: 3 });
+  };
+  controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'old', at: 0 });
+  controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'old', at: 1 });
+
+  reenter = true;
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'candidate', at: 2 });
+  assert.deepEqual(controller.state(), { name: 'dismissed', targetId: 'candidate', reason: 'escape' });
+  assert.deepEqual(fixture.closed, []);
+
+  controller.dispatch({ type: 'CANCEL', at: 4 });
+  assert.deepEqual(controller.state(), { name: 'cancelled' });
+  assert.deepEqual(fixture.closed, ['cancel']);
+  assert.equal(fixture.pending().length, 0);
+});

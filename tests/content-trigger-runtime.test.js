@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const Content = require('../apps/extension/src/content');
+const SitePolicy = require('../apps/extension/src/shared/site-policy');
 const Trigger = require('../apps/extension/src/shared/trigger-controller');
 
 function eventTargetFixture() {
@@ -405,4 +406,48 @@ test('composed paths and fallback ancestry are strictly bounded', () => {
   events.emit('click', eventFor(null, { composedPath: () => throwingIndex }));
   assert.equal(renderer.opened.length, 1);
   runtime.cleanup('CANCEL');
+});
+
+test('explicit selection policy boundary blocks before any live selection or page text read', () => {
+  const reads = { selection: 0, value: 0, text: 0 };
+  const windowLike = {
+    document: {
+      querySelectorAll() { return []; },
+      get textContent() { reads.text += 1; throw new Error('page text'); }
+    },
+    getSelection() { reads.selection += 1; throw new Error('selection'); }
+  };
+  const outcome = Content.readExplicitSelectionAfterPolicy(windowLike, {
+    sitePolicyModule: SitePolicy,
+    url: 'https://bank.example/account',
+    userDenylist: []
+  });
+
+  assert.equal(outcome.decision.allow, false);
+  assert.equal(outcome.decision.category, 'banking');
+  assert.equal(outcome.selection, null);
+  assert.deepEqual(reads, { selection: 0, value: 0, text: 0 });
+  assert.equal(Object.isFrozen(outcome), true);
+});
+
+test('missing or unknown policy decisions fail closed before selection admission', () => {
+  let selectionReads = 0;
+  const windowLike = {
+    document: { querySelectorAll() { return []; } },
+    getSelection() { selectionReads += 1; return null; }
+  };
+  for (const sitePolicyModule of [
+    null,
+    { classifySite() { return { schemaVersion: 2, allow: true }; } },
+    { classifySite() { throw new Error('policy unavailable'); } }
+  ]) {
+    const outcome = Content.readExplicitSelectionAfterPolicy(windowLike, {
+      sitePolicyModule,
+      url: 'https://public.example/article',
+      userDenylist: []
+    });
+    assert.equal(outcome.decision.allow, false);
+    assert.equal(outcome.selection, null);
+  }
+  assert.equal(selectionReads, 0);
 });

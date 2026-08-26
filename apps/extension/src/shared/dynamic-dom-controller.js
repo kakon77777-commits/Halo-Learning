@@ -199,6 +199,9 @@
       ? settings.onRootsInvalidated
       : () => {};
     const onRootsChanged = typeof settings.onRootsChanged === 'function' ? settings.onRootsChanged : () => {};
+    const onMutationsObserved = typeof settings.onMutationsObserved === 'function'
+      ? settings.onMutationsObserved
+      : () => {};
     const onRouteCleanup = typeof settings.onRouteCleanup === 'function' ? settings.onRouteCleanup : () => {};
     const onRouteStart = typeof settings.onRouteStart === 'function' ? settings.onRouteStart : () => {};
     const onError = typeof settings.onError === 'function' ? settings.onError : null;
@@ -213,6 +216,7 @@
     let pendingRecords = [];
     let suppressionDepth = 0;
     let observing = false;
+    let policyOnly = settings.policyOnly === true;
     let cleaned = false;
     let hooksInstalled = false;
     let observedUrl = location && location.href ? String(location.href) : '';
@@ -300,6 +304,12 @@
         filterRendererRecords ? sanitizeRendererRecord(record) : record
       ).filter(Boolean);
       if (!retained.length) return;
+      try {
+        onMutationsObserved(Object.freeze(retained), Object.freeze({ epoch }));
+      } catch (error) {
+        reportError(error, 'mutation-policy', { epoch });
+      }
+      if (policyOnly) return;
       const invalidated = coalesceMutations(retained, isHaloOwned);
       if (invalidated.roots.length || invalidated.removedRoots.length) {
         try {
@@ -381,20 +391,26 @@
 
     function startObservation() {
       if (!documentRef || observing || cleaned) return;
+      const securityAttributes = [
+        'type', 'autocomplete', 'inputmode', 'name', 'role',
+        'data-private', 'data-sensitive', 'data-1p-ignore', 'data-bwignore'
+      ];
+      const fullAttributes = [
+        'class', 'title',
+        ...securityAttributes,
+        'data-halo-owned', 'data-halo-run', 'data-halo-root', 'data-halo-original',
+        'data-halo-node', 'data-halo-start', 'data-halo-end', 'data-halo-index',
+        'data-halo-boundary', 'data-halo-revision', 'data-halo-carrier',
+        'data-halo-pos', 'data-halo-meta', 'data-halo-gloss', 'data-halo-confidence'
+      ];
       observer.observe(documentRef.body || documentRef.documentElement || documentRef, {
         subtree: true,
         childList: true,
-        characterData: true,
-        characterDataOldValue: true,
+        characterData: !policyOnly,
+        characterDataOldValue: !policyOnly,
         attributes: true,
         attributeOldValue: true,
-        attributeFilter: [
-          'class', 'title',
-          'data-halo-owned', 'data-halo-run', 'data-halo-root', 'data-halo-original',
-          'data-halo-node', 'data-halo-start', 'data-halo-end', 'data-halo-index',
-          'data-halo-boundary', 'data-halo-revision', 'data-halo-carrier',
-          'data-halo-pos', 'data-halo-meta', 'data-halo-gloss', 'data-halo-confidence'
-        ]
+        attributeFilter: policyOnly ? securityAttributes : fullAttributes
       });
       observing = true;
     }
@@ -519,6 +535,16 @@
       }
     }
 
+    function setPolicyOnly(value) {
+      const next = value === true;
+      if (cleaned || next === policyOnly) return false;
+      policyOnly = next;
+      clearPending();
+      stopObservation();
+      startObservation();
+      return true;
+    }
+
     function routeEpoch() {
       return epoch;
     }
@@ -552,6 +578,7 @@
       observe,
       routeChanged,
       suppressRendererMutations,
+      setPolicyOnly,
       routeEpoch,
       cleanup
     });

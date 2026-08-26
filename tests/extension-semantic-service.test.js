@@ -336,6 +336,32 @@ test('cancellation is scoped by sender tab even when request IDs collide', async
   assert.equal(completed.results[0].phase, 'lexical');
 });
 
+test('worker authorization rejects a blocked sender before reading enrichment text', async () => {
+  let itemReads = 0;
+  const service = ServiceWorker.createShardSemanticService({
+    loadShardRuntime: async () => { throw new Error('must not load runtime'); },
+    semanticModule: Semantic,
+    grammarModule: Grammar,
+    shardedProviderModule: ShardedProvider,
+    authorizeSender: async (sender) => sender.tab.url !== 'https://bank.example/account'
+  });
+  const blockedMessage = {
+    type: 'HALO_ENRICH_BATCH',
+    requestId: 'blocked-request',
+    pageEpoch: 1,
+    get items() {
+      itemReads += 1;
+      throw new Error('private page text must not be read');
+    }
+  };
+
+  const response = await service.handleMessage(blockedMessage, {
+    tab: { id: 7, url: 'https://bank.example/account' }
+  });
+  assert.deepEqual(response, { error: 'SENSITIVE_SITE_BLOCKED' });
+  assert.equal(itemReads, 0);
+});
+
 test('MV3 worker source loads only candidate-independent local shard modules', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
   const serviceSource = fs.readFileSync(path.join(extensionRoot, 'src/service-worker.js'), 'utf8');

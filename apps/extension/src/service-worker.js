@@ -1,6 +1,8 @@
 if (typeof importScripts === 'function') {
   importScripts(
     'shared/browser-entry.js',
+    'shared/site-policy.js',
+    'shared/settings.js',
     'shared/progressive-runtime.js',
     'shared/semantic-contracts.js',
     'shared/runtime-shard-browser.js',
@@ -21,14 +23,20 @@ if (typeof importScripts === 'function') {
   const browserEntryModule = typeof module === 'object' && module.exports
     ? require('./shared/browser-entry')
     : root.HaloBrowserEntry;
-  const api = factory(root, progressiveModule, contractsModule, browserEntryModule);
+  const sitePolicyModule = typeof module === 'object' && module.exports
+    ? require('./shared/site-policy')
+    : root.HaloSitePolicy;
+  const settingsModule = typeof module === 'object' && module.exports
+    ? require('./shared/settings')
+    : root.HaloSettings;
+  const api = factory(root, progressiveModule, contractsModule, browserEntryModule, sitePolicyModule, settingsModule);
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.HaloSemanticService = api;
   if (!(typeof module === 'object' && module.exports)) {
     api.initializeBrowser();
     api.initializeBrowserTriggers();
   }
-})(typeof globalThis !== 'undefined' ? globalThis : this, function (root, Progressive, Contracts, BrowserEntry) {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (root, Progressive, Contracts, BrowserEntry, SitePolicy, Settings) {
   'use strict';
 
   if (!Contracts || !Number.isInteger(Contracts.SEMANTIC_SCHEMA_VERSION)) {
@@ -265,6 +273,7 @@ if (typeof importScripts === 'function') {
       throw new TypeError('shardedProviderModule.createShardedDictionaryProvider: must be a function');
     }
     const now = typeof settings.now === 'function' ? settings.now : () => new Date().toISOString();
+    const authorizeSender = typeof settings.authorizeSender === 'function' ? settings.authorizeSender : null;
     let contextPromise = null;
     const controllers = new Map();
 
@@ -343,6 +352,11 @@ if (typeof importScripts === 'function') {
     }
 
     async function enrichBatch(message, sender) {
+      if (authorizeSender) {
+        let allowed = false;
+        try { allowed = await authorizeSender(sender); } catch (_error) { allowed = false; }
+        if (allowed !== true) return deepFreeze({ error: 'SENSITIVE_SITE_BLOCKED' });
+      }
       const shallow = validateEnrichmentRequest(message, null);
       const tabId = senderTabId(sender);
       const key = controllerKey(tabId, shallow.requestId);
@@ -414,6 +428,34 @@ if (typeof importScripts === 'function') {
     }
 
     return Object.freeze({ enrichBatch, cancelRequest, handleMessage });
+  }
+
+  function createWorkerPolicyAuthorizer(options) {
+    const settings = options || {};
+    const storage = settings.storage;
+    const policyModule = settings.sitePolicyModule || SitePolicy;
+    const settingsModule = settings.settingsModule || Settings;
+    if (!storage || typeof storage.get !== 'function' || !policyModule ||
+        typeof policyModule.classifySite !== 'function' || !settingsModule ||
+        typeof settingsModule.migrateSettings !== 'function') {
+      return async () => false;
+    }
+    return async function authorizeSender(sender) {
+      try {
+        const url = sender && sender.tab && sender.tab.url;
+        if (typeof url !== 'string') return false;
+        const stored = await storage.get('haloSettings');
+        const profile = settingsModule.migrateSettings(stored && stored.haloSettings);
+        const decision = policyModule.classifySite({
+          url,
+          userDenylist: profile.sitePolicy.userDenylist,
+          sensitiveAttributes: []
+        });
+        return decision.allow === true;
+      } catch (_error) {
+        return false;
+      }
+    };
   }
 
   function createBrowserTriggerService(options) {
@@ -510,7 +552,8 @@ if (typeof importScripts === 'function') {
       loadShardRuntime: createBrowserShardLoader(),
       semanticModule: root.HaloSemanticAnnotations,
       grammarModule: root.HaloGrammarAnnotations,
-      shardedProviderModule: root.HaloShardedDictionaryProvider
+      shardedProviderModule: root.HaloShardedDictionaryProvider,
+      authorizeSender: createWorkerPolicyAuthorizer({ storage: root.chrome.storage && root.chrome.storage.local })
     });
     root.__HALO_SEMANTIC_SERVICE_INITIALIZED__ = service;
     root.chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -544,6 +587,7 @@ if (typeof importScripts === 'function') {
     validateEnrichmentRequest,
     createBrowserShardLoader,
     createShardSemanticService,
+    createWorkerPolicyAuthorizer,
     createBrowserTriggerService,
     initializeBrowser,
     initializeBrowserTriggers

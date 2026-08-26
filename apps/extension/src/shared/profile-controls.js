@@ -18,11 +18,14 @@
     for (const name of ['density', 'languageMode', 'labelPosition', 'triggerMode']) {
       if (Object.hasOwn(ui, name)) merged[name] = ui[name];
     }
+    if (Object.hasOwn(ui, 'sitePolicy')) merged.sitePolicy = ui.sitePolicy;
     const candidate = normalizeSettings(merged);
     const changed = candidate.density !== current.density ||
       candidate.languageMode !== current.languageMode ||
       candidate.labelPosition !== current.labelPosition ||
       candidate.triggerMode !== current.triggerMode ||
+      candidate.sitePolicy.userDenylist.length !== current.sitePolicy.userDenylist.length ||
+      candidate.sitePolicy.userDenylist.some((value, index) => value !== current.sitePolicy.userDenylist[index]) ||
       Object.keys(current.channels).some((name) => candidate.channels[name] !== current.channels[name]);
     if (!changed) return candidate;
     if (current.profileRevision >= Number.MAX_SAFE_INTEGER) {

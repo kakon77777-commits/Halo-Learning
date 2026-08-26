@@ -55,6 +55,49 @@
     }
   }
 
+  const POLICY_FAILURE_DECISION = Object.freeze({
+    schemaVersion: 1,
+    allow: false,
+    category: 'policy-error',
+    reasonCode: 'POLICY_INPUT_ERROR',
+    evidenceKind: 'POLICY_ERROR'
+  });
+
+  function evaluatePagePolicy(windowLike, options) {
+    const settings = options || {};
+    const Policy = settings.sitePolicyModule;
+    if (!Policy || typeof Policy.classifySite !== 'function' ||
+        !Array.isArray(Policy.POLICY_CATEGORIES) ||
+        !Array.isArray(Policy.POLICY_REASON_CODES) ||
+        !Array.isArray(Policy.POLICY_EVIDENCE_KINDS)) return POLICY_FAILURE_DECISION;
+    try {
+      const decision = Policy.classifySite({
+        url: settings.url,
+        userDenylist: settings.userDenylist,
+        document: windowLike.document
+      });
+      if (!decision || !Object.isFrozen(decision) || decision.schemaVersion !== 1 ||
+          typeof decision.allow !== 'boolean' || !Policy.POLICY_CATEGORIES.includes(decision.category) ||
+          !Policy.POLICY_REASON_CODES.includes(decision.reasonCode) ||
+          !Policy.POLICY_EVIDENCE_KINDS.includes(decision.evidenceKind) ||
+          Object.keys(decision).sort().join('\u0000') !==
+            'allow\u0000category\u0000evidenceKind\u0000reasonCode\u0000schemaVersion') {
+        return POLICY_FAILURE_DECISION;
+      }
+      return decision;
+    } catch (_error) {
+      return POLICY_FAILURE_DECISION;
+    }
+  }
+
+  function readExplicitSelectionAfterPolicy(windowLike, options) {
+    const decision = evaluatePagePolicy(windowLike, options);
+    return Object.freeze({
+      decision,
+      selection: decision.allow === true ? readExplicitSelection(windowLike) : null
+    });
+  }
+
   function panelModelForToken(token, renderer) {
     if (!token || !renderer || typeof renderer.ownsToken !== 'function' || !renderer.ownsToken(token)) return null;
     const title = String(token.textContent || '').trim();
@@ -1139,6 +1182,10 @@
     let activeController = null;
     let activeRenderer = null;
     let activeTriggerRuntime = null;
+    let activePolicyDecision = POLICY_FAILURE_DECISION;
+    let currentSettings = null;
+    let markingRequested = false;
+    let runtimeEpoch = 0;
     let requestSequence = 0;
     let rendererMutationScope = null;
 
@@ -1164,7 +1211,13 @@
     }
 
     function isRendererOwned(node) {
-      return false;
+      try {
+        return Boolean(activeRenderer &&
+          ((typeof activeRenderer.ownsToken === 'function' && activeRenderer.ownsToken(node)) ||
+           (typeof activeRenderer.ownsPanel === 'function' && activeRenderer.ownsPanel(node))));
+      } catch (_error) {
+        return false;
+      }
     }
 
     function isVisible(element) {
@@ -1173,15 +1226,19 @@
       return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
     }
 
-    function isSensitivePage() {
-      const location = root.location;
-      if (!location || !['http:', 'https:'].includes(location.protocol)) return true;
-      if (/(?:^|\/)(?:login|signin|sign-in|auth|checkout|payment|banking)(?:\/|$)/i.test(location.pathname || '')) {
-        return true;
+    function freshPolicyDecision(settings) {
+      try {
+        const location = root.location;
+        const url = location && location.href;
+        if (typeof url !== 'string') return POLICY_FAILURE_DECISION;
+        return evaluatePagePolicy(root, {
+          sitePolicyModule: root.HaloSitePolicy,
+          url,
+          userDenylist: settings && settings.sitePolicy && settings.sitePolicy.userDenylist
+        });
+      } catch (_error) {
+        return POLICY_FAILURE_DECISION;
       }
-      return Boolean(root.document.querySelector(
-        'input[type="password"], input[autocomplete="current-password"], input[autocomplete="new-password"], input[autocomplete="one-time-code"]'
-      ));
     }
 
     function ensureRenderer(Renderer) {
@@ -1222,20 +1279,52 @@
       if (triggerRuntime.isCleaned() && activeTriggerRuntime === triggerRuntime) activeTriggerRuntime = null;
     }
 
-    function removeMarking() {
-      cleanupTriggerRuntime('CANCEL');
-      if (activeController) {
-        const controller = activeController;
-        controller.cleanup();
-        if (activeController === controller) activeController = null;
-      } else {
-        if (activeRuntime) {
-          activeRuntime.discovery.disconnect();
-          activeRuntime.scheduler.cancelAll();
-          activeRuntime = null;
+    function policyBlockedStatus(decision) {
+      return Object.freeze({
+        ...emptyStatus(),
+        lastError: 'SENSITIVE_PAGE_BLOCKED',
+        policyDecision: decision
+      });
+    }
+
+    function cleanupActiveWork(type, preserveController) {
+      cleanupTriggerRuntime(type);
+      const runtime = activeRuntime;
+      if (activeRuntime === runtime) activeRuntime = null;
+      cleanupRuntime(runtime, {
+        epoch: runtime && runtime.epoch,
+        rendererCleanup: () => activeRenderer && activeRenderer.removeAll(),
+        onError: () => {
+          lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
         }
-        if (activeRenderer) activeRenderer.removeAll();
+      });
+      activeRenderer = null;
+      if (!preserveController && activeController) {
+        const controller = activeController;
+        activeController = null;
+        controller.cleanup();
       }
+    }
+
+    function blockActivePage(decision) {
+      activePolicyDecision = decision;
+      cleanupActiveWork('CANCEL', true);
+      try {
+        if (activeController && typeof activeController.setPolicyOnly === 'function') {
+          activeController.setPolicyOnly(true);
+        }
+      } catch (_error) {
+        // A failed policy observer upgrade remains blocked and starts no work.
+      }
+      lastStatus = policyBlockedStatus(decision);
+      return lastStatus;
+    }
+
+    function removeMarking() {
+      markingRequested = false;
+      currentSettings = null;
+      cleanupActiveWork('CANCEL', false);
+      activePolicyDecision = POLICY_FAILURE_DECISION;
       lastStatus = emptyStatus();
       return lastStatus;
     }
@@ -1356,7 +1445,9 @@
       });
     }
 
-    async function startRuntime(settings, epoch) {
+    async function startRuntime(settings, routeEpoch, decision) {
+      if (!decision || decision.allow !== true) return blockActivePage(decision || POLICY_FAILURE_DECISION);
+      const epoch = ++runtimeEpoch;
       const Dictionary = root.HaloDictionary;
       const Semantic = root.HaloSemanticAnnotations;
       const Grammar = root.HaloGrammarAnnotations;
@@ -1366,10 +1457,6 @@
       const RuntimeScheduler = root.HaloRuntimeScheduler;
       const Contracts = root.HaloSemanticContracts;
       const Renderer = root.HaloReversibleRenderer;
-      if (isSensitivePage()) {
-        lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'SENSITIVE_PAGE_BLOCKED' });
-        return lastStatus;
-      }
       const provider = Dictionary.createBootstrapDictionaryProvider();
       const lexicalVersion = `${provider.id}@${provider.version}`;
       const renderer = ensureRenderer(Renderer);
@@ -1434,6 +1521,7 @@
         scheduler,
         discovery,
         epoch,
+        routeEpoch,
         rendererRootsByContentRoot: new Map(),
         pendingChangedRoots: new Set()
       };
@@ -1449,6 +1537,39 @@
       return lastStatus;
     }
 
+    function reevaluatePolicy() {
+      if (!currentSettings) return POLICY_FAILURE_DECISION;
+      const previous = activePolicyDecision;
+      const decision = freshPolicyDecision(currentSettings);
+      activePolicyDecision = decision;
+      if (decision.allow !== true) {
+        blockActivePage(decision);
+        return decision;
+      }
+      if (previous.allow !== true && markingRequested && activeController && !activeRuntime) {
+        try {
+          activeController.setPolicyOnly(false);
+        } catch (_error) {
+          blockActivePage(POLICY_FAILURE_DECISION);
+          return POLICY_FAILURE_DECISION;
+        }
+        startRuntime(currentSettings, activeController.routeEpoch(), decision).catch(() => {
+          lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
+        });
+      }
+      return decision;
+    }
+
+    function hasPolicyRelevantMutation(records) {
+      const relevantAttributes = new Set([
+        'type', 'autocomplete', 'inputmode', 'name', 'role',
+        'data-private', 'data-sensitive', 'data-1p-ignore', 'data-bwignore'
+      ]);
+      return Array.from(records || []).some((record) => record &&
+        (record.type === 'childList' ||
+         (record.type === 'attributes' && relevantAttributes.has(record.attributeName))));
+    }
+
     async function applyMarking(rawSettings) {
       try {
         const Settings = root.HaloSettings;
@@ -1462,14 +1583,20 @@
         const Contracts = root.HaloSemanticContracts;
         const DynamicDom = root.HaloDynamicDomController;
         const Renderer = root.HaloReversibleRenderer;
+        const Policy = root.HaloSitePolicy;
         if (!Settings || !Dictionary || !Semantic || !Grammar || !Projection || !Pipeline ||
-            !Progressive || !RuntimeScheduler || !Contracts || !DynamicDom || !Renderer) {
+            !Progressive || !RuntimeScheduler || !Contracts || !DynamicDom || !Renderer || !Policy) {
           throw new Error('Halo shared modules are not loaded');
         }
         const settings = Settings.normalizeSettings(rawSettings);
         removeMarking();
         if (!settings.enabled) return lastStatus;
+        currentSettings = settings;
+        markingRequested = true;
+        const initialDecision = freshPolicyDecision(settings);
+        activePolicyDecision = initialDecision;
         const controller = DynamicDom.createDynamicDomController({
+          policyOnly: initialDecision.allow !== true,
           MutationObserver: root.MutationObserver,
           history: root.history,
           location: root.location,
@@ -1478,8 +1605,11 @@
           sanitizeRendererRecord: (record) => rendererMutationScope
             ? rendererMutationScope.sanitize(record)
             : record,
+          onMutationsObserved: (records) => {
+            if (hasPolicyRelevantMutation(records)) reevaluatePolicy();
+          },
           onRootsInvalidated: (roots, metadata) => {
-            if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
+            if (!activeRuntime || activeRuntime.routeEpoch !== metadata.epoch) return;
             invalidateRuntimeRoots(activeRuntime, activeRenderer, roots, metadata.removedRoots, {
               onError: () => {
                 lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_MARKING_ERROR' });
@@ -1487,7 +1617,7 @@
             });
           },
           onRootsChanged: (roots, metadata) => {
-            if (!activeRuntime || activeRuntime.epoch !== metadata.epoch) return;
+            if (!activeRuntime || activeRuntime.routeEpoch !== metadata.epoch) return;
             refreshInvalidatedRuntimeRoots(activeRuntime, roots, {
               onError: () => {
                 lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_MARKING_ERROR' });
@@ -1496,7 +1626,7 @@
           },
           onRouteCleanup: ({ epoch }) => {
             cleanupTriggerRuntime('ROUTE_CLEANUP');
-            const runtime = activeRuntime && activeRuntime.epoch === epoch ? activeRuntime : null;
+            const runtime = activeRuntime && activeRuntime.routeEpoch === epoch ? activeRuntime : null;
             let cleanupFailed = false;
             cleanupRuntime(runtime, {
               epoch,
@@ -1511,9 +1641,18 @@
               }
             });
             if (!cleanupFailed) lastStatus = emptyStatus();
+            activePolicyDecision = POLICY_FAILURE_DECISION;
           },
           onRouteStart: ({ epoch }) => {
-            startRuntime(settings, epoch).catch(() => {
+            const decision = freshPolicyDecision(currentSettings);
+            activePolicyDecision = decision;
+            if (decision.allow !== true) {
+              blockActivePage(decision);
+              return;
+            }
+            if (!markingRequested) return;
+            controller.setPolicyOnly(false);
+            startRuntime(currentSettings, epoch, decision).catch(() => {
               lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
             });
           },
@@ -1523,7 +1662,8 @@
         });
         activeController = controller;
         controller.observe(root.document);
-        return await startRuntime(settings, controller.routeEpoch());
+        if (initialDecision.allow !== true) return blockActivePage(initialDecision);
+        return await startRuntime(settings, controller.routeEpoch(), initialDecision);
       } catch (_error) {
         lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
         return lastStatus;
@@ -1534,17 +1674,30 @@
       if (!validateExplicitSelectionMessage(message)) {
         return Object.freeze({ accepted: false, code: 'INVALID_ACTION' });
       }
-      const selection = readExplicitSelection(root);
-      if (!selection) return Object.freeze({ accepted: false, code: 'NO_SELECTION' });
       try {
         const Settings = root.HaloSettings;
+        const Policy = root.HaloSitePolicy;
         const Renderer = root.HaloReversibleRenderer;
         const Trigger = root.HaloTriggerController;
-        if (!Settings || !Renderer || !Trigger || !root.chrome.storage || !root.chrome.storage.local) {
+        if (!Settings || !Policy || !Renderer || !Trigger || !root.chrome.storage || !root.chrome.storage.local) {
           throw new Error('Halo explicit trigger modules are not loaded');
         }
         const stored = await root.chrome.storage.local.get('haloSettings');
         const settings = Settings.migrateSettings(stored && stored.haloSettings);
+        currentSettings = settings;
+        const url = root.location && root.location.href;
+        const admission = readExplicitSelectionAfterPolicy(root, {
+          sitePolicyModule: Policy,
+          url,
+          userDenylist: settings.sitePolicy.userDenylist
+        });
+        activePolicyDecision = admission.decision;
+        if (admission.decision.allow !== true) {
+          blockActivePage(admission.decision);
+          return Object.freeze({ accepted: false, code: 'SENSITIVE_PAGE_BLOCKED' });
+        }
+        const selection = admission.selection;
+        if (!selection) return Object.freeze({ accepted: false, code: 'NO_SELECTION' });
         ensureRenderer(Renderer);
         const triggerRuntime = ensureTriggerRuntime(settings);
         const accepted = triggerRuntime.openSelection(selection);
@@ -1554,6 +1707,19 @@
         });
       } catch (_error) {
         return Object.freeze({ accepted: false, code: 'LOCAL_TRIGGER_UNAVAILABLE' });
+      }
+    }
+
+    function policyReevaluate(rawSettings) {
+      try {
+        const Settings = root.HaloSettings;
+        if (!Settings) throw new Error('Halo settings are unavailable');
+        currentSettings = Settings.normalizeSettings(rawSettings);
+        const decision = reevaluatePolicy();
+        return Object.freeze({ allow: decision.allow, policyDecision: decision });
+      } catch (_error) {
+        blockActivePage(POLICY_FAILURE_DECISION);
+        return Object.freeze({ allow: false, policyDecision: POLICY_FAILURE_DECISION });
       }
     }
 
@@ -1575,14 +1741,34 @@
         explicitSelection(message).then((result) => sendResponse(result));
         return true;
       }
+      if (message.type === 'HALO_POLICY_REEVALUATE') {
+        sendResponse(policyReevaluate(message.settings));
+        return false;
+      }
       return false;
     });
+
+    if (root.chrome.storage && root.chrome.storage.onChanged &&
+        typeof root.chrome.storage.onChanged.addListener === 'function') {
+      root.chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (areaName !== 'local' || !changes || !Object.hasOwn(changes, 'haloSettings')) return;
+        const next = changes.haloSettings && changes.haloSettings.newValue;
+        try {
+          currentSettings = root.HaloSettings.migrateSettings(next);
+          reevaluatePolicy();
+        } catch (_error) {
+          blockActivePage(POLICY_FAILURE_DECISION);
+        }
+      });
+    }
   }
 
   initBrowser();
   return Object.freeze({
     validateExplicitSelectionMessage,
     readExplicitSelection,
+    evaluatePagePolicy,
+    readExplicitSelectionAfterPolicy,
     panelModelForToken,
     createContentTriggerRuntime,
     bootstrapAnnotationSets,

@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const Settings = require('../apps/extension/src/shared/settings');
 const Contracts = require('../packages/contracts/semantic-contracts');
+const SitePolicy = require('../apps/extension/src/shared/site-policy');
 
 const schema = JSON.parse(fs.readFileSync(path.join(
   __dirname, '..', 'packages', 'contracts', 'schemas', 'marking-profile.schema.json'
@@ -27,6 +28,21 @@ function errorsFor(value, rule, location = '$') {
     }
   } else if (rule.type === 'integer') {
     if (!Number.isSafeInteger(value)) errors.push(`${location}: integer`);
+  } else if (rule.type === 'array') {
+    if (!Array.isArray(value)) return [`${location}: array`];
+    if (rule.maxItems !== undefined && value.length > rule.maxItems) errors.push(`${location}: maxItems`);
+    if (rule.uniqueItems && new Set(value).size !== value.length) errors.push(`${location}: uniqueItems`);
+    if (rule.items) value.forEach((item, index) => errors.push(...errorsFor(item, rule.items, `${location}[${index}]`)));
+    if (rule['x-haloCanonicalHostnameDenylist']) {
+      try {
+        const normalized = SitePolicy.normalizeDenylist(value);
+        if (normalized.length !== value.length || normalized.some((item, index) => item !== value[index])) {
+          errors.push(`${location}: canonicalDenylist`);
+        }
+      } catch (_error) {
+        errors.push(`${location}: canonicalDenylist`);
+      }
+    }
   } else if (rule.type === 'number') {
     if (typeof value !== 'number' || !Number.isFinite(value)) errors.push(`${location}: number`);
   } else if (rule.type === 'string' && typeof value !== 'string') errors.push(`${location}: string`);
@@ -47,6 +63,8 @@ test('marking-profile schema accepts the exact canonical normalized serializatio
   assert.deepEqual(errorsFor(profile, schema), []);
   assert.ok(schema.required.includes('profileRevision'));
   assert.ok(schema.required.includes('runtimeBudgets'));
+  assert.ok(schema.required.includes('sitePolicy'));
+  assert.equal(schema.properties.sitePolicy.additionalProperties, false);
   assert.equal(schema.properties.runtimeBudgets.additionalProperties, false);
 });
 
@@ -63,6 +81,10 @@ test('canonical runtime and JSON schema accept and reject the identical closed c
     { ...valid, profileId: '   ' },
     { ...valid, channels: { ...valid.channels, extra: true } },
     { ...valid, runtimeBudgets: { ...valid.runtimeBudgets, extra: 1 } },
+    { ...valid, sitePolicy: { ...valid.sitePolicy, extra: true } },
+    { ...valid, sitePolicy: { ...valid.sitePolicy, userDenylist: ['*.example'] } },
+    { ...valid, sitePolicy: { ...valid.sitePolicy, userDenylist: ['z.example', 'a.example'] } },
+    { ...valid, sitePolicy: { ...valid.sitePolicy, userDenylist: ['Private.Example'] } },
     { ...valid, maxTextNodes: 49 },
     { ...valid, maxTextNodes: 2001 },
     { ...valid, maxMarkedTokens: 99 },

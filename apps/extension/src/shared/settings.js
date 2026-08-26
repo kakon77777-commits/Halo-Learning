@@ -1,9 +1,16 @@
 (function (root, factory) {
-  const api = factory();
+  const policyModule = typeof module === 'object' && module.exports
+    ? require('./site-policy')
+    : root.HaloSitePolicy;
+  const api = factory(policyModule);
   if (typeof module === 'object' && module.exports) module.exports = api;
   root.HaloSettings = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (Policy) {
   'use strict';
+
+  if (!Policy || typeof Policy.normalizeDenylist !== 'function') {
+    throw new Error('Canonical site policy is unavailable');
+  }
 
   const CHANNEL_NAMES = Object.freeze([
     'posLabel',
@@ -39,6 +46,10 @@
     viewportBufferPx: 1200
   });
   const TRIGGER_MODES = Object.freeze(['adaptive-hover', 'explicit-only', 'hybrid']);
+  const DEFAULT_SITE_POLICY = Object.freeze({
+    schemaVersion: 1,
+    userDenylist: Object.freeze([])
+  });
   const DEFAULT_SETTINGS = Object.freeze({
     schemaVersion: 2,
     profileId: 'halo-default-v0.3.0',
@@ -46,6 +57,7 @@
     enabled: true,
     languageMode: 'both',
     triggerMode: 'hybrid',
+    sitePolicy: DEFAULT_SITE_POLICY,
     channels: DEFAULT_CHANNELS,
     density: 0.65,
     minConfidence: 0.6,
@@ -99,6 +111,22 @@
     const channels = {};
     for (const name of CHANNEL_NAMES) channels[name] = channelValue(raw, rawChannels, name);
     const rawLanguage = raw.languageMode === 'zh' ? 'zh-Hant' : raw.languageMode;
+    let sitePolicy = DEFAULT_SITE_POLICY;
+    if (Object.prototype.hasOwnProperty.call(raw, 'sitePolicy')) {
+      const value = raw.sitePolicy;
+      if (!value || typeof value !== 'object' || Array.isArray(value) ||
+          Object.getPrototypeOf(value) !== Object.prototype) {
+        throw new TypeError('sitePolicy: canonical object required');
+      }
+      const names = Object.keys(value).sort();
+      if (names.join('\u0000') !== 'schemaVersion\u0000userDenylist' || value.schemaVersion !== 1) {
+        throw new TypeError('sitePolicy: invalid migration input');
+      }
+      sitePolicy = Object.freeze({
+        schemaVersion: 1,
+        userDenylist: Policy.normalizeDenylist(value.userDenylist)
+      });
+    }
     return Object.freeze({
       schemaVersion: 2,
       profileId: typeof raw.profileId === 'string' && raw.profileId.trim()
@@ -110,6 +138,7 @@
       enabled: typeof raw.enabled === 'boolean' ? raw.enabled : DEFAULT_SETTINGS.enabled,
       languageMode: LANGUAGE_MODES.has(rawLanguage) ? rawLanguage : DEFAULT_SETTINGS.languageMode,
       triggerMode: TRIGGER_MODES.includes(raw.triggerMode) ? raw.triggerMode : DEFAULT_SETTINGS.triggerMode,
+      sitePolicy,
       channels: Object.freeze(channels),
       density: clampNumber(raw.density, 0, 1, DEFAULT_SETTINGS.density),
       minConfidence: clampNumber(raw.minConfidence, 0, 1, DEFAULT_SETTINGS.minConfidence),
@@ -124,7 +153,7 @@
   function normalizeSettings(input) {
     let raw = input;
     const top = ['schemaVersion', 'profileId', 'profileRevision', 'enabled', 'languageMode', 'triggerMode',
-      'channels', 'density', 'minConfidence', 'labelPosition', 'runtimeBudgets', 'maxTextNodes', 'maxMarkedTokens'];
+      'sitePolicy', 'channels', 'density', 'minConfidence', 'labelPosition', 'runtimeBudgets', 'maxTextNodes', 'maxMarkedTokens'];
     const budgets = Object.keys(DEFAULT_RUNTIME_BUDGETS);
     function exact(value, names, path) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${path}: canonical object required`);
@@ -143,6 +172,13 @@
     raw = exact(raw, top, 'settings');
     raw.channels = exact(raw.channels, CHANNEL_NAMES, 'settings.channels');
     raw.runtimeBudgets = exact(raw.runtimeBudgets, budgets, 'settings.runtimeBudgets');
+    raw.sitePolicy = exact(raw.sitePolicy, ['schemaVersion', 'userDenylist'], 'settings.sitePolicy');
+    if (raw.sitePolicy.schemaVersion !== 1) throw new TypeError('settings.sitePolicy.schemaVersion: invalid');
+    const denylist = Policy.normalizeDenylist(raw.sitePolicy.userDenylist);
+    if (denylist.length !== raw.sitePolicy.userDenylist.length ||
+        denylist.some((value, index) => value !== raw.sitePolicy.userDenylist[index])) {
+      throw new TypeError('settings.sitePolicy.userDenylist: canonical sorted values required');
+    }
     if (raw.schemaVersion !== 2 || typeof raw.profileId !== 'string' || !raw.profileId.trim() ||
         !Number.isSafeInteger(raw.profileRevision) || raw.profileRevision < 0 || typeof raw.enabled !== 'boolean' ||
         !LANGUAGE_MODES.has(raw.languageMode) || !TRIGGER_MODES.includes(raw.triggerMode) ||
@@ -159,7 +195,13 @@
         throw new TypeError(`settings.runtimeBudgets.${name}: invalid`);
       }
     }
-    return Object.freeze({ ...raw, profileId: raw.profileId.trim(), channels: Object.freeze({ ...raw.channels }), runtimeBudgets: Object.freeze({ ...raw.runtimeBudgets }) });
+    return Object.freeze({
+      ...raw,
+      profileId: raw.profileId.trim(),
+      sitePolicy: Object.freeze({ schemaVersion: 1, userDenylist: denylist }),
+      channels: Object.freeze({ ...raw.channels }),
+      runtimeBudgets: Object.freeze({ ...raw.runtimeBudgets })
+    });
   }
 
   function migrateSettings(input) {
@@ -172,6 +214,7 @@
     DEFAULT_CHANNELS,
     DEFAULT_RUNTIME_BUDGETS,
     TRIGGER_MODES,
+    DEFAULT_SITE_POLICY,
     DEFAULT_SETTINGS,
     normalizeRuntimeBudgets,
     normalizeSettings,

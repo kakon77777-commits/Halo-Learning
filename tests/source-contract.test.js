@@ -132,7 +132,8 @@ test('popup exposes trigger mode and explicit current-tab action through the can
   for (const id of [
     'posLabels', 'posColors', 'lemma', 'morphology', 'glossHint', 'grammarRole',
     'tenseAspect', 'chunk', 'learningState', 'density', 'languageMode',
-    'labelPosition', 'triggerMode', 'analyzeSelectionButton', 'applyButton', 'removeButton'
+    'labelPosition', 'triggerMode', 'sitePolicyHost', 'blockSiteButton', 'allowSiteButton',
+    'analyzeSelectionButton', 'applyButton', 'removeButton'
   ]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
@@ -147,6 +148,9 @@ test('popup exposes trigger mode and explicit current-tab action through the can
   assert.doesNotMatch(js, /XMLHttpRequest/);
   assert.doesNotMatch(js, /const INJECT_FILES/);
   assert.match(html, /shared\/browser-entry\.js/);
+  assert.match(html, /shared\/site-policy\.js/);
+  assert.match(js, /sitePolicy\.userDenylist/);
+  assert.match(js, /HALO_POLICY_REEVALUATE/);
 });
 
 test('executable extension source contains no remote script or API dependency', () => {
@@ -155,7 +159,7 @@ test('executable extension source contains no remote script or API dependency', 
     'src/shared/projection.js', 'src/shared/settings.js', 'src/shared/dictionary-provider.js',
     'src/shared/runtime-scheduler.js', 'src/shared/semantic-contracts.js',
     'src/shared/reversible-renderer.js', 'src/shared/trigger-controller.js',
-    'src/shared/browser-entry.js', 'src/service-worker.js'
+    'src/shared/site-policy.js', 'src/shared/browser-entry.js', 'src/service-worker.js'
   ];
   const combined = sourceFiles.map((rel) => fs.readFileSync(path.join(extensionRoot, rel), 'utf8')).join('\n');
   assert.doesNotMatch(combined, /https?:\/\//i);
@@ -165,8 +169,11 @@ test('executable extension source contains no remote script or API dependency', 
 
 test('content privacy gate fails closed on sensitive form attributes without reading field values', () => {
   const source = fs.readFileSync(contentPath, 'utf8');
+  const policy = fs.readFileSync(path.join(extensionRoot, 'src', 'shared', 'site-policy.js'), 'utf8');
   assert.match(source, /SENSITIVE_PAGE_BLOCKED/);
-  assert.match(source, /input\[type=["']password["']\]/);
-  assert.doesNotMatch(source, /\.value\b/);
-  assert.doesNotMatch(source, /document\.cookie|chrome\.history|chrome\.cookies/);
+  assert.match(source, /HaloSitePolicy/);
+  assert.match(source, /scanSecurityAttributes|classifySite/);
+  assert.match(source, /HALO_POLICY_REEVALUATE/);
+  assert.doesNotMatch(policy, /\belement\.value\b|textContent|innerText/);
+  assert.doesNotMatch(policy, /document\.cookie|chrome\.history|chrome\.cookies/);
 });

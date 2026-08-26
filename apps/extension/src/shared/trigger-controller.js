@@ -204,7 +204,7 @@
     }
 
     function terminate(type, serial) {
-      const wasOpen = current.name === 'core-open' && panelOpenTarget !== null;
+      const wasOpen = panelOpenTarget !== null;
       current = frozenState({ name: 'cancelled' });
       transitionGeneration += 1;
       cancelTimers();
