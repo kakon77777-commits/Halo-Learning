@@ -20,4 +20,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - run: node scripts/diagnose-b03-b05.js
+      - run: xvfb-run -a node scripts/diagnose-b03-b05.js
