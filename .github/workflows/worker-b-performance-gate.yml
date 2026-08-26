@@ -30,26 +30,23 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           collector = Path('scripts/collect-worker-b-browser-evidence.js')
           s = collector.read_text(encoding='utf-8')
-
-          old_cdp = "details.workerRestart = { stopped, status };\n    gates.workerRestart = Boolean(stopped && stopped.runningStatus === 'stopped' && restartedWorker !== worker && status && status.mode === 'ready');"
-          new_cdp = "details.workerRestart = { stoppedVersionId: stopped, status };\n    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) && restartedWorker !== worker && status && status.mode === 'ready');"
-          if old_cdp in s:
-              s = s.replace(old_cdp, new_cdp, 1)
-
-          old_selection = """  if (!comparison.selection || comparison.selection.status !== 'selected') {
-            throw new Error('browser shard comparison selected no v0.4 candidate');
-          }
-          const selectedBucketCount = comparison.selection.selectedBucketCount;
-          const artifacts = buildBrowserRuntimeArtifacts({
-            ...CORPORA,
-            builtAt: '2026-08-25T00:00:00.000Z',
-            bucketCount: selectedBucketCount,
-            selectionStatus: 'selected-by-browser-comparison'
-          });"""
-          new_selection = """  const selectionPassed = Boolean(comparison.selection && comparison.selection.status === 'selected');
+          selection_pattern = re.compile(
+              r"  if \(!comparison\.selection \|\| comparison\.selection\.status !== 'selected'\) \{\n"
+              r"\s*throw new Error\('browser shard comparison selected no v0\.4 candidate'\);\n"
+              r"\s*\}\n"
+              r"\s*const selectedBucketCount = comparison\.selection\.selectedBucketCount;\n"
+              r"\s*const artifacts = buildBrowserRuntimeArtifacts\(\{\n"
+              r"\s*\.\.\.CORPORA,\n"
+              r"\s*builtAt: '2026-08-25T00:00:00\.000Z',\n"
+              r"\s*bucketCount: selectedBucketCount,\n"
+              r"\s*selectionStatus: 'selected-by-browser-comparison'\n"
+              r"\s*\}\);"
+          )
+          replacement = """  const selectionPassed = Boolean(comparison.selection && comparison.selection.status === 'selected');
           const selectedBucketCount = selectionPassed ? comparison.selection.selectedBucketCount : null;
           const diagnosticBucketCount = selectedBucketCount || 128;
           const artifacts = buildBrowserRuntimeArtifacts({
@@ -58,90 +55,9 @@ jobs:
             bucketCount: diagnosticBucketCount,
             selectionStatus: selectionPassed ? 'selected-by-browser-comparison' : 'worker-b-diagnostic-only'
           });"""
-          if old_selection not in s and new_selection not in s:
+          s, changed = selection_pattern.subn(replacement, s, count=1)
+          if changed == 0 and 'const diagnosticBucketCount = selectedBucketCount || 128;' not in s:
               raise SystemExit('collector shard-selection pattern not recognized')
-          if old_selection in s:
-              s = s.replace(old_selection, new_selection, 1)
-
-          old_return = """    return {
-              comparison,
-              selectedBucketCount,
-              artifacts,
-              browserVersion: browserVersionObserved,"""
-          new_return = """    return {
-              comparison,
-              selectionPassed,
-              selectedBucketCount,
-              diagnosticBucketCount,
-              artifacts,
-              browserVersion: browserVersionObserved,"""
-          if old_return not in s and new_return not in s:
-              raise SystemExit('collector lexical return pattern not recognized')
-          if old_return in s:
-              s = s.replace(old_return, new_return, 1)
-
-          old_lexical_report = """      lexical: {
-                selectedBucketCount: lexical.selectedBucketCount,
-                coldRequiredShardsMs: lexical.coldRequiredShardsMs,"""
-          new_lexical_report = """      lexical: {
-                selectionStatus: lexical.selectionPassed ? 'selected' : 'blocked',
-                selectedBucketCount: lexical.selectedBucketCount,
-                diagnosticBucketCount: lexical.diagnosticBucketCount,
-                coldRequiredShardsMs: lexical.coldRequiredShardsMs,"""
-          if old_lexical_report not in s and new_lexical_report not in s:
-              raise SystemExit('collector lexical report pattern not recognized')
-          if old_lexical_report in s:
-              s = s.replace(old_lexical_report, new_lexical_report, 1)
-
-          old_perf_throw = """  const performanceEvaluation = evaluateBrowserPerformance(performanceReport);
-          if (!performanceEvaluation.allBlockingPassed) {
-            throw new Error(`browser performance gate failed: ${JSON.stringify(performanceEvaluation.gates)}`);
-          }
-
-          const mv3Report = await measureMv3(executable.path, lexical.artifacts);"""
-          new_perf_throw = """  const performanceEvaluation = evaluateBrowserPerformance(performanceReport);
-
-          const mv3Report = await measureMv3(executable.path, lexical.artifacts);"""
-          if old_perf_throw in s:
-              s = s.replace(old_perf_throw, new_perf_throw, 1)
-
-          old_mv3_throw = """  const mv3Evaluation = evaluateMv3Lifecycle(mv3Report);
-          if (!mv3Evaluation.allBlockingPassed) {
-            throw new Error(`MV3 lifecycle gate failed: ${JSON.stringify(mv3Evaluation.gates)}`);
-          }
-          if (mv3Report.details.routeNavigation !== true) throw new Error('MV3 route-navigation evidence failed');
-
-          writeJson('v0.4.0-worker-b-browser-performance.json', performanceReport);"""
-          new_mv3_throw = """  const mv3Evaluation = evaluateMv3Lifecycle(mv3Report);
-
-          writeJson('v0.4.0-worker-b-browser-performance.json', performanceReport);"""
-          if old_mv3_throw in s:
-              s = s.replace(old_mv3_throw, new_mv3_throw, 1)
-
-          old_output_tail = """    fullSemanticEnrichment: mv3Report.details.fullSemanticEnrichment,
-            outputRoot: OUTPUT_ROOT
-          }, null, 2)}\\n`);
-          }"""
-          new_output_tail = """    fullSemanticEnrichment: mv3Report.details.fullSemanticEnrichment,
-            lexicalSelection: lexical.selectionPassed ? 'selected' : 'blocked',
-            diagnosticBucketCount: lexical.diagnosticBucketCount,
-            outputRoot: OUTPUT_ROOT
-          }, null, 2)}\\n`);
-
-          if (!performanceEvaluation.allBlockingPassed) {
-            throw new Error(`browser performance gate failed: ${JSON.stringify(performanceEvaluation.gates)}`);
-          }
-          if (!mv3Evaluation.allBlockingPassed) {
-            throw new Error(`MV3 lifecycle gate failed: ${JSON.stringify(mv3Evaluation.gates)}`);
-          }
-          if (mv3Report.details.routeNavigation !== true) throw new Error('MV3 route-navigation evidence failed');
-          if (!lexical.selectionPassed) throw new Error('browser shard comparison selected no v0.4 candidate');
-          }"""
-          if old_output_tail not in s and new_output_tail not in s:
-              raise SystemExit('collector output-tail pattern not recognized')
-          if old_output_tail in s:
-              s = s.replace(old_output_tail, new_output_tail, 1)
-
           collector.write_text(s, encoding='utf-8', newline='\n')
 
           dynamic_test = Path('tests/browser/dynamic-dom.e2e.test.js')
@@ -194,10 +110,7 @@ jobs:
           (async () => {
             const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
             verifyBrowserShardComparison(comparison);
-            fs.writeFileSync(
-              'evidence/shard-diagnostic/v0.4.0-browser-shard-comparison.json',
-              JSON.stringify(comparison, null, 2) + '\n'
-            );
+            fs.writeFileSync('evidence/shard-diagnostic/v0.4.0-browser-shard-comparison.json', JSON.stringify(comparison, null, 2) + '\n');
             console.log(JSON.stringify({
               browser: comparison.browser,
               host: comparison.host,
@@ -217,6 +130,19 @@ jobs:
             console.error(error.stack || error.message);
             process.exitCode = 1;
           });
+          NODE
+
+      - name: Enforce frozen shard selection
+        id: selection
+        continue-on-error: true
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const comparison = JSON.parse(fs.readFileSync('evidence/shard-diagnostic/v0.4.0-browser-shard-comparison.json', 'utf8'));
+          if (!comparison.selection || comparison.selection.status !== 'selected') {
+            throw new Error(`frozen browser shard selection blocked: ${JSON.stringify(comparison.selection)}`);
+          }
+          console.log(`selected=${comparison.selection.selectedBucketCount}`);
           NODE
 
       - name: Collect real Chromium performance and MV3 evidence
@@ -260,11 +186,13 @@ jobs:
         env:
           DYNAMIC: ${{ steps.dynamic.outcome }}
           SHARD: ${{ steps.shard.outcome }}
+          SELECTION: ${{ steps.selection.outcome }}
           COLLECTOR: ${{ steps.collector.outcome }}
           VERIFY: ${{ steps.verify.outcome }}
         run: |
-          printf 'dynamic=%s\nshard=%s\ncollector=%s\nverify=%s\n' "$DYNAMIC" "$SHARD" "$COLLECTOR" "$VERIFY"
+          printf 'dynamic=%s\nshard=%s\nselection=%s\ncollector=%s\nverify=%s\n' "$DYNAMIC" "$SHARD" "$SELECTION" "$COLLECTOR" "$VERIFY"
           test "$DYNAMIC" = success
           test "$SHARD" = success
+          test "$SELECTION" = success
           test "$COLLECTOR" = success
           test "$VERIFY" = success
