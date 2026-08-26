@@ -526,19 +526,55 @@ async function measureMv3(chromiumExecutable, artifacts) {
     await navigationTab.close();
 
     const priorReloadWorker = worker;
-    const reloadedWorkerPromise = context.waitForEvent('serviceworker', { timeout: 12_000 });
+    const priorReloadLifetime = restartedLifetime;
     await worker.evaluate(() => {
       setTimeout(() => chrome.runtime.reload(), 0);
       return true;
     }).catch(() => false);
-    const reloadedWorker = await reloadedWorkerPromise;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const reloadPage = await context.newPage();
-    await reloadPage.goto(`chrome-extension://${extensionId}/src/popup.html`);
-    const reloadStatus = await reloadPage.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
-    gates.extensionReload = Boolean(reloadedWorker && reloadedWorker !== priorReloadWorker && reloadStatus && reloadStatus.mode === 'ready');
-    details.extensionReloadStatus = reloadStatus;
-    await reloadPage.close();
+
+    const reloadDeadline = Date.now() + 12_000;
+    let reloadPage = null;
+    let reloadStatus = null;
+    let reloadObservationError = null;
+    while (Date.now() < reloadDeadline) {
+      try {
+        if (!reloadPage || reloadPage.isClosed()) reloadPage = await context.newPage();
+        await reloadPage.goto(`chrome-extension://${extensionId}/src/popup.html`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 2_000
+        });
+        const candidateStatus = await reloadPage.evaluate(() =>
+          chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
+        const candidateLifetime = candidateStatus && candidateStatus.networkActivity &&
+          candidateStatus.networkActivity.lifetimeId;
+        if (candidateStatus && candidateStatus.mode === 'ready' && candidateLifetime &&
+            priorReloadLifetime && candidateLifetime !== priorReloadLifetime) {
+          reloadStatus = candidateStatus;
+          break;
+        }
+      } catch (error) {
+        reloadObservationError = error;
+        if (reloadPage && reloadPage.isClosed()) reloadPage = null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (!reloadStatus) {
+      const detail = reloadObservationError && reloadObservationError.message
+        ? `: ${reloadObservationError.message}`
+        : '';
+      throw new Error(`extension reload did not expose a fresh ready runtime lifetime${detail}`);
+    }
+    const reloadedLifetime = reloadStatus.networkActivity.lifetimeId;
+    const observedWorker = context.serviceWorkers().find((candidate) =>
+      new URL(candidate.url()).hostname === extensionId) || null;
+    gates.extensionReload = Boolean(priorReloadLifetime && reloadedLifetime !== priorReloadLifetime);
+    details.extensionReloadStatus = {
+      priorLifetime: priorReloadLifetime,
+      reloadedLifetime,
+      workerHandleReused: observedWorker === priorReloadWorker,
+      status: reloadStatus
+    };
+    if (reloadPage) await reloadPage.close();
 
     if (page) { await page.close().catch(() => {}); page = null; }
     await context.close();
