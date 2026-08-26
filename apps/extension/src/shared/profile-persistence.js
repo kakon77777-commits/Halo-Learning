@@ -13,6 +13,7 @@
     const storageKey = settings.storageKey;
     const lockManager = settings.lockManager;
     const normalizeSettings = settings.normalizeSettings;
+    const migrateSettings = settings.migrateSettings || normalizeSettings;
     const mergeUiSettings = settings.mergeUiSettings;
     if (!storage || typeof storage.get !== 'function' || typeof storage.set !== 'function') {
       throw new TypeError('storage: get and set are required');
@@ -23,7 +24,7 @@
 
     async function load() {
       const stored = await storage.get(storageKey);
-      return normalizeSettings(stored && stored[storageKey]);
+      return migrateSettings(stored && stored[storageKey]);
     }
 
     async function saveEdit(uiPatch) {

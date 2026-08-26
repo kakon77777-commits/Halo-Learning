@@ -8,6 +8,7 @@ const path = require('node:path');
 const { chromium } = require('playwright');
 const { launchExtension, resolveChromiumExecutable } = require('./helpers/extension-harness');
 const { withFixtureServer } = require('./helpers/fixture-server');
+const { stopExtensionServiceWorker } = require('./helpers/service-worker-cdp');
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 const extensionRoot = path.join(repositoryRoot, 'apps', 'extension');
@@ -204,9 +205,8 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       // terminate the worker, then assert the command wakes a functioning
       // worker; worker-object identity is deliberately not asserted.
       const workerBeforeTermination = await extensionWorker(context);
-      const closed = new Promise((resolve) => workerBeforeTermination.once('close', resolve));
-      await workerBeforeTermination.evaluate(() => self.close());
-      await closed;
+      const cdp = await context.newCDPSession(page);
+      await stopExtensionServiceWorker({ session: cdp, scriptUrl: workerBeforeTermination.url() });
       await selectFixture(page);
       await page.bringToFront();
       await page.keyboard.press('Alt+Shift+H');

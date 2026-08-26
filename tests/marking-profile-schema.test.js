@@ -43,7 +43,7 @@ function runtimeAccepts(value) {
 }
 
 test('marking-profile schema accepts the exact canonical normalized serialization', () => {
-  const profile = Settings.normalizeSettings({ profileRevision: 9, triggerMode: 'explicit-only' });
+  const profile = Settings.migrateSettings({ profileRevision: 9, triggerMode: 'explicit-only' });
   assert.deepEqual(errorsFor(profile, schema), []);
   assert.ok(schema.required.includes('profileRevision'));
   assert.ok(schema.required.includes('runtimeBudgets'));
@@ -51,7 +51,7 @@ test('marking-profile schema accepts the exact canonical normalized serializatio
 });
 
 test('canonical runtime and JSON schema accept and reject the identical closed corpus', () => {
-  const valid = Settings.normalizeSettings({ profileRevision: 3 });
+  const valid = Settings.migrateSettings({ profileRevision: 3 });
   const invalid = [];
   for (const name of schema.required) {
     const candidate = { ...valid };
@@ -68,6 +68,10 @@ test('canonical runtime and JSON schema accept and reject the identical closed c
     { ...valid, maxMarkedTokens: 99 },
     { ...valid, maxMarkedTokens: 10001 }
   );
+  const inherited = Object.create(valid);
+  const inheritedChannels = { ...valid, channels: Object.create(valid.channels) };
+  const inheritedBudgets = { ...valid, runtimeBudgets: Object.create(valid.runtimeBudgets) };
+  invalid.push(inherited, inheritedChannels, inheritedBudgets);
   for (const candidate of [valid, ...invalid]) {
     assert.equal(runtimeAccepts(candidate), errorsFor(candidate, schema).length === 0, JSON.stringify(candidate));
   }
@@ -83,7 +87,7 @@ test('legacy settings pass only through migration and emerge canonical', () => {
 });
 
 test('marking-profile schema rejects missing, extra, noninteger, and out-of-range runtime budgets', () => {
-  const profile = Settings.normalizeSettings({});
+  const profile = Settings.migrateSettings({});
   for (const invalid of [
     { ...profile, profileRevision: 1.5 },
     { ...profile, unexpected: true },

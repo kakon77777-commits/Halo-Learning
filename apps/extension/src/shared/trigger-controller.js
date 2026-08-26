@@ -73,6 +73,7 @@
     let hoverTimer = null;
     let dismissTimer = null;
     let transitionGeneration = 0;
+    let dispatchSerial = 0;
 
     function safeEffect(effect) {
       try {
@@ -82,26 +83,28 @@
       }
     }
 
-    function cancelHover() {
+    function cancelHover(serial) {
       hoverGeneration += 1;
       const handle = hoverTimer;
       hoverTimer = null;
       if (handle !== null) safeEffect(() => unschedule(handle));
+      return serial === undefined || serial === dispatchSerial;
     }
 
-    function cancelDismiss() {
+    function cancelDismiss(serial) {
       dismissGeneration += 1;
       const handle = dismissTimer;
       dismissTimer = null;
       if (handle !== null) safeEffect(() => unschedule(handle));
+      return serial === undefined || serial === dispatchSerial;
     }
 
-    function cancelTimers() {
-      cancelHover();
-      cancelDismiss();
+    function cancelTimers(serial) {
+      if (!cancelHover(serial)) return false;
+      return cancelDismiss(serial);
     }
 
-    function scheduleHover(targetId, delay) {
+    function scheduleHover(targetId, delay, serial) {
       const generation = hoverGeneration;
       hoverTimer = schedule(() => {
         hoverTimer = null;
@@ -112,12 +115,12 @@
           at: Math.max(lastAt, Number(now()) || 0)
         });
       }, delay);
+      return serial === undefined || serial === dispatchSerial;
     }
 
-    function scheduleDismiss(targetId) {
+    function scheduleDismiss(targetId, serial) {
       const transition = transitionGeneration;
-      cancelDismiss();
-      if (transition !== transitionGeneration) return;
+      if (!cancelDismiss(serial) || transition !== transitionGeneration) return;
       const generation = dismissGeneration;
       dismissTimer = schedule(() => {
         dismissTimer = null;
@@ -130,30 +133,28 @@
       }, dismissDelayMs);
     }
 
-    function open(targetId, source) {
+    function open(targetId, source, serial) {
       current = frozenState({ name: 'core-open', targetId, source });
       const transition = ++transitionGeneration;
-      cancelTimers();
-      if (transition !== transitionGeneration) return current;
+      if (!cancelTimers(serial) || transition !== transitionGeneration) return current;
       safeEffect(() => openPanel(Object.freeze({ targetId, source })));
       return current;
     }
 
-    function dismiss(reason) {
+    function dismiss(reason, serial) {
       if (current.name === 'idle' || current.name === 'dismissed') return current;
       const targetId = current.targetId;
       const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'dismissed', targetId, reason });
       const transition = ++transitionGeneration;
-      cancelTimers();
-      if (transition !== transitionGeneration) return current;
+      if (!cancelTimers(serial) || transition !== transitionGeneration) return current;
       if (wasOpen) safeEffect(() => closePanel(reason));
       return current;
     }
 
-    function beginHover(targetId) {
+    function beginHover(targetId, serial) {
       if (current.name === 'core-open' && current.targetId === targetId) {
-        cancelDismiss();
+        cancelDismiss(serial);
         return current;
       }
       if (settings.mode === 'explicit-only') return current;
@@ -163,28 +164,27 @@
       const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'candidate', targetId });
       const transition = ++transitionGeneration;
-      cancelTimers();
-      if (transition !== transitionGeneration) return current;
+      if (!cancelTimers(serial) || transition !== transitionGeneration) return current;
       if (wasOpen) safeEffect(() => closePanel('target-switch'));
       if (current.name !== 'candidate' || current.targetId !== targetId) return current;
-      scheduleHover(targetId, primeThresholdMs);
+      scheduleHover(targetId, primeThresholdMs, serial);
       return current;
     }
 
-    function threshold(event) {
+    function threshold(event, serial) {
       const targetId = targetIdOf(event);
       if (event.generation !== undefined && event.generation !== hoverGeneration) return current;
       if (current.targetId !== targetId) return current;
       if (current.name === 'candidate') {
         current = frozenState({ name: 'primed', targetId });
-        scheduleHover(targetId, openThresholdMs - primeThresholdMs);
+        scheduleHover(targetId, openThresholdMs - primeThresholdMs, serial);
         return current;
       }
-      if (current.name === 'primed') return open(targetId, 'hover');
+      if (current.name === 'primed') return open(targetId, 'hover', serial);
       return current;
     }
 
-    function terminate(type) {
+    function terminate(type, serial) {
       const wasOpen = current.name === 'core-open';
       current = frozenState({ name: 'cancelled' });
       transitionGeneration += 1;
@@ -194,6 +194,7 @@
     }
 
     function dispatch(rawEvent) {
+      const serial = ++dispatchSerial;
       if (current.name === 'cancelled') return current;
       if (!rawEvent || typeof rawEvent !== 'object' || Array.isArray(rawEvent) ||
           !TRIGGER_EVENTS.has(rawEvent.type)) {
@@ -220,32 +221,32 @@
         lastPriority = Math.max(lastPriority, priority);
       }
 
-      if (terminal) return terminate(rawEvent.type);
+      if (terminal) return terminate(rawEvent.type, serial);
       if (rawEvent.type === 'EXPLICIT_OPEN' || rawEvent.type === 'MODIFIER_HOVER') {
-        return open(targetIdOf(rawEvent), 'explicit');
+        return open(targetIdOf(rawEvent), 'explicit', serial);
       }
-      if (rawEvent.type === 'POINTER_ENTER') return beginHover(targetIdOf(rawEvent));
+      if (rawEvent.type === 'POINTER_ENTER') return beginHover(targetIdOf(rawEvent), serial);
       if (rawEvent.type === 'POINTER_LEAVE') {
         const targetId = targetIdOf(rawEvent);
         if (current.targetId !== targetId) return current;
         if (current.name === 'candidate' || current.name === 'primed') {
           current = frozenState({ name: 'idle' });
           transitionGeneration += 1;
-          cancelHover();
+          cancelHover(serial);
         } else if (current.name === 'core-open') {
-          scheduleDismiss(targetId);
+          scheduleDismiss(targetId, serial);
         }
         return current;
       }
-      if (rawEvent.type === 'HOVER_THRESHOLD') return threshold(rawEvent);
+      if (rawEvent.type === 'HOVER_THRESHOLD') return threshold(rawEvent, serial);
       if (rawEvent.type === 'DISMISS_TIMEOUT') {
         const targetId = targetIdOf(rawEvent);
         if (rawEvent.generation !== undefined && rawEvent.generation !== dismissGeneration) return current;
         if (current.name !== 'core-open' || current.targetId !== targetId) return current;
-        return dismiss('pointer-leave');
+        return dismiss('pointer-leave', serial);
       }
-      if (rawEvent.type === 'OUTSIDE_CLICK') return dismiss('outside-click');
-      if (rawEvent.type === 'ESCAPE') return dismiss('escape');
+      if (rawEvent.type === 'OUTSIDE_CLICK') return dismiss('outside-click', serial);
+      if (rawEvent.type === 'ESCAPE') return dismiss('escape', serial);
       return current;
     }
 

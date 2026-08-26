@@ -42,8 +42,9 @@
       if (typeof range.getBoundingClientRect !== 'function') return null;
       const rect = range.getBoundingClientRect();
       if (!rect || typeof rect !== 'object') return null;
-      const values = ['left', 'top', 'right', 'bottom', 'width', 'height'].map((name) => Number(rect[name]));
-      if (!values.every(Number.isFinite) || values[4] < 0 || values[5] < 0 || values[2] < values[0] || values[3] < values[1]) return null;
+      const values = ['left', 'top', 'right', 'bottom', 'width', 'height'].map((name) => rect[name]);
+      if (!values.every((value) => typeof value === 'number' && Number.isFinite(value)) ||
+          values[4] < 0 || values[5] < 0 || values[2] < values[0] || values[3] < values[1]) return null;
       const [x, , , bottom] = values;
       return Object.freeze({
         text,
@@ -161,7 +162,8 @@
     function closestOwned(node, predicate) {
       const visited = new Set();
       let current = node;
-      while (current && (typeof current === 'object' || typeof current === 'function') && !visited.has(current)) {
+      while (current && (typeof current === 'object' || typeof current === 'function') &&
+          !visited.has(current) && visited.size < 256) {
         visited.add(current);
         if (safeGet(current, 'nodeType') === 1 && safeOwnership(predicate, current)) return current;
         current = safeGet(current, 'parentElement') || safeGet(current, 'host') || null;
@@ -181,6 +183,7 @@
           if (Array.isArray(path)) {
             let length;
             try { length = path.length; } catch (_error) { length = 0; }
+            if (!Number.isSafeInteger(length) || length < 0 || length > 256) return [];
             for (let index = 0; index < length; index += 1) {
               try { result.push(path[index]); } catch (_error) {}
             }
@@ -1541,7 +1544,7 @@
           throw new Error('Halo explicit trigger modules are not loaded');
         }
         const stored = await root.chrome.storage.local.get('haloSettings');
-        const settings = Settings.normalizeSettings(stored && stored.haloSettings);
+        const settings = Settings.migrateSettings(stored && stored.haloSettings);
         ensureRenderer(Renderer);
         const triggerRuntime = ensureTriggerRuntime(settings);
         const accepted = triggerRuntime.openSelection(selection);

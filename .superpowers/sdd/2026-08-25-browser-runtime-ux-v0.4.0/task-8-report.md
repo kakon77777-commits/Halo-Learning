@@ -296,6 +296,37 @@ Error: Chromium executable is required for Halo browser gates
 
 `progress.md` was not edited.
 
+## Fix round 3 — dispatch intent, strict migration, and CDP termination
+
+Adversarial RED tests reproduced same-state timer reentry, nested leave during
+explicit open, coercive rectangle geometry, inherited canonical fields,
+unbounded hostile paths, and the absence of a supported worker-termination
+helper. The controller now increments a monotonic serial at every dispatch
+entry; timer clears and effects abort remaining outer intent when nested
+dispatch changes that serial. Newest nested state and timer intent wins.
+
+Selection geometry accepts only finite primitive numbers (with nonnegative
+sizes), never numeric strings, booleans, bigint, missing values, or coercion.
+Composed paths require a real array with a safe integer length no greater than
+256; fallback parent/host traversal is cycle-aware and bounded to 256 nodes.
+
+Canonical profile validation now requires every field as an own property at
+the profile, channels, and runtime-budget levels. `normalizeSettings` is the
+strict canonical path; `migrateSettings` alone accepts legacy/missing storage,
+fills defaults, removes aliases, and then invokes strict validation. Storage
+loads explicitly migrate, while apply/save/current profile paths normalize
+strictly. Tests prove legacy rejection on the strict path and canonical
+round-trip after migration.
+
+The installed MV3 harness now terminates its worker through the supported CDP
+`ServiceWorker.enable` / `workerVersionUpdated` / `stopWorker(versionId)` flow.
+A pure helper test proves exact script-URL matching, version selection, command
+shape, cleanup, mismatch handling, and timeout behavior without Chromium.
+
+Final regression: 353 tests passed with zero failures or skips. The browser gate
+remains explicitly blocked only by the absent Chromium executable (one failure,
+zero skips). `progress.md` was not edited.
+
 ## Fix round 2 — hostile boundaries and canonical parity
 
 This round began with adversarial tests for the six review areas. The focused

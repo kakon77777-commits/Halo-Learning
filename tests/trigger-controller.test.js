@@ -347,3 +347,39 @@ test('reentry from clearTimeout wins over pointer-leave cancellation without an 
   assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'newer', source: 'explicit' });
   assert.deepEqual(fixture.opened, [{ targetId: 'newer', source: 'explicit' }]);
 });
+
+test('dispatch serial preserves same-state reentrant timer intent', () => {
+  let controller;
+  let reenter = false;
+  const fixture = fixtureOptions();
+  const clear = fixture.options.clearTimeout;
+  fixture.options.clearTimeout = (id) => {
+    clear(id);
+    if (reenter) controller.dispatch({ type: 'POINTER_ENTER', targetId: 'same', at: 3 });
+  };
+  controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'same', at: 0 });
+  controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'same', at: 1 });
+  reenter = true;
+  controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'same', at: 2 });
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'same', source: 'explicit' });
+  assert.equal(fixture.pending().length, 0);
+});
+
+test('newest nested leave during explicit open keeps its dismiss intent and suppresses outer effect', () => {
+  let controller;
+  let reenter = false;
+  const fixture = fixtureOptions();
+  const clear = fixture.options.clearTimeout;
+  fixture.options.clearTimeout = (id) => {
+    clear(id);
+    if (reenter) controller.dispatch({ type: 'POINTER_LEAVE', targetId: 'new', at: 2 });
+  };
+  controller = Trigger.createTriggerController(fixture.options);
+  controller.dispatch({ type: 'POINTER_ENTER', targetId: 'old', at: 0 });
+  reenter = true;
+  controller.dispatch({ type: 'EXPLICIT_OPEN', targetId: 'new', at: 1 });
+  assert.deepEqual(controller.state(), { name: 'core-open', targetId: 'new', source: 'explicit' });
+  assert.equal(fixture.pending().length, 1);
+  assert.deepEqual(fixture.opened, []);
+});

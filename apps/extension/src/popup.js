@@ -19,6 +19,7 @@
     storageKey: STORAGE_KEY,
     lockManager: navigator.locks,
     normalizeSettings: HaloSettings.normalizeSettings,
+    migrateSettings: HaloSettings.migrateSettings,
     mergeUiSettings: HaloProfileControls.mergeUiSettings
   });
 

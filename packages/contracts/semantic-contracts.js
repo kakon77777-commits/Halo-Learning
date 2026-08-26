@@ -32,6 +32,9 @@ function objectAt(value, path) {
 
 function exactObjectAt(value, path, allowed) {
   const result = objectAt(value, path);
+  for (const name of allowed) {
+    if (!Object.prototype.hasOwnProperty.call(result, name)) fail(`${path}.${name}`, 'is required');
+  }
   for (const name of Object.keys(result)) {
     if (!allowed.includes(name)) fail(`${path}.${name}`, 'is not allowed');
   }

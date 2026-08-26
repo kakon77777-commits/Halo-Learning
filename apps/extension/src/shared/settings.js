@@ -91,7 +91,7 @@
     return Object.freeze(budgets);
   }
 
-  function normalizeSettings(input) {
+  function legacyCandidate(input) {
     const raw = input || {};
     const rawChannels = raw.channels && typeof raw.channels === 'object' && !Array.isArray(raw.channels)
       ? raw.channels
@@ -121,8 +121,40 @@
     });
   }
 
+  function normalizeSettings(input) {
+    const raw = input;
+    const top = ['schemaVersion', 'profileId', 'profileRevision', 'enabled', 'languageMode', 'triggerMode',
+      'channels', 'density', 'minConfidence', 'labelPosition', 'runtimeBudgets', 'maxTextNodes', 'maxMarkedTokens'];
+    const budgets = Object.keys(DEFAULT_RUNTIME_BUDGETS);
+    function exact(value, names, path) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${path}: canonical object required`);
+      for (const name of names) if (!Object.prototype.hasOwnProperty.call(value, name)) throw new TypeError(`${path}.${name}: required`);
+      for (const name of Object.keys(value)) if (!names.includes(name)) throw new TypeError(`${path}.${name}: not allowed`);
+    }
+    exact(raw, top, 'settings');
+    exact(raw.channels, CHANNEL_NAMES, 'settings.channels');
+    exact(raw.runtimeBudgets, budgets, 'settings.runtimeBudgets');
+    if (raw.schemaVersion !== 2 || typeof raw.profileId !== 'string' || !raw.profileId.trim() ||
+        !Number.isSafeInteger(raw.profileRevision) || raw.profileRevision < 0 || typeof raw.enabled !== 'boolean' ||
+        !LANGUAGE_MODES.has(raw.languageMode) || !TRIGGER_MODES.includes(raw.triggerMode) ||
+        !Number.isFinite(raw.density) || raw.density < 0 || raw.density > 1 ||
+        !Number.isFinite(raw.minConfidence) || raw.minConfidence < 0 || raw.minConfidence > 1 ||
+        !LABEL_POSITIONS.has(raw.labelPosition) || !Number.isInteger(raw.maxTextNodes) || raw.maxTextNodes < 50 || raw.maxTextNodes > 2000 ||
+        !Number.isInteger(raw.maxMarkedTokens) || raw.maxMarkedTokens < 100 || raw.maxMarkedTokens > 10000) {
+      throw new TypeError('settings: invalid canonical profile');
+    }
+    for (const name of CHANNEL_NAMES) if (typeof raw.channels[name] !== 'boolean') throw new TypeError(`settings.channels.${name}: boolean required`);
+    for (const name of budgets) {
+      const minimum = name === 'viewportBufferPx' ? 0 : 1;
+      if (!Number.isInteger(raw.runtimeBudgets[name]) || raw.runtimeBudgets[name] < minimum || raw.runtimeBudgets[name] > DEFAULT_RUNTIME_BUDGETS[name]) {
+        throw new TypeError(`settings.runtimeBudgets.${name}: invalid`);
+      }
+    }
+    return Object.freeze({ ...raw, profileId: raw.profileId.trim(), channels: Object.freeze({ ...raw.channels }), runtimeBudgets: Object.freeze({ ...raw.runtimeBudgets }) });
+  }
+
   function migrateSettings(input) {
-    return normalizeSettings(input);
+    return normalizeSettings(legacyCandidate(input));
   }
 
   return Object.freeze({

@@ -29,19 +29,27 @@ test('legacy v0.1/v0.2 settings migrate to MarkingProfile/v2 without losing exis
   assert.doesNotThrow(() => Contracts.normalizeMarkingProfile(profile));
 });
 
+test('strict settings normalization accepts only canonical profiles', () => {
+  assert.throws(() => Settings.normalizeSettings(undefined), /canonical|required/);
+  assert.throws(() => Settings.normalizeSettings({ posLabels: false }), /canonical|required/);
+  const canonical = Settings.migrateSettings({ posLabels: false });
+  assert.deepEqual(Settings.normalizeSettings(canonical), canonical);
+  assert.equal(Object.hasOwn(canonical, 'posLabels'), false);
+});
+
 test('trigger mode normalization accepts exactly the three canonical serialized values', () => {
   for (const triggerMode of ['adaptive-hover', 'explicit-only', 'hybrid']) {
-    const profile = Settings.normalizeSettings({ triggerMode });
+    const profile = Settings.migrateSettings({ triggerMode });
     assert.equal(profile.triggerMode, triggerMode);
-    assert.deepEqual(Settings.normalizeSettings(JSON.parse(JSON.stringify(profile))), profile);
+    assert.deepEqual(Settings.migrateSettings(JSON.parse(JSON.stringify(profile))), profile);
   }
   for (const triggerMode of ['', 'hover', 'explicit', 'HYBRID', null, 1]) {
-    assert.equal(Settings.normalizeSettings({ triggerMode }).triggerMode, 'hybrid');
+    assert.equal(Settings.migrateSettings({ triggerMode }).triggerMode, 'hybrid');
   }
 });
 
 test('MarkingProfile/v2 normalization is idempotent and all channels remain explicit', () => {
-  const first = Settings.normalizeSettings({
+  const first = Settings.migrateSettings({
     schemaVersion: 2,
     profileId: 'fixture-v2',
     channels: {
@@ -56,7 +64,7 @@ test('MarkingProfile/v2 normalization is idempotent and all channels remain expl
       learningState: false
     }
   });
-  const second = Settings.normalizeSettings(first);
+  const second = Settings.migrateSettings(first);
 
   assert.deepEqual(second, first);
   assert.deepEqual(Object.keys(first.channels).sort(), [
@@ -66,14 +74,14 @@ test('MarkingProfile/v2 normalization is idempotent and all channels remain expl
 });
 
 test('learning-state remains explicitly unavailable and cannot be enabled in v0.3.0 settings', () => {
-  const profile = Settings.normalizeSettings({ channels: { learningState: true } });
+  const profile = Settings.migrateSettings({ channels: { learningState: true } });
   assert.equal(profile.channels.learningState, false);
   assert.ok(Settings.UNAVAILABLE_CHANNELS.includes('learningState'));
 });
 
 test('popup UI edits preserve hidden profile controls and the existing profile identity', () => {
   const ProfileControls = require('../apps/extension/src/shared/profile-controls');
-  const current = Settings.normalizeSettings({
+  const current = Settings.migrateSettings({
     schemaVersion: 2,
     profileId: 'custom-study-profile',
     enabled: false,
@@ -110,7 +118,7 @@ test('popup UI edits preserve hidden profile controls and the existing profile i
 
 test('trigger mode edits preserve compatibility fields and increment the locked profile revision once', () => {
   const ProfileControls = require('../apps/extension/src/shared/profile-controls');
-  const current = Settings.normalizeSettings({
+  const current = Settings.migrateSettings({
     profileId: 'trigger-profile',
     profileRevision: 8,
     triggerMode: 'hybrid',
@@ -145,7 +153,7 @@ test('runtime budgets migrate from legacy caps and normalize every bounded dimen
     viewportBufferPx: 1200
   });
 
-  const normalized = Settings.normalizeSettings({
+  const normalized = Settings.migrateSettings({
     runtimeBudgets: {
       maxTextNodes: 7,
       maxCharacters: 4500,
@@ -168,13 +176,13 @@ test('runtime budgets migrate from legacy caps and normalize every bounded dimen
     viewportBufferPx: 800
   });
   assert.equal(Object.isFrozen(normalized.runtimeBudgets), true);
-  assert.deepEqual(Settings.normalizeSettings(normalized), normalized);
+  assert.deepEqual(Settings.migrateSettings(normalized), normalized);
 });
 
 test('profile revision is monotonic across edits, stable across reload, and changes analysis keys', () => {
   const ProfileControls = require('../apps/extension/src/shared/profile-controls');
   const Progressive = require('../apps/extension/src/shared/progressive-runtime');
-  const initial = Settings.normalizeSettings({
+  const initial = Settings.migrateSettings({
     profileId: 'study-profile',
     profileRevision: 4,
     channels: { lemma: false },
@@ -190,7 +198,7 @@ test('profile revision is monotonic across edits, stable across reload, and chan
     channels: { ...initial.channels, lemma: true },
     density: 0.75
   }, Settings.normalizeSettings);
-  const reloaded = Settings.normalizeSettings(JSON.parse(JSON.stringify(edited)));
+  const reloaded = Settings.migrateSettings(JSON.parse(JSON.stringify(edited)));
 
   assert.equal(initial.profileId, 'study-profile');
   assert.equal(unchanged.profileRevision, 4);
@@ -198,7 +206,7 @@ test('profile revision is monotonic across edits, stable across reload, and chan
   assert.equal(edited.profileRevision, 5);
   assert.equal(Contracts.normalizeMarkingProfile(edited).profileRevision, 5);
   assert.equal(reloaded.profileRevision, 5);
-  assert.deepEqual(Settings.normalizeSettings(reloaded), reloaded);
+  assert.deepEqual(Settings.migrateSettings(reloaded), reloaded);
 
   const versions = {
     text: 'The model learns.',
@@ -218,7 +226,7 @@ test('overlapping popup saves serialize distinct edits into distinct revisions a
   const ProfileControls = require('../apps/extension/src/shared/profile-controls');
   const Progressive = require('../apps/extension/src/shared/progressive-runtime');
   const storageKey = 'haloSettings';
-  let stored = Settings.normalizeSettings({
+  let stored = Settings.migrateSettings({
     profileId: 'shared-profile',
     profileRevision: 4,
     channels: { lemma: false },
@@ -292,7 +300,7 @@ test('overlapping trigger-mode and visual saves remain serialized without losing
   const Persistence = require('../apps/extension/src/shared/profile-persistence');
   const ProfileControls = require('../apps/extension/src/shared/profile-controls');
   const storageKey = 'haloSettings';
-  let stored = Settings.normalizeSettings({ profileRevision: 2, triggerMode: 'hybrid', density: 0.5 });
+  let stored = Settings.migrateSettings({ profileRevision: 2, triggerMode: 'hybrid', density: 0.5 });
   let tail = Promise.resolve();
   const persistence = Persistence.createProfilePersistence({
     storage: {

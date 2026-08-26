@@ -340,7 +340,7 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
 
       const initial = await page.evaluate(async () => {
         const listener = __haloFixture.listeners[0];
-        const settings = HaloSettings.normalizeSettings({
+        const settings = HaloSettings.migrateSettings({
           ...HaloSettings.DEFAULT_SETTINGS,
           runtimeBudgets: {
             maxTextNodes: 2,

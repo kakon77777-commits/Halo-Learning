@@ -140,6 +140,12 @@ test('explicit-selection envelope is exact and selection must be live, ranged, a
     { ...selection, getRangeAt: () => ({ ...range, getBoundingClientRect: () => null }) },
     { ...selection, getRangeAt: () => ({ ...range, getBoundingClientRect: () => ({ left: NaN, top: 0, right: 1, bottom: 1, width: 1, height: 1 }) }) }
   ]) assert.equal(Content.readExplicitSelection({ document, getSelection: () => invalid }), null);
+  for (const value of ['', '12', true, 1n, Infinity]) {
+    assert.equal(Content.readExplicitSelection({
+      document,
+      getSelection: () => ({ ...selection, getRangeAt: () => ({ ...range, getBoundingClientRect: () => ({ left: value, top: 10, right: 42, bottom: 24, width: 30, height: 14 }) }) })
+    }), null);
+  }
   assert.equal(Content.readExplicitSelection({
     document,
     getSelection: () => ({ ...selection, getRangeAt() { throw new Error('range override'); } })
@@ -380,5 +386,23 @@ test('hostile event and path getters fail closed while later private path entrie
   const modifier = eventFor(token);
   Object.defineProperty(modifier, 'altKey', { get() { throw new Error('modifier getter'); } });
   assert.doesNotThrow(() => events.emit('pointerover', modifier));
+  runtime.cleanup('CANCEL');
+});
+
+test('composed paths and fallback ancestry are strictly bounded', () => {
+  const events = eventTargetFixture();
+  const token = elementFixture({ textContent: 'bounded', attributes: { 'data-halo-pos': 'n' } });
+  const renderer = rendererFixture(new Set([token]));
+  const runtime = Content.createContentTriggerRuntime({ eventTarget: events, renderer, triggerModule: Trigger, mode: 'hybrid', now: () => 20 });
+  for (const length of [Infinity, 257, -1, 1.5]) {
+    const path = new Proxy([], { get(target, name) { return name === 'length' ? length : Reflect.get(target, name); } });
+    assert.doesNotThrow(() => events.emit('click', eventFor(null, { composedPath: () => path })));
+  }
+  const cyclic = elementFixture();
+  cyclic.parentElement = cyclic;
+  assert.doesNotThrow(() => events.emit('click', eventFor(cyclic)));
+  const throwingIndex = new Proxy([null, token], { get(target, name) { if (name === '0') throw new Error('index'); return Reflect.get(target, name); } });
+  events.emit('click', eventFor(null, { composedPath: () => throwingIndex }));
+  assert.equal(renderer.opened.length, 1);
   runtime.cleanup('CANCEL');
 });
