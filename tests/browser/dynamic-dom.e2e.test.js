@@ -23,6 +23,7 @@ const scripts = [
   'shared/runtime-scheduler.js',
   'shared/trigger-controller.js',
   'shared/dynamic-dom-controller.js',
+  'shared/token-child-continuity.js',
   'shared/reversible-renderer.js',
   'content.js'
 ].map(source);
