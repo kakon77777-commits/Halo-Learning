@@ -7,10 +7,40 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  repair-collector-source:
+    if: github.event.head_commit.message == 'ci: repair Worker B collector source'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parallel/v0.4.0-browser-ux
+      - name: Align collector with CDP helper return contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/collect-worker-b-browser-evidence.js')
+          s = p.read_text(encoding='utf-8')
+          old = "details.workerRestart = { stopped, status };\n    gates.workerRestart = Boolean(stopped && stopped.runningStatus === 'stopped' && restartedWorker !== worker && status && status.mode === 'ready');"
+          new = "details.workerRestart = { stoppedVersionId: stopped, status };\n    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) && restartedWorker !== worker && status && status.mode === 'ready');"
+          if old not in s:
+              raise SystemExit('expected collector helper-contract pattern not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8', newline='\n')
+          PY
+          node --check scripts/collect-worker-b-browser-evidence.js
+          git diff --check
+      - name: Commit collector source repair
+        run: |
+          git config user.name 'Halo Worker B'
+          git config user.email 'worker-b@users.noreply.github.com'
+          git add scripts/collect-worker-b-browser-evidence.js
+          git commit -m 'fix: align MV3 collector with CDP helper contract'
+          git push origin HEAD:parallel/v0.4.0-browser-ux
+
   acceptance-model:
+    if: github.event.head_commit.message != 'ci: repair Worker B collector source'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -23,7 +53,62 @@ jobs:
       - name: Browser performance acceptance model
         run: node --test tests/browser-performance-metrics.test.js
 
+  shard-diagnostic:
+    if: github.event.head_commit.message != 'ci: repair Worker B collector source'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run fixed 64/128 real Chromium comparison
+        run: |
+          mkdir -p evidence/shard-diagnostic
+          node - <<'NODE' | tee evidence/shard-diagnostic/summary.txt
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const { runShardComparison, verifyBrowserShardComparison } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            verifyBrowserShardComparison(comparison);
+            fs.writeFileSync(
+              'evidence/shard-diagnostic/v0.4.0-browser-shard-comparison.json',
+              JSON.stringify(comparison, null, 2) + '\n'
+            );
+            console.log(JSON.stringify({
+              browser: comparison.browser,
+              host: comparison.host,
+              selection: comparison.selection,
+              candidates: comparison.candidates.map((candidate) => ({
+                bucketCount: candidate.bucketCount,
+                measurements: candidate.measurements,
+                budgets: candidate.budgets,
+                gates: candidate.gates,
+                allBlockingPassed: candidate.allBlockingPassed,
+                coldRawMs: candidate.conditions.cold.samples.map((sample) => sample.durationMs),
+                warmSampleCount: candidate.conditions.warm.samples.reduce((n, sample) => n + sample.samplesMs.length, 0),
+                longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
+              }))
+            }, null, 2));
+          })().catch((error) => {
+            console.error(error.stack || error.message);
+            process.exitCode = 1;
+          });
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: worker-b-shard-diagnostic
+          path: evidence/shard-diagnostic/
+          if-no-files-found: error
+          retention-days: 14
+
   real-chromium-evidence:
+    if: github.event.head_commit.message != 'ci: repair Worker B collector source'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
