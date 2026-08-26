@@ -376,7 +376,9 @@
     const descriptor = manifest.shards.find((value) => value.id === raw.shardId);
     if (!descriptor) fail('SHARD_NOT_DECLARED', 'Browser lexical shard is absent from the manifest');
     started = profileNow();
-    const descriptorBytes = bytesFor(canonicalJson(raw)).length;
+    const descriptorBytes = typeof serialized === 'string'
+      ? bytesFor(serialized.trim()).length
+      : bytesFor(canonicalJson(raw)).length;
     recordProfileStage(profile, 'shardDescriptorBytesMs', started);
     if (descriptor.hash.value !== raw.hash.value || descriptor.bytes !== descriptorBytes) {
       fail('SHARD_HASH_MISMATCH', 'Browser lexical shard does not match its manifest descriptor');
