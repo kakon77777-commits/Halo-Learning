@@ -113,14 +113,18 @@
     const result = await actionMutex.run(async () => {
       try {
         const { tab, hostname } = await refreshCurrentHost();
-        const denylist = new Set(currentSettings.sitePolicy.userDenylist);
-        if (blocked) denylist.add(hostname);
-        else denylist.delete(hostname);
-        const sitePolicy = {
-          schemaVersion: 1,
-          userDenylist: HaloSitePolicy.normalizeDenylist([...denylist])
-        };
-        const settings = await persistSettings({ sitePolicy });
+        const settings = await profilePersistence.saveTransform((latest) => {
+          const denylist = new Set(latest.sitePolicy.userDenylist);
+          if (blocked) denylist.add(hostname);
+          else denylist.delete(hostname);
+          return {
+            sitePolicy: {
+              schemaVersion: 1,
+              userDenylist: HaloSitePolicy.normalizeDenylist([...denylist])
+            }
+          };
+        });
+        renderSettings(settings);
         try {
           await chrome.tabs.sendMessage(tab.id, { type: 'HALO_POLICY_REEVALUATE', settings });
         } catch (_error) {

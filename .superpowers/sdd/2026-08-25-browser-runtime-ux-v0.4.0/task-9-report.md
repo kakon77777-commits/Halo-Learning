@@ -4,228 +4,225 @@
 
 `IMPLEMENTED_WITH_BROWSER_BLOCKER`
 
-Implemented on `workbench/v0.4.0-browser-runtime` from base
-`d944afa683cb8e0e37b4c5516ad1e248ef757da6`.
+Task 9 was implemented on `workbench/v0.4.0-browser-runtime` from base
+`d944afa683cb8e0e37b4c5516ad1e248ef757da6`. Fix round 1 was applied from
+clean Task 9 commit `f7b7b09726946bb8cdb638869dc5d998acf4ea34`.
 
-The installed-extension sensitive-site acceptance test is authored without a
-skip or fake pass. It cannot execute in this environment because no supported
-Chromium executable is installed.
+The installed-extension browser gate remains an explicit failure with zero
+skips because this environment has no Chromium executable. No browser result
+below is represented as executed evidence.
 
-## Carried Task 8 breaker prerequisite
+## Carried Task 8 breaker
 
-The reentrant terminal orphan was reproduced before Task 9 policy work.
-`panelOpenTarget` could remain independently live while a reentrant timer
-cleanup moved the state to `dismissed`. Terminal cleanup incorrectly derived
-panel ownership from `current.name === 'core-open'`, so `CANCEL` left the
-Task 7 panel effect open.
+The independently tracked `panelOpenTarget` is reconciled closed on terminal
+cleanup regardless of whether reentry left the public state named `dismissed`,
+`candidate`, or `core-open`. The targeted regression proves one close effect,
+no duplicate close, nested new-open/CANCEL authority, and timer release.
 
-Terminal reconciliation now closes whenever the independently tracked
-`panelOpenTarget` is non-null, regardless of the current state name. The
-existing timer-generation, nested explicit-open/CANCEL, no-duplicate-close,
-and reentrant scheduling tests remain green.
-
-RED evidence:
+Original RED:
 
 ```text
 node --test --test-name-pattern='independently tracked panel' tests/trigger-controller.test.js
-tests 1
-pass 0
-fail 1
-
-Expected close effects: ['cancel']
-Actual close effects: []
+tests 1; pass 0; fail 1
+Expected close effects: ['cancel']; actual: []
 ```
 
-Focused GREEN evidence:
+## Fix-round RED evidence
 
-```text
-node --test tests/trigger-controller.test.js tests/content-trigger-runtime.test.js
-tests 34
-pass 34
-fail 0
-skipped 0
-```
-
-## Policy contract decisions
-
-- Added a deterministic, frozen `PolicyDecision/v1` with exactly
-  `schemaVersion`, `allow`, `category`, `reasonCode`, and `evidenceKind`.
-  Category, reason, and evidence values are closed allowlists. Decisions carry
-  no URL, hostname, path, attribute value, text, or other page data.
-- `normalizeDenylist(values)` accepts only a bounded dense array of exact DNS
-  hostnames. It canonicalizes case, one trailing root dot, and browser IDNA;
-  deduplicates and sorts; and rejects wildcard, URL, path, port, whitespace,
-  control, empty-label, over-count, over-label, and over-length inputs.
-- Denylist matching is exact hostname or `.`-delimited subdomain only.
-  `private.example.attacker.test`, `notprivate.example`, and other suffix tricks
-  do not match `private.example`.
-- Default URL rules cover banking, payment/checkout, password-manager vaults,
-  authentication, webmail, private messaging, medical/insurance,
-  government personal-data routes, and developer secret/credential consoles.
-  Rules match exact normalized host/path labels in a fixed audited order, not
-  substring suffixes.
-- The security scan reads only `tagName`, and bounded `type`, `autocomplete`,
-  `inputmode`, `name`, `role`, and allowlisted presence attributes. It never
-  reads form `value`, page `textContent`/`innerText`, cookies, history, tokens,
-  or arbitrary account state. Hidden inputs stop after the type read.
-- The attribute scan is bounded to 128 elements and 8 ms. Missing, throwing,
-  ambiguous, hostile, over-count, and over-time scans return sanitized blocked
-  results. Tests install hostile private getters and assert all prohibited read
-  counters stay exactly zero.
-- Canonical settings now require closed `sitePolicy/v1` with an explicit empty
-  migration default. A present invalid denylist fails rather than silently
-  migrating to a narrower empty list. MarkingProfile runtime/schema parity
-  includes canonical hostname syntax, bounds, uniqueness, order, and
-  deduplication.
-
-## Runtime and lifecycle decisions
-
-- The site decision runs before TextRun creation, sentence extraction,
-  selection acquisition, semantic messaging, renderer creation, or trigger
-  listener installation. Missing/unknown policy, URL/location failure,
-  settings failure, DOM scan failure, and unsupported protocols fail closed.
-- A blocked status contains only zero-work counters, a sanitized error code,
-  and the frozen decision. It contains no page data, sentence state, or
-  selection state.
-- Blocked pages retain only a policy-only observer: child insertion, exact
-  security attributes, storage settings changes, and SPA route signals. It
-  excludes character data, presentation attributes, discovery coalescing, and
-  retained content roots. A fresh allow decision upgrades observation before
-  starting a new runtime epoch.
-- Allowed-to-blocked transitions synchronously detach the active runtime,
-  cancel the unique epoch, cancel trigger timers/listeners, close panels,
-  remove reversible renderer artifacts, release renderer/runtime references,
-  and retain no stale semantic authority. Each restart uses a new monotonic
-  runtime epoch, so old results cannot project into a later allow generation.
-- Renderer-owned mutation records are removed by the existing exact
-  operation-scoped sanitizer before policy mutation handling, preventing
-  renderer-generated policy loops.
-- Explicit-selection admission loads current settings and decides policy
-  before calling the live Selection API. The extension context-menu handler
-  continues to ignore `selectionText` entirely.
-- The MV3 semantic service has defense in depth: browser initialization
-  authorizes `HALO_ENRICH_BATCH` from `sender.tab.url` plus freshly loaded
-  normalized denylist before request items or text are read and before packaged
-  lexical resources are loaded. Cancellation remains available independently.
-
-## Popup and injection decisions
-
-- Popup UI shows the exact current hostname and provides separate bilingual
-  block/remove actions. Both execute under the existing single-owner action
-  mutex and locked profile persistence boundary.
-- Popup changes only `sitePolicy.userDenylist`, preserves hidden profile fields,
-  increments the profile revision exactly once when changed, and sends a
-  policy-only reevaluation message. Blocking does not inject annotations.
-- Canonical packaged injection loads `site-policy.js` before `settings.js` and
-  `content.js`. Popup and service-worker import order follows the same local
-  dependency order.
-- No host permission, content-script declaration, remote script, remote policy
-  dependency, or additional language/ontology scope was added.
-
-## Strict TDD evidence
-
-Policy RED:
+All production changes in this round followed an observed adversarial RED.
+Representative evidence:
 
 ```text
 node --test tests/site-policy.test.js
-Error: Cannot find module '../apps/extension/src/shared/site-policy'
-tests 1
-pass 0
-fail 1
+tests 14; pass 10; fail 4
+Failures: Chase representative allowed; query/hash route not classified;
+dense descriptor extras accepted; unstable/zero-node scan boundary accepted.
+
+node --test --test-name-pattern='renderer cleanup' tests/runtime-scheduler.test.js
+tests 3; pass 1; fail 2
+TypeError: Content.reconcileRendererCleanup is not a function
+
+node --test tests/content-policy-lifecycle.test.js
+tests 2; pass 0; fail 2
+Malformed APPLY left scheduler/listeners live; missing policy module returned a
+non-blocked status over existing annotations.
+
+node --test --test-name-pattern='allowed-to-blocked storage transition' \
+  tests/content-policy-lifecycle.test.js
+tests 1; pass 0; fail 1
+Cleanup stayed pending after a later storage-triggered allow retry.
+
+node --test --test-name-pattern='explicit selection cannot' \
+  tests/content-policy-lifecycle.test.js
+tests 1; pass 0; fail 1
+Actual code: NO_SELECTION; required: SENSITIVE_PAGE_CLEANUP_PENDING.
+
+node --test --test-name-pattern='locked site-host operations' \
+  tests/profile-migration.test.js
+tests 1; pass 0; fail 1
+TypeError: persistence.saveTransform is not a function
+
+node --test --test-name-pattern='denylist snapshots' tests/site-policy.test.js
+tests 1; pass 0; fail 1
+A transparent Proxy was accepted.
+
+node --test --test-name-pattern='truthy but incomplete runtime module' \
+  tests/content-policy-lifecycle.test.js
+tests 1; pass 0; fail 1
+The newly observed controller was never cleaned after a partial runtime failed.
+
+node --test --test-name-pattern='failed controller cleanup retains authority' \
+  tests/content-policy-lifecycle.test.js
+tests 1; pass 0; fail 1
+A failed old-controller cleanup was overwritten and cleanupPending became false.
+
+node --test --test-name-pattern='allowed APPLY response stamps' \
+  tests/content-policy-lifecycle.test.js
+tests 1; pass 0; fail 1
+APPLY reported zero TextRun extractions while immediate HALO_STATUS reported one.
+
+node --test --test-name-pattern='successful non-empty batch' \
+  tests/content-policy-lifecycle.test.js
+tests 1; pass 0; fail 1
+A successful semantic batch dropped cleanupPending and remainingArtifacts.
+
+node --test --test-name-pattern='cancellation after shard callback' \
+  tests/extension-semantic-service.test.js
+tests 1; pass 0; fail 1
+A late cancel returned the already-built lexical result instead of cancelled.
 ```
 
-Settings/schema/entry/worker RED:
+The worker delayed-authorization test also failed before implementation:
+CANCEL returned `not-found` while authorization was pending, proving that the
+request controller was registered too late.
 
-```text
-node --test tests/profile-migration.test.js tests/marking-profile-schema.test.js \
-  tests/browser-trigger-entry.test.js tests/extension-semantic-service.test.js \
-  tests/source-contract.test.js
-tests 43
-pass 35
-fail 8
+## Policy contract
 
-Failures: missing sitePolicy defaults/schema/UI/injection order, missing worker
-pre-text authorization, and missing content policy boundary.
-```
+- `PolicyDecision/v1` remains frozen and closed to the five canonical fields.
+  Categories, reasons, and evidence are exact allowlists and contain no page
+  data. `AMBIGUOUS_URL` is the only new sanitized reason.
+- The bounded, frozen service registry explicitly distinguishes exact hosts
+  and label-boundary suffix hosts. It covers representative banking,
+  payment/checkout, password vault, webmail, private messaging,
+  medical/insurance, government-personal, and developer-secret services. It
+  includes Chase, Outlook webmail, Discord channels, UHC member pages, AWS
+  Secrets Manager, Google Secret Manager, and Azure Key Vault/secrets.
+- This registry is deliberately representative and auditable; it is not
+  claimed to classify the web exhaustively. Known-host suffix tricks such as
+  `vault.bitwarden.com.attacker.test` are allowed to continue to form scanning
+  rather than being captured by generic label rules.
+- Route evidence is taken from bounded path, search, and hash tokens after safe
+  normalization. Credentials, encoded separators/backslashes/dot ambiguity,
+  multiple encoding, malformed percent escapes, residual `%xx`, token excess,
+  and route excess return `AMBIGUOUS_URL`. `%256cogin` and `%252Flogin` are
+  blocked, not decoded into an allow.
+- Denylists are snapshotted from one dense set of own data descriptors. Holes,
+  accessors, extra string/symbol properties, subclasses, hostile descriptor
+  traps, transparent Proxies, unstable/invalid length, uncloneable entries,
+  and all earlier hostname ambiguity fail closed. No entry or length getter is
+  used.
+- Security scans sample finite monotonic time before query, immediately after
+  query, after every element (including hidden elements), and finally even for
+  zero results. Query result length must remain a safe stable integer, items
+  must be non-null, and every count/time violation blocks.
+- The scan still reads only `tagName`, bounded `type`, `autocomplete`,
+  `inputmode`, `name`, `role`, and allowlisted presence attributes. Tests place
+  throwing getters on `value`, `textContent`, and `innerText` and observe zero
+  reads. Hidden inputs stop after `type`.
 
-Explicit-selection RED:
+## Runtime cleanup and fail-closed authority
 
-```text
-node --test --test-name-pattern='policy boundary|policy decisions' \
-  tests/content-trigger-runtime.test.js
-tests 2
-pass 0
-fail 2
+- Allowed-to-blocked shutdown removes trigger listeners/timers and detaches,
+  cancels, and disconnects runtime work before renderer cleanup.
+- Renderer authority is released only after `removeAll()` and `status()` verify
+  zero wrappers and a closed panel. A transactional failure retains the exact
+  renderer reference and reports `cleanupPending` with numeric remaining
+  wrapper/panel counts, or `unknown` when status cannot be verified.
+- Runtime, trigger, renderer, and failed controller-cleanup targets remain
+  available for retry without remaining active semantic authority. Storage,
+  route, observer, explicit-selection, APPLY, and REMOVE paths retry cleanup.
+  An allow decision cannot start a new epoch until cleanup verifies clean.
+- Failed dynamic-controller cleanup targets are retained independently. A new
+  controller cannot overwrite them: APPLY returns cleanup-pending until every
+  retained target cleans, while renderer cleanup can still use the retained
+  observer's mutation-suppression boundary.
+- A malformed APPLY or disappearing shared module performs best-effort shutdown
+  before module/settings validation. Missing dynamic-controller globals cannot
+  prevent a retained controller from suppressing and completing renderer
+  cleanup. Old listeners and the active semantic epoch are not left live.
+- Status is truthful: verified clean state reports zero current artifacts;
+  failed cleanup reports retained counts/unknown and never fabricates zero.
+  Monotonic production boundary counters for policy evaluations, TextRun
+  extraction, sentence records, selection reads, semantic messages, renderer
+  calls, and network calls are stamped into status and are never reset.
+  Allowed APPLY responses are stamped after discovery and scheduler flushing,
+  so they agree with the immediately following HALO_STATUS snapshot.
+- Explicit selection rechecks policy and pending cleanup before touching the
+  live Selection API. A pending cleanup returns
+  `SENSITIVE_PAGE_CLEANUP_PENDING` with no selection read or trigger restart.
 
-TypeError: Content.readExplicitSelectionAfterPolicy is not a function
-```
+## Worker and popup concurrency
 
-Policy-only observer RED:
+- The worker validates only the request envelope (`requestId`, `pageEpoch`) and
+  sender tab, then registers its `AbortController` before awaiting policy and
+  storage authorization. It does not read `items`/text or load lexical data at
+  that stage. CANCEL, duplicate IDs, authorization exceptions, and post-auth
+  races all converge through signal checks and `finally` removal.
+  A final signal check after the awaited pinned-shard operation discards a
+  lexical result if cancellation arrived after its callback but before settle.
+- Popup host add/remove is now a transform executed after rereading the latest
+  profile inside the existing exclusive settings lock. Parallel distinct
+  hosts are preserved, identical edits converge without an extra revision, and
+  serialized remove/add races produce the lock order's final value.
+- No host permissions, remote policy dependency, remote script, or language
+  scope were added.
 
-```text
-node --test --test-name-pattern='policy-only observation' \
-  tests/dynamic-dom-controller.test.js
-tests 1
-pass 0
-fail 1
+## Browser acceptance authored; execution blocked
 
-Full character-data observation and retained invalidation work were observed
-while the page was blocked.
-```
+The installed-runtime test now:
 
-## Final verification
+- routes local fixture HTML under the real representative service URLs above;
+- installs prohibited getters in the extension `ISOLATED` world through
+  `chrome.scripting.executeScript` before Halo files;
+- asserts production boundary counters plus zero wrappers/panels/network work;
+- exercises installed exact-host, subdomain, and suffix-trick denylist behavior,
+  popup add and remove, dynamic form insertion/attribute change, SPA blocking,
+  cleanup failure/retry, storage-authorization failure, and a held stale
+  semantic response released after route cancellation.
 
-Complete Node regression:
+The first command no longer depends on a URL-filtered tab query before the
+native gesture grants `activeTab`: it brings the fixture forward and resolves
+only `{active: true, currentWindow: true}`. Later popup actions reuse the
+already-known tab ID.
 
-```text
-node --test tests/*.test.js
-tests 378
-pass 378
-fail 0
-cancelled 0
-skipped 0
-todo 0
-```
-
-All 22 changed JavaScript files passed `node --check`. The extension manifest
-and MarkingProfile schema parsed as JSON. `git diff --check` exited zero with
-no output.
-
-## Browser acceptance: authored and explicitly blocked
+The gate is not skipped or replaced by direct popup calls:
 
 ```text
 node --test tests/browser/sensitive-site.e2e.test.js
 tests 1
 pass 0
 fail 1
-cancelled 0
 skipped 0
-todo 0
-
 Error: Chromium executable is required for Halo browser gates
 ```
 
-The installed MV3 matrix covers every required default category; denylist
-exact/subdomain/suffix behavior; hostile password/autocomplete value/text
-getters; zero TextRun/sentence/semantic/selection/wrapper/panel/fetch-XHR work;
-dynamic sensitive insertion; dynamic attribute change; blocked-to-allowed
-fresh restart; public-to-sensitive SPA navigation; popup denylist update; and
-cleanup of existing annotations.
+Accordingly, native command delivery, the test-time isolated-world hooks, and
+real MutationObserver/service-worker timing remain unexecuted concerns in this
+environment.
 
-## Files
+## Final verification
 
-- Created `apps/extension/src/shared/site-policy.js`, pure policy tests, and the
-  installed sensitive-site browser matrix.
-- Updated canonical settings, MarkingProfile runtime/schema, browser injection,
-  content lifecycle, dynamic policy-only observation, semantic-worker defense,
-  popup controls, and their executable contracts.
-- Added the carried Task 8 terminal panel-effect regression and one-line fix.
-- `progress.md` was not edited.
+```text
+node --test tests/*.test.js
+tests 398
+pass 398
+fail 0
+cancelled 0
+skipped 0
+todo 0
+```
 
-## Remaining concern
+All changed JavaScript passed `node --check`; the extension manifest and
+canonical MarkingProfile schema parsed as JSON; `git diff --check` exited zero.
 
-Chromium is absent. Consequently, real installed-world isolation, `*.localhost`
-fixture routing, native command delivery, popup-to-tab cleanup timing, real
-MutationObserver ordering, and network observation remain unexecuted here.
-The browser gate reports that limitation as one failure with zero skips rather
-than substituting Node-only evidence.
+`progress.md` was not edited.

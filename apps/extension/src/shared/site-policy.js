@@ -13,6 +13,7 @@
     maxLabelLength: 63
   });
   const ATTRIBUTE_SCAN_LIMITS = Object.freeze({ maxElements: 128, maxMilliseconds: 8 });
+  const ROUTE_LIMITS = Object.freeze({ maxLength: 4096, maxTokens: 128, maxTokenLength: 128, maxDecodePasses: 2 });
   const SECURITY_SELECTOR = [
     'input', 'select', 'textarea', 'form', '[role]',
     '[data-private]', '[data-sensitive]', '[data-1p-ignore]', '[data-bwignore]'
@@ -26,7 +27,7 @@
   ]);
   const POLICY_REASON_CODES = Object.freeze([
     'ALLOW', 'USER_DENYLIST', 'SENSITIVE_URL_CATEGORY', 'SENSITIVE_FORM_ATTRIBUTE',
-    'UNSUPPORTED_PROTOCOL', 'INVALID_URL', 'DOM_SCAN_ERROR',
+    'UNSUPPORTED_PROTOCOL', 'INVALID_URL', 'AMBIGUOUS_URL', 'DOM_SCAN_ERROR',
     'DOM_SCAN_BUDGET_EXCEEDED', 'POLICY_INPUT_ERROR'
   ]);
   const POLICY_EVIDENCE_KINDS = Object.freeze([
@@ -78,6 +79,77 @@
     })
   ]);
 
+  // This bounded registry intentionally covers representative high-risk services; it is not a web ontology.
+  // exactHosts match only that host. suffixHosts match that host and its label-boundary subdomains.
+  const DEFAULT_SERVICE_RULES = Object.freeze([
+    Object.freeze({
+      category: 'banking',
+      suffixHosts: Object.freeze([
+        'bankofamerica.com', 'barclays.co.uk', 'chase.com', 'citibank.com', 'ctbcbank.com',
+        'hsbc.com', 'wellsfargo.com'
+      ])
+    }),
+    Object.freeze({
+      category: 'payment-checkout',
+      suffixHosts: Object.freeze(['checkout.com', 'paypal.com', 'stripe.com'])
+    }),
+    Object.freeze({
+      category: 'password-manager',
+      exactHosts: Object.freeze([
+        'app.dashlane.com', 'my.1password.com', 'vault.bitwarden.com', 'vault.lastpass.com'
+      ])
+    }),
+    Object.freeze({
+      category: 'webmail',
+      exactHosts: Object.freeze([
+        'mail.google.com', 'mail.proton.me', 'outlook.live.com', 'outlook.office.com'
+      ])
+    }),
+    Object.freeze({
+      category: 'private-messaging',
+      exactHosts: Object.freeze(['discord.com']),
+      routeAny: Object.freeze(['channels'])
+    }),
+    Object.freeze({
+      category: 'private-messaging',
+      exactHosts: Object.freeze(['messages.google.com', 'web.telegram.org', 'web.whatsapp.com'])
+    }),
+    Object.freeze({
+      category: 'medical-insurance',
+      exactHosts: Object.freeze(['myaccount.uhc.com']),
+      routeAny: Object.freeze(['member'])
+    }),
+    Object.freeze({
+      category: 'medical-insurance',
+      suffixHosts: Object.freeze(['mychart.com'])
+    }),
+    Object.freeze({
+      category: 'government-personal-data',
+      exactHosts: Object.freeze(['secure.ssa.gov']),
+      routeAny: Object.freeze(['myaccount'])
+    }),
+    Object.freeze({
+      category: 'government-personal-data',
+      exactHosts: Object.freeze(['sa.www4.irs.gov']),
+      routeAny: Object.freeze(['account', 'signin'])
+    }),
+    Object.freeze({
+      category: 'developer-secrets',
+      exactHosts: Object.freeze(['console.aws.amazon.com']),
+      routeAny: Object.freeze(['secretsmanager', 'secrets-manager'])
+    }),
+    Object.freeze({
+      category: 'developer-secrets',
+      exactHosts: Object.freeze(['console.cloud.google.com']),
+      routeAny: Object.freeze(['secret-manager', 'secrets'])
+    }),
+    Object.freeze({
+      category: 'developer-secrets',
+      exactHosts: Object.freeze(['portal.azure.com']),
+      routeAny: Object.freeze(['keyvault', 'secrets', 'secretlistblade'])
+    })
+  ]);
+
   const SENSITIVE_AUTOCOMPLETE = Object.freeze({
     'current-password': 'PASSWORD_AUTOCOMPLETE',
     'new-password': 'PASSWORD_AUTOCOMPLETE',
@@ -107,6 +179,9 @@
 
   const POLICY_INPUT_ERROR = freezeDecision(false, 'policy-error', 'POLICY_INPUT_ERROR', 'POLICY_ERROR');
   const INVALID_URL = freezeDecision(false, 'policy-error', 'INVALID_URL', 'POLICY_ERROR');
+  const AMBIGUOUS_URL = freezeDecision(false, 'policy-error', 'AMBIGUOUS_URL', 'POLICY_ERROR');
+
+  class AmbiguousUrlError extends TypeError {}
 
   function normalizeHostname(value) {
     if (typeof value !== 'string' || !value || value.length > DENYLIST_LIMITS.maxInputLength ||
@@ -140,13 +215,41 @@
   }
 
   function normalizeDenylist(values) {
-    if (!Array.isArray(values) || !Number.isSafeInteger(values.length) ||
-        values.length > DENYLIST_LIMITS.maxEntries) {
+    if (!Array.isArray(values)) {
       throw new TypeError('denylist: bounded array required');
     }
-    const descriptors = Object.getOwnPropertyDescriptors(values);
+    let prototype;
+    let descriptors;
+    try {
+      prototype = Object.getPrototypeOf(values);
+      descriptors = Object.getOwnPropertyDescriptors(values);
+    } catch (_error) {
+      throw new TypeError('denylist: stable own data descriptors required');
+    }
+    if (prototype !== Array.prototype) throw new TypeError('denylist: plain array required');
+    const lengthDescriptor = descriptors.length;
+    const length = lengthDescriptor && Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value')
+      ? lengthDescriptor.value
+      : null;
+    if (!Number.isSafeInteger(length) || length < 0 || length > DENYLIST_LIMITS.maxEntries ||
+        lengthDescriptor.enumerable || lengthDescriptor.configurable) {
+      throw new TypeError('denylist: bounded own data length required');
+    }
+    const ownKeys = Reflect.ownKeys(descriptors);
+    if (ownKeys.length !== length + 1 || ownKeys.some((key) => {
+      if (key === 'length') return false;
+      return typeof key !== 'string' || !/^(?:0|[1-9][0-9]*)$/u.test(key) || Number(key) >= length;
+    })) throw new TypeError('denylist: dense entries without extras required');
+    if (typeof root.structuredClone !== 'function') {
+      throw new TypeError('denylist: proxy-safe clone check unavailable');
+    }
+    try {
+      root.structuredClone(values);
+    } catch (_error) {
+      throw new TypeError('denylist: proxies and uncloneable entries are forbidden');
+    }
     const normalized = [];
-    for (let index = 0; index < values.length; index += 1) {
+    for (let index = 0; index < length; index += 1) {
       const descriptor = descriptors[index];
       if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value') || !descriptor.enumerable) {
         throw new TypeError(`denylist[${index}]: own data entry required`);
@@ -190,6 +293,36 @@
     return value;
   }
 
+  function inspectSecurityElement(node, signals) {
+    if (!node || (typeof node !== 'object' && typeof node !== 'function')) {
+      throw new TypeError('security scan node unavailable');
+    }
+    const tagName = node.tagName;
+    if (typeof tagName !== 'string' || !tagName || tagName.length > 20) {
+      throw new TypeError('security scan tag unavailable');
+    }
+    const tag = tagName.toUpperCase();
+    const type = boundedAttribute(node, 'type');
+    if (tag === 'INPUT' && type === 'hidden') return;
+    if (tag === 'INPUT' && type === 'password') signals.push('PASSWORD_TYPE');
+    const autocomplete = boundedAttribute(node, 'autocomplete');
+    if (autocomplete) {
+      for (const token of autocomplete.split(/\s+/u)) {
+        if (Object.hasOwn(SENSITIVE_AUTOCOMPLETE, token)) signals.push(SENSITIVE_AUTOCOMPLETE[token]);
+      }
+    }
+    boundedAttribute(node, 'inputmode');
+    const name = boundedAttribute(node, 'name');
+    if (name) {
+      const normalizedName = name.split(/[^a-z0-9]+/u).filter(Boolean).join('-');
+      if (SENSITIVE_NAMES.has(normalizedName)) signals.push('SENSITIVE_NAME');
+    }
+    boundedAttribute(node, 'role');
+    for (const attribute of PRESENCE_ATTRIBUTES) {
+      if (presentAttribute(node, attribute)) signals.push('PRIVATE_PRESENCE');
+    }
+  }
+
   function scanSecurityAttributes(documentLike, options) {
     try {
       const settings = options || {};
@@ -200,41 +333,45 @@
       if (typeof now !== 'function') return scanFailure('DOM_SCAN_ERROR');
       const start = now();
       if (typeof start !== 'number' || !Number.isFinite(start)) return scanFailure('DOM_SCAN_ERROR');
+      let previousTime = start;
+      const sampleTime = () => {
+        const current = now();
+        if (typeof current !== 'number' || !Number.isFinite(current) || current < previousTime) {
+          return 'DOM_SCAN_ERROR';
+        }
+        previousTime = current;
+        return current - start >= ATTRIBUTE_SCAN_LIMITS.maxMilliseconds
+          ? 'DOM_SCAN_BUDGET_EXCEEDED'
+          : null;
+      };
       if (!documentLike || typeof documentLike.querySelectorAll !== 'function') return scanFailure('DOM_SCAN_ERROR');
       const nodes = documentLike.querySelectorAll(SECURITY_SELECTOR);
+      const afterQuery = sampleTime();
+      if (afterQuery) return scanFailure(afterQuery);
       const length = nodes && nodes.length;
       if (!Number.isSafeInteger(length) || length < 0) return scanFailure('DOM_SCAN_ERROR');
       if (length > ATTRIBUTE_SCAN_LIMITS.maxElements) return scanFailure('DOM_SCAN_BUDGET_EXCEEDED');
       const signals = [];
+      let failureCode = null;
       for (let index = 0; index < length; index += 1) {
-        const elapsed = now() - start;
-        if (!Number.isFinite(elapsed) || elapsed < 0) return scanFailure('DOM_SCAN_ERROR');
-        if (elapsed >= ATTRIBUTE_SCAN_LIMITS.maxMilliseconds) return scanFailure('DOM_SCAN_BUDGET_EXCEEDED');
-        const node = nodes[index];
-        if (!node || (typeof node !== 'object' && typeof node !== 'function')) return scanFailure('DOM_SCAN_ERROR');
-        const tagName = node.tagName;
-        if (typeof tagName !== 'string' || !tagName || tagName.length > 20) return scanFailure('DOM_SCAN_ERROR');
-        const tag = tagName.toUpperCase();
-        const type = boundedAttribute(node, 'type');
-        if (tag === 'INPUT' && type === 'hidden') continue;
-        if (tag === 'INPUT' && type === 'password') signals.push('PASSWORD_TYPE');
-        const autocomplete = boundedAttribute(node, 'autocomplete');
-        if (autocomplete) {
-          for (const token of autocomplete.split(/\s+/u)) {
-            if (Object.hasOwn(SENSITIVE_AUTOCOMPLETE, token)) signals.push(SENSITIVE_AUTOCOMPLETE[token]);
-          }
+        try { inspectSecurityElement(nodes[index], signals); } catch (_error) { failureCode = 'DOM_SCAN_ERROR'; }
+        const afterElement = sampleTime();
+        if (afterElement) failureCode = afterElement;
+        try {
+          if (nodes.length !== length) failureCode = 'DOM_SCAN_ERROR';
+        } catch (_error) {
+          failureCode = 'DOM_SCAN_ERROR';
         }
-        boundedAttribute(node, 'inputmode');
-        const name = boundedAttribute(node, 'name');
-        if (name) {
-          const normalizedName = name.split(/[^a-z0-9]+/u).filter(Boolean).join('-');
-          if (SENSITIVE_NAMES.has(normalizedName)) signals.push('SENSITIVE_NAME');
-        }
-        boundedAttribute(node, 'role');
-        for (const attribute of PRESENCE_ATTRIBUTES) {
-          if (presentAttribute(node, attribute)) signals.push('PRIVATE_PRESENCE');
-        }
+        if (failureCode) break;
       }
+      const finalTime = sampleTime();
+      if (finalTime) failureCode = finalTime;
+      try {
+        if (nodes.length !== length) failureCode = 'DOM_SCAN_ERROR';
+      } catch (_error) {
+        failureCode = 'DOM_SCAN_ERROR';
+      }
+      if (failureCode) return scanFailure(failureCode);
       return scanResult('ok', signals);
     } catch (_error) {
       return scanFailure('DOM_SCAN_ERROR');
@@ -268,6 +405,37 @@
     return result;
   }
 
+  function decodeRoutePart(raw) {
+    if (typeof raw !== 'string' || raw.length > ROUTE_LIMITS.maxLength || /[\u0000-\u001f\u007f]/u.test(raw)) {
+      throw new AmbiguousUrlError('policy URL: ambiguous route');
+    }
+    let value = raw;
+    for (let pass = 0; pass < ROUTE_LIMITS.maxDecodePasses; pass += 1) {
+      if (/%(?:2f|5c|2e)/iu.test(value)) throw new AmbiguousUrlError('policy URL: encoded route separator');
+      let decoded;
+      try { decoded = decodeURIComponent(value); } catch (_error) {
+        throw new AmbiguousUrlError('policy URL: invalid route encoding');
+      }
+      if (decoded === value) return decoded;
+      if (pass > 0) throw new AmbiguousUrlError('policy URL: multiply encoded route');
+      value = decoded;
+    }
+    if (/%[0-9a-f]{2}/iu.test(value)) throw new AmbiguousUrlError('policy URL: residual route encoding');
+    return value;
+  }
+
+  function routeLabels(parsed) {
+    const raw = `${parsed.pathname}|${parsed.search}|${parsed.hash}`;
+    if (raw.length > ROUTE_LIMITS.maxLength) throw new AmbiguousUrlError('policy URL: route too long');
+    const decoded = decodeRoutePart(raw).toLowerCase();
+    if (decoded.includes('\\')) throw new AmbiguousUrlError('policy URL: ambiguous backslash');
+    const labels = decoded.split(/[^\p{L}\p{N}-]+/u).filter(Boolean);
+    if (labels.length > ROUTE_LIMITS.maxTokens || labels.some((label) => label.length > ROUTE_LIMITS.maxTokenLength)) {
+      throw new AmbiguousUrlError('policy URL: route token budget exceeded');
+    }
+    return labels;
+  }
+
   function parseUrl(source) {
     let value = source;
     if (typeof value !== 'string') {
@@ -277,12 +445,19 @@
     if (typeof value !== 'string' || !value || value.length > 4096 || /[\u0000-\u001f\u007f]/u.test(value)) {
       throw new TypeError('policy URL: invalid');
     }
+    if (/%(?:2f|5c|2e)/iu.test(value)) {
+      throw new AmbiguousUrlError('policy URL: encoded route separator');
+    }
     let parsed;
     try { parsed = new root.URL(value); } catch (_error) { throw new TypeError('policy URL: invalid'); }
     const hostname = parsed.hostname.endsWith('.') ? parsed.hostname.slice(0, -1).toLowerCase() : parsed.hostname.toLowerCase();
     if (['http:', 'https:'].includes(parsed.protocol)) normalizeHostname(hostname);
-    if (parsed.pathname.length > 2048) throw new TypeError('policy URL: path too long');
-    return { parsed, hostname };
+    if (parsed.username || parsed.password) throw new AmbiguousUrlError('policy URL: credentials are ambiguous');
+    return {
+      parsed,
+      hostname,
+      routeLabels: ['http:', 'https:'].includes(parsed.protocol) ? routeLabels(parsed) : []
+    };
   }
 
   function attributeScanOf(input) {
@@ -305,22 +480,34 @@
     return value;
   }
 
-  function pathLabels(pathname) {
-    const labels = [];
-    for (const segment of pathname.split('/')) {
-      if (!segment) continue;
-      let decoded;
-      try { decoded = decodeURIComponent(segment); } catch (_error) { throw new TypeError('policy URL: invalid path'); }
-      if (decoded.length > 128 || /[\u0000-\u001f\u007f]/u.test(decoded)) throw new TypeError('policy URL: invalid path');
-      for (const label of decoded.toLowerCase().split(/[^\p{L}\p{N}-]+/u).filter(Boolean)) labels.push(label);
-      if (labels.length > 128) throw new TypeError('policy URL: too many path labels');
-    }
-    return labels;
+  function registryHostMatch(hostname, rule) {
+    if (rule.exactHosts && rule.exactHosts.includes(hostname)) return true;
+    return Boolean(rule.suffixHosts && rule.suffixHosts.some((suffix) =>
+      hostname === suffix || hostname.endsWith(`.${suffix}`)));
   }
 
-  function matchingCategory(hostname, pathname) {
+  function registrySuffixTrick(hostname) {
+    return DEFAULT_SERVICE_RULES.some((rule) => [
+      ...Array.from(rule.exactHosts || []),
+      ...Array.from(rule.suffixHosts || [])
+    ].some((knownHost) => hostname.includes(`${knownHost}.`) &&
+      hostname !== knownHost && !hostname.endsWith(`.${knownHost}`)));
+  }
+
+  function matchingCategory(hostname, paths) {
     const hosts = hostname.split('.');
-    const paths = pathLabels(pathname);
+    for (const rule of DEFAULT_SERVICE_RULES) {
+      const hostMatch = registryHostMatch(hostname, rule);
+      if (!hostMatch) continue;
+      const routeMatch = !rule.routeAny || rule.routeAny.some((label) => paths.includes(label));
+      if (routeMatch) {
+        return {
+          category: rule.category,
+          evidenceKind: rule.routeAny ? 'HOST_AND_PATH_LABEL' : 'HOST_LABEL'
+        };
+      }
+    }
+    if (registrySuffixTrick(hostname)) return null;
     for (const rule of DEFAULT_CATEGORY_RULES) {
       const hostMatch = Boolean(rule.host && rule.host.some((label) => hosts.includes(label))) ||
         Boolean(rule.governmentTld && hosts[hosts.length - 1] === 'gov');
@@ -341,7 +528,9 @@
     try {
       const input = exactInput(rawInput);
       let url;
-      try { url = parseUrl(input.url); } catch (_error) { return INVALID_URL; }
+      try { url = parseUrl(input.url); } catch (error) {
+        return error instanceof AmbiguousUrlError ? AMBIGUOUS_URL : INVALID_URL;
+      }
       if (!['http:', 'https:'].includes(url.parsed.protocol)) {
         return freezeDecision(false, 'unsupported', 'UNSUPPORTED_PROTOCOL', 'URL_PROTOCOL');
       }
@@ -349,7 +538,7 @@
       if (denylist.some((entry) => url.hostname === entry || url.hostname.endsWith(`.${entry}`))) {
         return freezeDecision(false, 'user-denylist', 'USER_DENYLIST', 'HOST_LABEL');
       }
-      const category = matchingCategory(url.hostname, url.parsed.pathname);
+      const category = matchingCategory(url.hostname, url.routeLabels);
       if (category) {
         return freezeDecision(false, category.category, 'SENSITIVE_URL_CATEGORY', category.evidenceKind);
       }
@@ -370,12 +559,14 @@
     POLICY_SCHEMA_VERSION,
     DENYLIST_LIMITS,
     ATTRIBUTE_SCAN_LIMITS,
+    ROUTE_LIMITS,
     SECURITY_SELECTOR,
     POLICY_CATEGORIES,
     POLICY_REASON_CODES,
     POLICY_EVIDENCE_KINDS,
     ATTRIBUTE_SIGNALS,
     DEFAULT_CATEGORY_RULES,
+    DEFAULT_SERVICE_RULES,
     normalizeDenylist,
     scanSecurityAttributes,
     classifySite

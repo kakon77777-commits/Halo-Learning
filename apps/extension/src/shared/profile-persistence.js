@@ -27,12 +27,14 @@
       return migrateSettings(stored && stored[storageKey]);
     }
 
-    async function saveEdit(uiPatch) {
+    async function saveTransform(transform) {
+      if (typeof transform !== 'function') throw new TypeError('transform: must be a function');
       if (!lockManager || typeof lockManager.request !== 'function') {
         throw new Error('LockManager is required for safe settings persistence');
       }
       return lockManager.request(SETTINGS_LOCK_NAME, { mode: 'exclusive' }, async () => {
         const current = await load();
+        const uiPatch = await transform(current);
         const next = mergeUiSettings(current, uiPatch, normalizeSettings);
         if (next.profileRevision !== current.profileRevision) {
           await storage.set({ [storageKey]: next });
@@ -41,7 +43,11 @@
       });
     }
 
-    return Object.freeze({ load, saveEdit });
+    async function saveEdit(uiPatch) {
+      return saveTransform(() => uiPatch);
+    }
+
+    return Object.freeze({ load, saveEdit, saveTransform });
   }
 
   return Object.freeze({ SETTINGS_LOCK_NAME, createProfilePersistence });

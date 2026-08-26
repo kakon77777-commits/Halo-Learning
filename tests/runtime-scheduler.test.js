@@ -1158,3 +1158,43 @@ test('runtime teardown detaches first and attempts every cleanup stage after ind
     assert.equal(errors[0][1], failingStage, failingStage);
   }
 });
+
+test('renderer cleanup retains authority and truthful artifact counts until a retry verifies clean state', () => {
+  let fail = true;
+  let wrappers = 3;
+  let panelOpen = true;
+  const renderer = {
+    removeAll() {
+      if (fail) throw new Error('transactional DOM rollback');
+      wrappers = 0;
+      panelOpen = false;
+    },
+    status() {
+      return { wrapperCount: wrappers, panel: { open: panelOpen } };
+    }
+  };
+
+  const first = Content.reconcileRendererCleanup(renderer);
+  assert.equal(first.cleanupPending, true);
+  assert.equal(first.renderer, renderer);
+  assert.deepEqual(first.remainingArtifacts, { wrapperCount: 3, panelCount: 1 });
+  assert.equal(first.errorCode, 'RENDERER_CLEANUP_FAILED');
+
+  fail = false;
+  const retried = Content.reconcileRendererCleanup(first.renderer);
+  assert.equal(retried.cleanupPending, false);
+  assert.equal(retried.renderer, null);
+  assert.deepEqual(retried.remainingArtifacts, { wrapperCount: 0, panelCount: 0 });
+  assert.equal(retried.errorCode, null);
+});
+
+test('renderer cleanup reports unknown artifacts and retains authority when status cannot be verified', () => {
+  const renderer = {
+    removeAll() {},
+    status() { throw new Error('hostile status'); }
+  };
+  const result = Content.reconcileRendererCleanup(renderer);
+  assert.equal(result.cleanupPending, true);
+  assert.equal(result.renderer, renderer);
+  assert.deepEqual(result.remainingArtifacts, { wrapperCount: 'unknown', panelCount: 'unknown' });
+});

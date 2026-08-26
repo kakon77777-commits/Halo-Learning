@@ -16,13 +16,16 @@ async function extensionWorker(context) {
   return context.serviceWorkers()[0] || context.waitForEvent('serviceworker');
 }
 
-async function activeTabId(worker, url) {
-  return worker.evaluate(async (fixtureUrl) => {
-    const [tab] = await chrome.tabs.query({ url: fixtureUrl });
-    if (!tab || !Number.isInteger(tab.id)) throw new Error('fixture tab unavailable');
-    await chrome.tabs.update(tab.id, { active: true });
+async function currentActiveTabId(worker) {
+  return worker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !Number.isInteger(tab.id)) throw new Error('active fixture tab unavailable');
     return tab.id;
-  }, url);
+  });
+}
+
+async function activateTab(worker, tabId) {
+  await worker.evaluate(async (id) => chrome.tabs.update(id, { active: true }), tabId);
 }
 
 async function statusFor(worker, tabId) {
@@ -36,9 +39,131 @@ async function statusFor(worker, tabId) {
   throw new Error('Halo content status unavailable');
 }
 
+async function installIsolatedInstrumentation(worker) {
+  const installed = await worker.evaluate(() => {
+    if (globalThis.__haloInstrumentedExecuteScript) return true;
+    const original = chrome.scripting.executeScript.bind(chrome.scripting);
+    const wrapped = async (details) => {
+      if (Array.isArray(details && details.files) && details.files.includes('src/content.js')) {
+        await original({
+          target: details.target,
+          world: 'ISOLATED',
+          func: () => {
+            if (globalThis.__HALO_ISOLATED_PROBE__) return;
+            globalThis.__HALO_ISOLATED_PROBE__ = {
+              value: 0,
+              textContent: 0,
+              innerText: 0,
+              selection: 0,
+              rendererRemoveFailures: 0
+            };
+            const hostile = document.getElementById('hostile');
+            if (hostile) {
+              for (const name of ['value', 'textContent', 'innerText']) {
+                Object.defineProperty(hostile, name, {
+                  configurable: true,
+                  get() {
+                    globalThis.__HALO_ISOLATED_PROBE__[name] += 1;
+                    throw new Error(`forbidden ${name} read`);
+                  }
+                });
+              }
+            }
+            const nativeSelection = globalThis.getSelection;
+            globalThis.getSelection = function () {
+              globalThis.__HALO_ISOLATED_PROBE__.selection += 1;
+              return nativeSelection.call(this);
+            };
+            let rendererModule;
+            Object.defineProperty(globalThis, 'HaloReversibleRenderer', {
+              configurable: true,
+              get() { return rendererModule; },
+              set(api) {
+                rendererModule = Object.freeze({
+                  ...api,
+                  createReversibleRenderer(options) {
+                    const renderer = api.createReversibleRenderer(options);
+                    return Object.freeze({
+                      ...renderer,
+                      removeAll() {
+                        if (globalThis.__HALO_FAIL_RENDERER_REMOVE__) {
+                          globalThis.__HALO_ISOLATED_PROBE__.rendererRemoveFailures += 1;
+                          throw new Error('instrumented transactional cleanup failure');
+                        }
+                        return renderer.removeAll();
+                      }
+                    });
+                  }
+                });
+              }
+            });
+            const nativeSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
+            chrome.runtime.sendMessage = async function (message) {
+              const response = await nativeSendMessage(message);
+              if (message && message.type === 'HALO_ENRICH_BATCH' && globalThis.__HALO_HOLD_SEMANTIC__) {
+                await new Promise((resolve) => { globalThis.__HALO_RELEASE_SEMANTIC__ = resolve; });
+              }
+              return response;
+            };
+          }
+        });
+      }
+      return original(details);
+    };
+    chrome.scripting.executeScript = wrapped;
+    globalThis.__haloInstrumentedExecuteScript = true;
+    return chrome.scripting.executeScript === wrapped;
+  });
+  assert.equal(installed, true, 'service-worker scripting instrumentation must install before Halo files');
+}
+
+async function isolatedProbe(worker, tabId) {
+  const [result] = await worker.evaluate(async (id) => chrome.scripting.executeScript({
+    target: { tabId: id },
+    world: 'ISOLATED',
+    func: () => globalThis.__HALO_ISOLATED_PROBE__ || null
+  }), tabId);
+  return result && result.result;
+}
+
+async function setIsolatedFlag(worker, tabId, name, value) {
+  await worker.evaluate(async ({ id, key, next }) => chrome.scripting.executeScript({
+    target: { tabId: id },
+    world: 'ISOLATED',
+    func: ([flag, flagValue]) => { globalThis[flag] = flagValue; },
+    args: [[key, next]]
+  }), { id: tabId, key: name, next: value });
+}
+
+async function releaseHeldSemantic(worker, tabId) {
+  await worker.evaluate(async (id) => chrome.scripting.executeScript({
+    target: { tabId: id },
+    world: 'ISOLATED',
+    func: () => {
+      const release = globalThis.__HALO_RELEASE_SEMANTIC__;
+      globalThis.__HALO_HOLD_SEMANTIC__ = false;
+      globalThis.__HALO_RELEASE_SEMANTIC__ = null;
+      if (typeof release === 'function') release();
+    }
+  }), tabId);
+}
+
+async function setWorkerStorageFailure(worker, enabled) {
+  await worker.evaluate((next) => {
+    if (!globalThis.__haloOriginalStorageGet) {
+      globalThis.__haloOriginalStorageGet = chrome.storage.local.get.bind(chrome.storage.local);
+      chrome.storage.local.get = async (...args) => {
+        if (globalThis.__HALO_FAIL_POLICY_STORAGE__) throw new Error('instrumented storage failure');
+        return globalThis.__haloOriginalStorageGet(...args);
+      };
+    }
+    globalThis.__HALO_FAIL_POLICY_STORAGE__ = next;
+  }, enabled);
+}
+
 async function invokeCommand(page, worker, url, expectBlocked) {
-  const tabId = await activeTabId(worker, url);
   await page.bringToFront();
+  const tabId = await currentActiveTabId(worker);
   await page.keyboard.press('Alt+Shift+H');
   let status;
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -58,6 +183,29 @@ function zeroWork(status) {
   assert.equal(Object.hasOwn(status, 'selection'), false);
   assert.equal(status.lastError, 'SENSITIVE_PAGE_BLOCKED');
   assert.equal(status.policyDecision.allow, false);
+  assert.equal(status.cleanupPending, false);
+  assert.deepEqual(status.remainingArtifacts, { wrapperCount: 0, panelCount: 0 });
+  assert.equal(status.boundaryCounters.textRunExtractions, 0);
+  assert.equal(status.boundaryCounters.sentenceRecords, 0);
+  assert.equal(status.boundaryCounters.selectionReads, 0);
+  assert.equal(status.boundaryCounters.semanticMessages, 0);
+  assert.equal(status.boundaryCounters.rendererCalls, 0);
+  assert.equal(status.boundaryCounters.networkRequests, 0);
+}
+
+function noNewPrivateWork(before, after) {
+  for (const name of ['textRunExtractions', 'sentenceRecords', 'selectionReads', 'semanticMessages', 'networkRequests']) {
+    assert.equal(after.boundaryCounters[name], before.boundaryCounters[name], name);
+  }
+}
+
+function blockedAndClean(status) {
+  assert.equal(status.active, false);
+  assert.equal(status.markedTokens, 0);
+  assert.equal(status.lastError, 'SENSITIVE_PAGE_BLOCKED');
+  assert.equal(status.policyDecision.allow, false);
+  assert.equal(status.cleanupPending, false);
+  assert.deepEqual(status.remainingArtifacts, { wrapperCount: 0, panelCount: 0 });
 }
 
 test('installed MV3 sensitive-site matrix blocks before extraction and cleans dynamic, SPA, and denylist transitions', async () => {
@@ -74,6 +222,11 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
     const match = /^chrome-extension:\/\/([^/]+)\//.exec(worker.url());
     assert.ok(match, `real extension worker URL expected, got ${worker.url()}`);
     const extensionId = match[1];
+    await installIsolatedInstrumentation(worker);
+
+    const serviceFixture = '<!doctype html><html lang="en"><body><main><p>Public learning text.</p><input id="hostile" autocomplete="off"></main></body></html>';
+    await context.route(/^https:\/\/(?:chase\.com|secure\.chase\.com|www\.paypal\.com|vault\.bitwarden\.com|outlook\.live\.com|discord\.com|myaccount\.uhc\.com|secure\.ssa\.gov|console\.aws\.amazon\.com|console\.cloud\.google\.com|portal\.azure\.com)(?:[:/]|$)/u,
+      (route) => route.fulfill({ status: 200, contentType: 'text/html', body: serviceFixture }));
 
     await withFixtureServer({
       '/fixture.html': {
@@ -98,6 +251,32 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       }
     }, async ({ port }) => {
       const page = await context.newPage();
+      const serviceMatrix = [
+        ['banking', 'https://chase.com/personal/checking'],
+        ['banking', 'https://secure.chase.com/web/auth/dashboard'],
+        ['payment-checkout', 'https://www.paypal.com/checkoutnow'],
+        ['password-manager', 'https://vault.bitwarden.com/#/vault'],
+        ['webmail', 'https://outlook.live.com/mail/0/inbox'],
+        ['private-messaging', 'https://discord.com/channels/123/456'],
+        ['medical-insurance', 'https://myaccount.uhc.com/member/claims'],
+        ['government-personal-data', 'https://secure.ssa.gov/myaccount/'],
+        ['developer-secrets', 'https://console.aws.amazon.com/secretsmanager/listsecrets'],
+        ['developer-secrets', 'https://console.cloud.google.com/security/secret-manager'],
+        ['developer-secrets', 'https://portal.azure.com/#view/Microsoft_Azure_KeyVault/SecretListBlade']
+      ];
+      for (const [category, url] of serviceMatrix) {
+        await page.goto(url);
+        const { tabId, status } = await invokeCommand(page, worker, url, true);
+        zeroWork(status);
+        assert.equal(status.policyDecision.category, category, url);
+        assert.deepEqual(await isolatedProbe(worker, tabId), {
+          value: 0,
+          textContent: 0,
+          innerText: 0,
+          selection: 0,
+          rendererRemoveFailures: 0
+        });
+      }
       const sensitiveMatrix = [
         ['banking', `http://bank.localhost:${port}/fixture.html`],
         ['payment-checkout', `http://pay.localhost:${port}/fixture.html`],
@@ -116,12 +295,18 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
         };
         await page.goto(url);
         page.on('request', observeRequest);
-        const { status } = await invokeCommand(page, worker, url, true);
+        const { tabId, status } = await invokeCommand(page, worker, url, true);
         zeroWork(status);
         assert.equal(status.policyDecision.category, category, url);
         assert.equal(await page.locator('[data-halo-owned="token"]').count(), 0);
         assert.equal(await page.locator('[data-halo-owned="panel"]').count(), 0);
-        assert.deepEqual(await page.evaluate(() => __privacyReads), { value: 0, text: 0, selection: 0 });
+        assert.deepEqual(await isolatedProbe(worker, tabId), {
+          value: 0,
+          textContent: 0,
+          innerText: 0,
+          selection: 0,
+          rendererRemoveFailures: 0
+        });
         assert.deepEqual(requests, []);
         page.off('request', observeRequest);
       }
@@ -132,7 +317,13 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       const passwordResult = await invokeCommand(page, worker, passwordUrl, true);
       zeroWork(passwordResult.status);
       assert.equal(passwordResult.status.policyDecision.category, 'sensitive-form');
-      assert.deepEqual(await page.evaluate(() => __privacyReads), { value: 0, text: 0, selection: 0 });
+      assert.deepEqual(await isolatedProbe(worker, passwordResult.tabId), {
+        value: 0,
+        textContent: 0,
+        innerText: 0,
+        selection: 0,
+        rendererRemoveFailures: 0
+      });
 
       const publicUrl = `http://public.localhost:${port}/public.html`;
       await page.goto(publicUrl);
@@ -140,7 +331,7 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       const popup = await context.newPage();
       await popup.goto(`chrome-extension://${extensionId}/src/popup.html`);
       await popup.waitForSelector('#applyButton:not([disabled])');
-      await activeTabId(worker, publicUrl);
+      await activateTab(worker, publicCommand.tabId);
       await popup.click('#applyButton');
       await page.waitForSelector('#lesson [data-halo-owned="token"]');
 
@@ -151,11 +342,29 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       });
       await page.waitForTimeout(50);
       assert.ok(await page.locator('#lesson [data-halo-owned="token"]').count() > 0);
+      const beforeSensitiveAttribute = await statusFor(worker, publicCommand.tabId);
+      await setIsolatedFlag(worker, publicCommand.tabId, '__HALO_FAIL_RENDERER_REMOVE__', true);
       await page.evaluate(() => {
         document.getElementById('dynamic-password').setAttribute('autocomplete', 'current-password');
       });
+      await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned="token"]').length > 0);
+      let cleanupFailure;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        cleanupFailure = await statusFor(worker, publicCommand.tabId);
+        if (cleanupFailure.cleanupPending) break;
+        await page.waitForTimeout(25);
+      }
+      assert.equal(cleanupFailure.cleanupPending, true);
+      assert.ok(cleanupFailure.remainingArtifacts.wrapperCount > 0);
+      assert.ok((await isolatedProbe(worker, publicCommand.tabId)).rendererRemoveFailures > 0);
+      noNewPrivateWork(beforeSensitiveAttribute, cleanupFailure);
+
+      await setIsolatedFlag(worker, publicCommand.tabId, '__HALO_FAIL_RENDERER_REMOVE__', false);
+      await page.evaluate(() => document.getElementById('dynamic-password').setAttribute('role', 'group'));
       await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
-      zeroWork(await statusFor(worker, publicCommand.tabId));
+      const cleanupRetried = await statusFor(worker, publicCommand.tabId);
+      blockedAndClean(cleanupRetried);
+      noNewPrivateWork(cleanupFailure, cleanupRetried);
 
       await page.evaluate(() => document.getElementById('dynamic-password').remove());
       await page.waitForSelector('#lesson [data-halo-owned="token"]');
@@ -168,19 +377,19 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
         document.getElementById('content').appendChild(input);
       });
       await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
-      zeroWork(await statusFor(worker, publicCommand.tabId));
+      blockedAndClean(await statusFor(worker, publicCommand.tabId));
       await page.evaluate(() => document.getElementById('inserted-password').remove());
       await page.waitForSelector('#lesson [data-halo-owned="token"]');
 
       await page.evaluate(() => history.pushState({}, '', '/checkout'));
       await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
       const spaStatus = await statusFor(worker, publicCommand.tabId);
-      zeroWork(spaStatus);
+      blockedAndClean(spaStatus);
       assert.equal(spaStatus.policyDecision.category, 'payment-checkout');
 
       await page.goto(publicUrl);
       await invokeCommand(page, worker, publicUrl);
-      await activeTabId(worker, publicUrl);
+      await activateTab(worker, publicCommand.tabId);
       await popup.reload();
       await popup.waitForSelector('#blockSiteButton:not([disabled])');
       await popup.click('#applyButton');
@@ -188,23 +397,82 @@ test('installed MV3 sensitive-site matrix blocks before extraction and cleans dy
       await popup.click('#blockSiteButton');
       await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
       const deniedStatus = await statusFor(worker, publicCommand.tabId);
-      zeroWork(deniedStatus);
+      blockedAndClean(deniedStatus);
       assert.equal(deniedStatus.policyDecision.category, 'user-denylist');
 
-      const denylistMatrix = await popup.evaluate((fixturePort) => {
-        const denylist = HaloSitePolicy.normalizeDenylist(['public.localhost']);
-        const scan = [];
-        const decide = (url) => HaloSitePolicy.classifySite({
-          url, userDenylist: denylist, sensitiveAttributes: scan
-        }).allow;
-        return {
-          exact: decide(`http://public.localhost:${fixturePort}/public.html`),
-          subdomain: decide(`http://sub.public.localhost:${fixturePort}/public.html`),
-          suffixTrick: decide(`http://public.localhost.attacker.test:${fixturePort}/public.html`)
-        };
-      }, port);
-      assert.deepEqual(denylistMatrix, { exact: false, subdomain: false, suffixTrick: true });
+      const subdomainUrl = `http://sub.public.localhost:${port}/public.html`;
+      await page.goto(subdomainUrl);
+      const subdomain = await invokeCommand(page, worker, subdomainUrl, true);
+      zeroWork(subdomain.status);
+      assert.equal(subdomain.status.policyDecision.category, 'user-denylist');
+
+      const suffixTrickUrl = `http://public.localhost.attacker.localhost:${port}/public.html`;
+      await page.goto(suffixTrickUrl);
+      const suffixTrick = await invokeCommand(page, worker, suffixTrickUrl, false);
+      assert.equal(suffixTrick.status.lastError, null);
+      assert.equal(suffixTrick.status.boundaryCounters.selectionReads, 1);
+      assert.equal(await page.locator('[data-halo-owned]').count(), 0);
+
+      await page.goto(publicUrl);
+      const exactAgain = await invokeCommand(page, worker, publicUrl, true);
+      zeroWork(exactAgain.status);
+      await activateTab(worker, exactAgain.tabId);
+      await popup.reload();
+      await popup.waitForSelector('#allowSiteButton:not([disabled])');
+      await popup.click('#allowSiteButton');
+      await popup.click('#applyButton');
+      await page.waitForSelector('#lesson [data-halo-owned="token"]');
+      assert.equal((await statusFor(worker, exactAgain.tabId)).cleanupPending, false);
       assert.equal(await page.locator('[data-halo-owned="panel"]').count(), 0);
+
+      await popup.click('#removeButton');
+      await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
+      const beforeStorageFailure = await statusFor(worker, exactAgain.tabId);
+      await setWorkerStorageFailure(worker, true);
+      await popup.click('#applyButton');
+      let storageFailure;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        storageFailure = await statusFor(worker, exactAgain.tabId);
+        if (storageFailure.lastError === 'LOCAL_MARKING_ERROR') break;
+        await page.waitForTimeout(25);
+      }
+      assert.equal(storageFailure.lastError, 'LOCAL_MARKING_ERROR');
+      assert.ok(storageFailure.boundaryCounters.semanticMessages > beforeStorageFailure.boundaryCounters.semanticMessages);
+      assert.equal(storageFailure.boundaryCounters.networkRequests, 0);
+      assert.equal(await page.locator('[data-halo-owned="token"]').count(), 0);
+      await setWorkerStorageFailure(worker, false);
+      await popup.waitForSelector('#applyButton:not([disabled])');
+      await popup.click('#applyButton');
+      await page.waitForSelector('#lesson [data-halo-owned="token"]');
+
+      await popup.waitForSelector('#removeButton:not([disabled])');
+      await popup.click('#removeButton');
+      await page.waitForFunction(() => document.querySelectorAll('[data-halo-owned]').length === 0);
+      const beforeHeldResponse = await statusFor(worker, exactAgain.tabId);
+      await setIsolatedFlag(worker, exactAgain.tabId, '__HALO_HOLD_SEMANTIC__', true);
+      await popup.waitForSelector('#applyButton:not([disabled])');
+      await popup.click('#applyButton');
+      let heldResponse;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        heldResponse = await statusFor(worker, exactAgain.tabId);
+        if (heldResponse.boundaryCounters.semanticMessages > beforeHeldResponse.boundaryCounters.semanticMessages) break;
+        await page.waitForTimeout(25);
+      }
+      assert.ok(heldResponse.boundaryCounters.semanticMessages > beforeHeldResponse.boundaryCounters.semanticMessages);
+      await page.evaluate(() => history.pushState({}, '', '/checkout'));
+      let blockedBeforeRelease;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        blockedBeforeRelease = await statusFor(worker, exactAgain.tabId);
+        if (blockedBeforeRelease.lastError === 'SENSITIVE_PAGE_BLOCKED' &&
+            blockedBeforeRelease.policyDecision.category === 'payment-checkout') break;
+        await page.waitForTimeout(25);
+      }
+      blockedAndClean(blockedBeforeRelease);
+      await releaseHeldSemantic(worker, exactAgain.tabId);
+      await page.waitForTimeout(100);
+      const afterStaleRelease = await statusFor(worker, exactAgain.tabId);
+      blockedAndClean(afterStaleRelease);
+      noNewPrivateWork(blockedBeforeRelease, afterStaleRelease);
     });
   } finally {
     if (context) await context.close();

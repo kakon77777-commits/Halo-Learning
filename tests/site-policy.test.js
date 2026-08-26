@@ -110,6 +110,63 @@ test('default categories use exact host/path labels for the required sensitive m
   ]) assert.equal(classify(url).allow, true, url);
 });
 
+test('auditable service registry blocks representative sensitive routes but not hostname lookalikes', () => {
+  const blocked = [
+    ['https://chase.com/personal/checking', 'banking'],
+    ['https://secure.chase.com/web/auth/dashboard', 'banking'],
+    ['https://outlook.live.com/mail/0/inbox', 'webmail'],
+    ['https://discord.com/channels/123/456', 'private-messaging'],
+    ['https://myaccount.uhc.com/member/claims', 'medical-insurance'],
+    ['https://console.aws.amazon.com/secretsmanager/listsecrets', 'developer-secrets'],
+    ['https://console.cloud.google.com/security/secret-manager', 'developer-secrets'],
+    ['https://portal.azure.com/#view/Microsoft_Azure_KeyVault/SecretListBlade', 'developer-secrets'],
+    ['https://vault.bitwarden.com/#/vault', 'password-manager'],
+    ['https://www.paypal.com/checkoutnow', 'payment-checkout'],
+    ['https://secure.ssa.gov/myaccount/', 'government-personal-data']
+  ];
+  for (const [url, category] of blocked) {
+    const decision = classify(url);
+    assert.equal(decision.allow, false, url);
+    assert.equal(decision.category, category, url);
+  }
+
+  for (const url of [
+    'https://chase.com.attacker.test/personal/checking',
+    'https://notchase.com/personal/checking',
+    'https://outlook.live.com.attacker.test/mail',
+    'https://discord.com.attacker.test/channels/123',
+    'https://myaccount.uhc.com.attacker.test/member',
+    'https://www.paypal.com.attacker.test/checkoutnow',
+    'https://vault.bitwarden.com.attacker.test/#/vault',
+    'https://secure.ssa.gov.attacker.test/myaccount',
+    'https://console.aws.amazon.com.attacker.test/secretsmanager',
+    'https://console.cloud.google.com.attacker.test/security/secret-manager',
+    'https://portal.azure.com.attacker.test/#view/KeyVault/secrets'
+  ]) assert.equal(classify(url).allow, true, url);
+});
+
+test('route matching safely includes query and hash and rejects multiply encoded or ambiguous routes', () => {
+  assert.equal(classify('https://console.aws.amazon.com/home?service=secretsmanager').category, 'developer-secrets');
+  assert.equal(classify('https://portal.azure.com/#view/KeyVault/secrets').category, 'developer-secrets');
+  for (const url of [
+    'https://public.example/%256cogin',
+    'https://public.example/%252Flogin',
+    'https://public.example/%2Flogin',
+    'https://public.example/%5clogin',
+    'https://public.example/%2e%2e/login',
+    'https://user:password@public.example/article'
+  ]) {
+    const decision = classify(url);
+    assert.deepEqual(decision, {
+      schemaVersion: 1,
+      allow: false,
+      category: 'policy-error',
+      reasonCode: 'AMBIGUOUS_URL',
+      evidenceKind: 'POLICY_ERROR'
+    }, url);
+  }
+});
+
 test('denylist canonicalizes case, one trailing dot, and IDNA then sorts and deduplicates', () => {
   const denylist = Policy.normalizeDenylist([
     'Private.Example.',
@@ -145,6 +202,38 @@ test('denylist rejects wildcard, URL, path, port, controls, empty labels, and bo
     /denylist/i
   );
   assert.throws(() => Policy.normalizeDenylist(['a'.repeat(64) + '.example']), /denylist/i);
+});
+
+test('denylist snapshots only a dense own-data array and rejects holes, accessors, extras, and hostile proxies', () => {
+  const hole = [];
+  hole.length = 1;
+  const accessor = [];
+  Object.defineProperty(accessor, '0', {
+    enumerable: true,
+    get() { throw new Error('must not invoke denylist getter'); }
+  });
+  Object.defineProperty(accessor, 'length', { value: 1 });
+  const extra = ['private.example'];
+  Object.defineProperty(extra, 'secret', { value: 'must not be accepted' });
+  let valueReads = 0;
+  const unstable = new Proxy(['private.example'], {
+    get(target, name, receiver) {
+      if (name === 'length' || name === '0') valueReads += 1;
+      return Reflect.get(target, name, receiver);
+    },
+    ownKeys() { throw new Error('hostile proxy'); }
+  });
+  const transparent = new Proxy(['private.example'], {
+    get(target, name, receiver) {
+      if (name === 'length' || name === '0') valueReads += 1;
+      return Reflect.get(target, name, receiver);
+    }
+  });
+
+  for (const value of [hole, accessor, extra, unstable, transparent]) {
+    assert.throws(() => Policy.normalizeDenylist(value), /denylist/i);
+  }
+  assert.equal(valueReads, 0);
 });
 
 test('invalid URL, denylist, scan, or throwing input always returns a blocked sanitized decision', () => {
@@ -211,6 +300,15 @@ test('hidden inputs skip name and other sensitive inspection and never touch val
   assert.equal(counters.innerText || 0, 0);
 });
 
+test('hidden elements still consume the per-element time and static-result checks', () => {
+  let ticks = 0;
+  const scan = Policy.scanSecurityAttributes(documentWith([element({ type: 'hidden' })]), {
+    now() { ticks += 1; return ticks; }
+  });
+  assert.equal(scan.status, 'ok');
+  assert.equal(ticks, 4);
+});
+
 test('throwing, ambiguous, element-over-budget, and time-over-budget scans fail closed', () => {
   const throwingTag = element({});
   Object.defineProperty(throwingTag, 'tagName', { get() { throw new Error('hostile tag'); } });
@@ -235,6 +333,35 @@ test('throwing, ambiguous, element-over-budget, and time-over-budget scans fail 
     assert.equal(decision.allow, false);
     assert.equal(decision.evidenceKind, 'POLICY_ERROR');
   }
+});
+
+test('security scan enforces stable static results and monotonic time at every boundary including zero nodes', () => {
+  function clock(values) {
+    let index = 0;
+    return () => values[Math.min(index++, values.length - 1)];
+  }
+  function changingNodes(nodes, lengths) {
+    let read = 0;
+    return new Proxy(nodes, {
+      get(target, name, receiver) {
+        if (name === 'length') return lengths[Math.min(read++, lengths.length - 1)];
+        return Reflect.get(target, name, receiver);
+      }
+    });
+  }
+  let nullNodeTicks = 0;
+  const cases = [
+    Policy.scanSecurityAttributes(documentWith([]), { now: clock([0, Number.NaN, 1]) }),
+    Policy.scanSecurityAttributes(documentWith([]), { now: clock([2, 1, 3]) }),
+    Policy.scanSecurityAttributes(documentWith([], {}), { now: clock([0, 1, 9]) }),
+    Policy.scanSecurityAttributes(documentWith(changingNodes([element({})], [1, 0, 0])), {
+      now: clock([0, 1, 2, 3])
+    }),
+    Policy.scanSecurityAttributes(documentWith([null]), { now() { nullNodeTicks += 1; return nullNodeTicks; } })
+  ];
+  for (const scan of cases) assert.equal(scan.status, 'blocked');
+  assert.equal(cases[2].failureCode, 'DOM_SCAN_BUDGET_EXCEEDED');
+  assert.equal(nullNodeTicks, 4);
 });
 
 test('unsupported protocols fail closed before attribute decisions', () => {

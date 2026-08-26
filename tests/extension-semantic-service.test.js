@@ -336,6 +336,31 @@ test('cancellation is scoped by sender tab even when request IDs collide', async
   assert.equal(completed.results[0].phase, 'lexical');
 });
 
+test('cancellation after shard callback but before authorization path settles discards the lexical result', async () => {
+  let release;
+  let callbackCompleted;
+  const callbackDone = new Promise((resolve) => { callbackCompleted = resolve; });
+  const settle = new Promise((resolve) => { release = resolve; });
+  const runtime = fixtureRuntime();
+  runtime.withEnsuredShards = async (ids, _loadOptions, callback) => {
+    runtime.ensured.push([...ids]);
+    const response = callback(Object.freeze([lexicalShard()]));
+    callbackCompleted();
+    await settle;
+    return response;
+  };
+  const service = serviceFor(runtime);
+  const pending = service.handleMessage(message([item(1)]), { tab: { id: 21 } });
+  await callbackDone;
+
+  const cancel = await service.handleMessage({
+    type: 'HALO_CANCEL_REQUEST', requestId: 'request-1'
+  }, { tab: { id: 21 } });
+  assert.equal(cancel.status, 'cancelled');
+  release();
+  assert.equal((await pending).status, 'cancelled');
+});
+
 test('worker authorization rejects a blocked sender before reading enrichment text', async () => {
   let itemReads = 0;
   const service = ServiceWorker.createShardSemanticService({
@@ -360,6 +385,85 @@ test('worker authorization rejects a blocked sender before reading enrichment te
   });
   assert.deepEqual(response, { error: 'SENSITIVE_SITE_BLOCKED' });
   assert.equal(itemReads, 0);
+});
+
+test('worker cancellation is active during delayed authorization and never reads private items or loads lexical data', async () => {
+  let releaseAuthorization;
+  let authorizationStarted;
+  const started = new Promise((resolve) => { authorizationStarted = resolve; });
+  let itemReads = 0;
+  let runtimeLoads = 0;
+  const service = ServiceWorker.createShardSemanticService({
+    loadShardRuntime: async () => {
+      runtimeLoads += 1;
+      throw new Error('cancelled request must not load lexical runtime');
+    },
+    semanticModule: Semantic,
+    grammarModule: Grammar,
+    shardedProviderModule: ShardedProvider,
+    authorizeSender: async () => {
+      authorizationStarted();
+      return new Promise((resolve) => { releaseAuthorization = resolve; });
+    }
+  });
+  const privateMessage = {
+    type: 'HALO_ENRICH_BATCH',
+    requestId: 'authorization-race',
+    pageEpoch: 9,
+    get items() {
+      itemReads += 1;
+      throw new Error('private text getter must not be read');
+    }
+  };
+
+  const pending = service.handleMessage(privateMessage, { tab: { id: 77 } });
+  await started;
+  assert.deepEqual(await service.handleMessage({
+    type: 'HALO_CANCEL_REQUEST', requestId: 'authorization-race'
+  }, { tab: { id: 77 } }), {
+    schemaVersion: 1,
+    requestId: 'authorization-race',
+    status: 'cancelled'
+  });
+  releaseAuthorization(true);
+  assert.deepEqual(await pending, {
+    schemaVersion: 1,
+    requestId: 'authorization-race',
+    pageEpoch: 9,
+    status: 'cancelled',
+    results: []
+  });
+  assert.equal(itemReads, 0);
+  assert.equal(runtimeLoads, 0);
+  assert.equal((await service.handleMessage({
+    type: 'HALO_CANCEL_REQUEST', requestId: 'authorization-race'
+  }, { tab: { id: 77 } })).status, 'not-found');
+});
+
+test('duplicate request IDs are rejected while authorization is pending and cancellation converges', async () => {
+  let releaseAuthorization;
+  let authorizationCalls = 0;
+  const service = ServiceWorker.createShardSemanticService({
+    loadShardRuntime: async () => { throw new Error('must not load after cancellation'); },
+    semanticModule: Semantic,
+    grammarModule: Grammar,
+    shardedProviderModule: ShardedProvider,
+    authorizeSender: async () => {
+      authorizationCalls += 1;
+      return new Promise((resolve) => { releaseAuthorization = resolve; });
+    }
+  });
+  const request = message([item(1)], { requestId: 'duplicate-during-auth' });
+  const first = service.handleMessage(request, { tab: { id: 88 } });
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    service.handleMessage(request, { tab: { id: 88 } }),
+    /already active/i
+  );
+  assert.equal(authorizationCalls, 1);
+  assert.equal((await service.cancelRequest({ requestId: 'duplicate-during-auth' }, { tab: { id: 88 } })).status, 'cancelled');
+  releaseAuthorization(true);
+  assert.equal((await first).status, 'cancelled');
 });
 
 test('MV3 worker source loads only candidate-independent local shard modules', () => {

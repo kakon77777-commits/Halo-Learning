@@ -171,10 +171,12 @@
       openPanel(value) {
         const model = resolveModel(value.targetId);
         if (!model) throw new Error('Trigger target is no longer available');
+        if (typeof settings.onRendererCall === 'function') settings.onRendererCall('open-panel');
         renderer.openPanel(model);
         selectionModels.delete(value.targetId);
       },
       closePanel(reason) {
+        if (typeof settings.onRendererCall === 'function') settings.onRendererCall('close-panel');
         renderer.closePanel(reason);
       },
       onError: settings.onError
@@ -581,10 +583,12 @@
       ? settings.rootRevision
       : 1;
     const locale = runtimeSettings.languageMode === 'en' ? 'en' : 'zh-Hant';
+    if (typeof settings.onTextRunExtraction === 'function') settings.onTextRunExtraction();
     const records = pipeline.buildSentenceRecords(element, {
       rootRevision,
       locale
     });
+    if (typeof settings.onSentenceRecords === 'function') settings.onSentenceRecords(records.length);
     const chunks = [];
     let current = null;
 
@@ -1163,25 +1167,87 @@
     return null;
   }
 
+  function reconcileRendererCleanup(renderer, remove) {
+    if (!renderer) {
+      return Object.freeze({
+        renderer: null,
+        cleanupPending: false,
+        remainingArtifacts: Object.freeze({ wrapperCount: 0, panelCount: 0 }),
+        errorCode: null
+      });
+    }
+    let cleanupFailed = false;
+    try {
+      const operation = typeof remove === 'function' ? remove : () => renderer.removeAll();
+      operation();
+    } catch (_error) {
+      cleanupFailed = true;
+    }
+    let wrapperCount = 'unknown';
+    let panelCount = 'unknown';
+    try {
+      if (typeof renderer.status !== 'function') throw new TypeError('renderer status unavailable');
+      const status = renderer.status();
+      if (!status || !Number.isSafeInteger(status.wrapperCount) || status.wrapperCount < 0 ||
+          !status.panel || typeof status.panel.open !== 'boolean') {
+        throw new TypeError('renderer status invalid');
+      }
+      wrapperCount = status.wrapperCount;
+      panelCount = status.panel.open ? 1 : 0;
+    } catch (_error) {
+      cleanupFailed = true;
+    }
+    const clean = !cleanupFailed && wrapperCount === 0 && panelCount === 0;
+    return Object.freeze({
+      renderer: clean ? null : renderer,
+      cleanupPending: !clean,
+      remainingArtifacts: Object.freeze({ wrapperCount, panelCount }),
+      errorCode: cleanupFailed ? 'RENDERER_CLEANUP_FAILED' : (clean ? null : 'RENDERER_ARTIFACTS_REMAIN')
+    });
+  }
+
   function initBrowser() {
     if (!root.document || !root.chrome || !root.chrome.runtime) return;
     if (root.__HALO_CONTENT_INITIALIZED__) return;
     root.__HALO_CONTENT_INITIALIZED__ = true;
 
-    const emptyStatus = () => Object.freeze({
+    const boundaryCounterState = {
+      policyEvaluations: 0,
+      textRunExtractions: 0,
+      sentenceRecords: 0,
+      selectionReads: 0,
+      semanticMessages: 0,
+      rendererCalls: 0,
+      networkRequests: 0
+    };
+    const boundaryCounters = () => Object.freeze({ ...boundaryCounterState });
+    const stampStatus = (value) => Object.freeze({ ...value, boundaryCounters: boundaryCounters() });
+    const incrementBoundary = (name, amount) => {
+      const increment = amount === undefined ? 1 : amount;
+      if (Object.hasOwn(boundaryCounterState, name) && Number.isSafeInteger(increment) && increment >= 0) {
+        boundaryCounterState[name] += increment;
+      }
+    };
+    const emptyStatus = () => stampStatus({
       active: false,
       textNodesVisited: 0,
       semanticTokens: 0,
       markedTokens: 0,
       providerMode: null,
+      cleanupPending: false,
+      remainingArtifacts: Object.freeze({ wrapperCount: 0, panelCount: 0 }),
       oversizedWork: Object.freeze([]),
       lastError: null
     });
     let lastStatus = emptyStatus();
     let activeRuntime = null;
     let activeController = null;
+    const cleanupControllerTargets = new Set();
     let activeRenderer = null;
     let activeTriggerRuntime = null;
+    let cleanupRuntimeTarget = null;
+    let cleanupPending = false;
+    let remainingArtifacts = Object.freeze({ wrapperCount: 0, panelCount: 0 });
     let activePolicyDecision = POLICY_FAILURE_DECISION;
     let currentSettings = null;
     let markingRequested = false;
@@ -1202,12 +1268,22 @@
     function runRendererMutation(controller, callback) {
       const previousScope = rendererMutationScope;
       const DynamicDom = root.HaloDynamicDomController;
-      rendererMutationScope = previousScope || DynamicDom.createRendererMutationSanitizer();
+      rendererMutationScope = previousScope || (DynamicDom &&
+        typeof DynamicDom.createRendererMutationSanitizer === 'function'
+        ? DynamicDom.createRendererMutationSanitizer()
+        : null);
       try {
         return controller ? controller.suppressRendererMutations(callback) : callback();
       } finally {
         rendererMutationScope = previousScope;
       }
+    }
+
+    function rendererSuppressionController() {
+      if (activeController) return activeController;
+      const iterator = cleanupControllerTargets.values();
+      const next = iterator.next();
+      return next.done ? null : next.value;
     }
 
     function isRendererOwned(node) {
@@ -1231,6 +1307,7 @@
         const location = root.location;
         const url = location && location.href;
         if (typeof url !== 'string') return POLICY_FAILURE_DECISION;
+        incrementBoundary('policyEvaluations');
         return evaluatePagePolicy(root, {
           sitePolicyModule: root.HaloSitePolicy,
           url,
@@ -1265,6 +1342,7 @@
         renderer: ensureRenderer(Renderer),
         triggerModule: Trigger,
         mode: settings.triggerMode,
+        onRendererCall: () => incrementBoundary('rendererCalls'),
         onError: () => {
           lastStatus = Object.freeze({ ...lastStatus, lastError: 'LOCAL_TRIGGER_ERROR' });
         }
@@ -1273,37 +1351,68 @@
     }
 
     function cleanupTriggerRuntime(type) {
-      if (!activeTriggerRuntime) return;
+      if (!activeTriggerRuntime) return true;
       const triggerRuntime = activeTriggerRuntime;
-      triggerRuntime.cleanup(type);
-      if (triggerRuntime.isCleaned() && activeTriggerRuntime === triggerRuntime) activeTriggerRuntime = null;
+      try { triggerRuntime.cleanup(type); } catch (_error) {}
+      let cleaned = false;
+      try { cleaned = triggerRuntime.isCleaned(); } catch (_error) {}
+      if (cleaned && activeTriggerRuntime === triggerRuntime) activeTriggerRuntime = null;
+      return cleaned;
     }
 
-    function policyBlockedStatus(decision) {
-      return Object.freeze({
-        ...emptyStatus(),
-        lastError: 'SENSITIVE_PAGE_BLOCKED',
+    function cleanupAwareStatus(decision, lastError) {
+      const wrapperCount = remainingArtifacts.wrapperCount;
+      return stampStatus({
+        ...(cleanupPending ? lastStatus : emptyStatus()),
+        active: false,
+        markedTokens: typeof wrapperCount === 'number' ? wrapperCount : 'unknown',
+        providerMode: null,
+        queuedRoots: 0,
+        cleanupPending,
+        remainingArtifacts,
+        lastError,
         policyDecision: decision
       });
     }
 
     function cleanupActiveWork(type, preserveController) {
-      cleanupTriggerRuntime(type);
-      const runtime = activeRuntime;
-      if (activeRuntime === runtime) activeRuntime = null;
-      cleanupRuntime(runtime, {
-        epoch: runtime && runtime.epoch,
-        rendererCleanup: () => activeRenderer && activeRenderer.removeAll(),
-        onError: () => {
-          lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
-        }
-      });
-      activeRenderer = null;
-      if (!preserveController && activeController) {
-        const controller = activeController;
-        activeController = null;
-        controller.cleanup();
+      if (activeRuntime) {
+        cleanupRuntimeTarget = activeRuntime;
+        activeRuntime = null;
       }
+      let runtimeClean = true;
+      const runtime = cleanupRuntimeTarget;
+      if (runtime) {
+        cleanupRuntime(runtime, {
+          epoch: runtime.epoch,
+          onError: () => { runtimeClean = false; }
+        });
+        if (runtimeClean && cleanupRuntimeTarget === runtime) cleanupRuntimeTarget = null;
+      }
+      const triggerClean = cleanupTriggerRuntime(type);
+      const rendererCleanup = reconcileRendererCleanup(activeRenderer, activeRenderer
+        ? () => {
+            incrementBoundary('rendererCalls');
+            return runRendererMutation(rendererSuppressionController(), () => activeRenderer.removeAll());
+          }
+        : null);
+      activeRenderer = rendererCleanup.renderer;
+      remainingArtifacts = rendererCleanup.remainingArtifacts;
+      if (!preserveController && activeController) {
+        cleanupControllerTargets.add(activeController);
+        activeController = null;
+      }
+      for (const controller of cleanupControllerTargets) {
+        try {
+          controller.cleanup();
+          cleanupControllerTargets.delete(controller);
+        } catch (_error) {
+          // Retain authority for a later route, storage, APPLY, or REMOVE retry.
+        }
+      }
+      cleanupPending = Boolean(!triggerClean || cleanupRuntimeTarget || rendererCleanup.cleanupPending ||
+        cleanupControllerTargets.size || (!preserveController && activeController));
+      return Object.freeze({ cleanupPending, remainingArtifacts });
     }
 
     function blockActivePage(decision) {
@@ -1314,9 +1423,22 @@
           activeController.setPolicyOnly(true);
         }
       } catch (_error) {
-        // A failed policy observer upgrade remains blocked and starts no work.
+        cleanupActiveWork('CANCEL', false);
       }
-      lastStatus = policyBlockedStatus(decision);
+      lastStatus = cleanupAwareStatus(decision, cleanupPending
+        ? 'SENSITIVE_PAGE_CLEANUP_PENDING'
+        : 'SENSITIVE_PAGE_BLOCKED');
+      return lastStatus;
+    }
+
+    function failRuntimeUnavailable() {
+      markingRequested = false;
+      currentSettings = null;
+      activePolicyDecision = POLICY_FAILURE_DECISION;
+      cleanupActiveWork('CANCEL', false);
+      lastStatus = cleanupAwareStatus(POLICY_FAILURE_DECISION, cleanupPending
+        ? 'SENSITIVE_PAGE_CLEANUP_PENDING'
+        : 'POLICY_RUNTIME_UNAVAILABLE');
       return lastStatus;
     }
 
@@ -1325,7 +1447,9 @@
       currentSettings = null;
       cleanupActiveWork('CANCEL', false);
       activePolicyDecision = POLICY_FAILURE_DECISION;
-      lastStatus = emptyStatus();
+      lastStatus = cleanupPending
+        ? cleanupAwareStatus(POLICY_FAILURE_DECISION, 'LOCAL_MARKING_ERROR')
+        : emptyStatus();
       return lastStatus;
     }
 
@@ -1353,6 +1477,7 @@
       };
       context.signal.addEventListener('abort', cancel, { once: true });
       try {
+        incrementBoundary('semanticMessages');
         const response = await root.chrome.runtime.sendMessage(request);
         if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;
         const validated = validateEnrichmentResponse(response, request, modules.Contracts);
@@ -1373,6 +1498,7 @@
       for (const work of batch.items) {
         const payload = work.payload;
         if (!rootWorkIsCurrent(work, activeRuntime && activeRuntime.discovery)) continue;
+        incrementBoundary('textRunExtractions');
         const runs = modules.Pipeline.createTextRuns(payload.element, {
           rootRevision: payload.rootRevision,
           includeHaloOwnedTokens: true,
@@ -1421,6 +1547,7 @@
           const analysisKey = analysisKeys.length === 1
             ? analysisKeys[0]
             : `${analysisKeys[0]}:${analysisKeys.length}`;
+          incrementBoundary('rendererCalls');
           const rendered = modules.Renderer.apply({
             schemaVersion: modules.RendererSchemaVersion,
             runId: `${runId}:${work.id}`,
@@ -1447,6 +1574,17 @@
 
     async function startRuntime(settings, routeEpoch, decision) {
       if (!decision || decision.allow !== true) return blockActivePage(decision || POLICY_FAILURE_DECISION);
+      if (cleanupPending) {
+        cleanupActiveWork('CANCEL', true);
+        if (cleanupPending) {
+          try { if (activeController) activeController.setPolicyOnly(true); } catch (_error) {}
+          lastStatus = cleanupAwareStatus(decision, 'SENSITIVE_PAGE_CLEANUP_PENDING');
+          return lastStatus;
+        }
+      }
+      try { if (activeController) activeController.setPolicyOnly(false); } catch (_error) {
+        return blockActivePage(POLICY_FAILURE_DECISION);
+      }
       const epoch = ++runtimeEpoch;
       const Dictionary = root.HaloDictionary;
       const Semantic = root.HaloSemanticAnnotations;
@@ -1477,7 +1615,8 @@
           const result = await requestEnrichment(batch, context, modules, settings, epoch, lexicalVersion);
           if (!result || context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return;
           const rendered = renderBatch(batch, result, modules, settings);
-          lastStatus = Object.freeze({
+          lastStatus = stampStatus({
+            ...lastStatus,
             active: lastStatus.active || rendered.markedTokens > 0,
             textNodesVisited: lastStatus.textNodesVisited + batch.textNodes,
             semanticTokens: lastStatus.semanticTokens + rendered.semanticTokens,
@@ -1514,7 +1653,9 @@
           priority: metadata.priority,
           visible,
           settings,
-          pipeline: Pipeline
+          pipeline: Pipeline,
+          onTextRunExtraction: () => incrementBoundary('textRunExtractions'),
+          onSentenceRecords: (count) => incrementBoundary('sentenceRecords', count)
         })
       });
       activeRuntime = {
@@ -1529,7 +1670,7 @@
       discovery.start();
       await scheduler.flush();
       if (!activeRuntime || activeRuntime.epoch !== epoch) return lastStatus;
-      lastStatus = Object.freeze({
+      lastStatus = stampStatus({
         ...lastStatus,
         queuedRoots: scheduler.status().queuedRoots,
         oversizedWork: scheduler.status().oversizedWork
@@ -1546,15 +1687,9 @@
         blockActivePage(decision);
         return decision;
       }
-      if (previous.allow !== true && markingRequested && activeController && !activeRuntime) {
-        try {
-          activeController.setPolicyOnly(false);
-        } catch (_error) {
-          blockActivePage(POLICY_FAILURE_DECISION);
-          return POLICY_FAILURE_DECISION;
-        }
+      if ((previous.allow !== true || cleanupPending) && markingRequested && activeController && !activeRuntime) {
         startRuntime(currentSettings, activeController.routeEpoch(), decision).catch(() => {
-          lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
+          failRuntimeUnavailable();
         });
       }
       return decision;
@@ -1571,6 +1706,14 @@
     }
 
     async function applyMarking(rawSettings) {
+      markingRequested = false;
+      currentSettings = null;
+      cleanupActiveWork('CANCEL', false);
+      activePolicyDecision = POLICY_FAILURE_DECISION;
+      if (cleanupPending) {
+        lastStatus = cleanupAwareStatus(POLICY_FAILURE_DECISION, 'SENSITIVE_PAGE_CLEANUP_PENDING');
+        return lastStatus;
+      }
       try {
         const Settings = root.HaloSettings;
         const Dictionary = root.HaloDictionary;
@@ -1589,8 +1732,12 @@
           throw new Error('Halo shared modules are not loaded');
         }
         const settings = Settings.normalizeSettings(rawSettings);
-        removeMarking();
-        if (!settings.enabled) return lastStatus;
+        if (!settings.enabled) {
+          lastStatus = cleanupPending
+            ? cleanupAwareStatus(POLICY_FAILURE_DECISION, 'LOCAL_MARKING_ERROR')
+            : emptyStatus();
+          return lastStatus;
+        }
         currentSettings = settings;
         markingRequested = true;
         const initialDecision = freshPolicyDecision(settings);
@@ -1625,22 +1772,11 @@
             });
           },
           onRouteCleanup: ({ epoch }) => {
-            cleanupTriggerRuntime('ROUTE_CLEANUP');
-            const runtime = activeRuntime && activeRuntime.routeEpoch === epoch ? activeRuntime : null;
-            let cleanupFailed = false;
-            cleanupRuntime(runtime, {
-              epoch,
-              detach: () => {
-                if (activeRuntime === runtime) activeRuntime = null;
-              },
-              suppressRendererMutations: (callback) => runRendererMutation(controller, callback),
-              rendererCleanup: () => activeRenderer && activeRenderer.removeAll(),
-              onError: () => {
-                cleanupFailed = true;
-                lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
-              }
-            });
-            if (!cleanupFailed) lastStatus = emptyStatus();
+            if (activeRuntime && activeRuntime.routeEpoch !== epoch) return;
+            cleanupActiveWork('ROUTE_CLEANUP', true);
+            lastStatus = cleanupPending
+              ? cleanupAwareStatus(POLICY_FAILURE_DECISION, 'SENSITIVE_PAGE_CLEANUP_PENDING')
+              : emptyStatus();
             activePolicyDecision = POLICY_FAILURE_DECISION;
           },
           onRouteStart: ({ epoch }) => {
@@ -1651,9 +1787,8 @@
               return;
             }
             if (!markingRequested) return;
-            controller.setPolicyOnly(false);
             startRuntime(currentSettings, epoch, decision).catch(() => {
-              lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
+              failRuntimeUnavailable();
             });
           },
           onError: () => {
@@ -1665,8 +1800,7 @@
         if (initialDecision.allow !== true) return blockActivePage(initialDecision);
         return await startRuntime(settings, controller.routeEpoch(), initialDecision);
       } catch (_error) {
-        lastStatus = Object.freeze({ ...emptyStatus(), lastError: 'LOCAL_MARKING_ERROR' });
-        return lastStatus;
+        return failRuntimeUnavailable();
       }
     }
 
@@ -1686,17 +1820,26 @@
         const settings = Settings.migrateSettings(stored && stored.haloSettings);
         currentSettings = settings;
         const url = root.location && root.location.href;
-        const admission = readExplicitSelectionAfterPolicy(root, {
+        incrementBoundary('policyEvaluations');
+        const decision = evaluatePagePolicy(root, {
           sitePolicyModule: Policy,
           url,
           userDenylist: settings.sitePolicy.userDenylist
         });
-        activePolicyDecision = admission.decision;
-        if (admission.decision.allow !== true) {
-          blockActivePage(admission.decision);
+        activePolicyDecision = decision;
+        if (decision.allow !== true) {
+          blockActivePage(decision);
           return Object.freeze({ accepted: false, code: 'SENSITIVE_PAGE_BLOCKED' });
         }
-        const selection = admission.selection;
+        if (cleanupPending) {
+          cleanupActiveWork('CANCEL', true);
+          if (cleanupPending) {
+            lastStatus = cleanupAwareStatus(decision, 'SENSITIVE_PAGE_CLEANUP_PENDING');
+            return Object.freeze({ accepted: false, code: 'SENSITIVE_PAGE_CLEANUP_PENDING' });
+          }
+        }
+        incrementBoundary('selectionReads');
+        const selection = readExplicitSelection(root);
         if (!selection) return Object.freeze({ accepted: false, code: 'NO_SELECTION' });
         ensureRenderer(Renderer);
         const triggerRuntime = ensureTriggerRuntime(settings);
@@ -1706,6 +1849,7 @@
           state: triggerRuntime.state().name
         });
       } catch (_error) {
+        blockActivePage(POLICY_FAILURE_DECISION);
         return Object.freeze({ accepted: false, code: 'LOCAL_TRIGGER_UNAVAILABLE' });
       }
     }
@@ -1734,7 +1878,7 @@
         return false;
       }
       if (message.type === 'HALO_STATUS') {
-        sendResponse(lastStatus);
+        sendResponse(stampStatus(lastStatus));
         return false;
       }
       if (message.type === 'HALO_EXPLICIT_SELECTION') {
@@ -1784,6 +1928,7 @@
     refreshInvalidatedRuntimeRoots,
     isTransientRendererOwned,
     cleanupRuntime,
+    reconcileRendererCleanup,
     buildRootWork,
     createViewportDiscovery
   });

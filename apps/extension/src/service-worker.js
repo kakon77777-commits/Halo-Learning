@@ -351,24 +351,41 @@ if (typeof importScripts === 'function') {
       });
     }
 
-    async function enrichBatch(message, sender) {
-      if (authorizeSender) {
-        let allowed = false;
-        try { allowed = await authorizeSender(sender); } catch (_error) { allowed = false; }
-        if (allowed !== true) return deepFreeze({ error: 'SENSITIVE_SITE_BLOCKED' });
+    function validateRequestEnvelope(message) {
+      if (!message || typeof message !== 'object' || Array.isArray(message) || message.type !== 'HALO_ENRICH_BATCH') {
+        throw new TypeError('message: must be HALO_ENRICH_BATCH');
       }
-      const shallow = validateEnrichmentRequest(message, null);
+      if (!validStableId(message.requestId)) throw new TypeError('requestId: must be a stable ID');
+      if (!Number.isSafeInteger(message.pageEpoch) || message.pageEpoch < 1) {
+        throw new TypeError('pageEpoch: must be a positive integer');
+      }
+      return Object.freeze({ requestId: message.requestId, pageEpoch: message.pageEpoch });
+    }
+
+    async function enrichBatch(message, sender) {
+      const envelope = validateRequestEnvelope(message);
       const tabId = senderTabId(sender);
-      const key = controllerKey(tabId, shallow.requestId);
+      const key = controllerKey(tabId, envelope.requestId);
       if (controllers.has(key)) throw new TypeError('requestId: is already active for this sender');
       const controller = new AbortController();
       controllers.set(key, controller);
       try {
+        if (authorizeSender) {
+          let allowed = false;
+          try { allowed = await authorizeSender(sender); } catch (_error) { allowed = false; }
+          if (controller.signal.aborted) return cancelledResponse(envelope);
+          if (allowed !== true) return deepFreeze({ error: 'SENSITIVE_SITE_BLOCKED' });
+        }
+        if (controller.signal.aborted) return cancelledResponse(envelope);
+        const shallow = validateEnrichmentRequest(message, null);
+        if (controller.signal.aborted) return cancelledResponse(shallow);
         const context = await getContext();
+        if (controller.signal.aborted) return cancelledResponse(shallow);
         if (!context || !context.bootstrapProvider || typeof context.bootstrapProvider.lookup !== 'function') {
           throw new Error('Local bootstrap provider is unavailable');
         }
         const validated = validateEnrichmentRequest(message, context.runtime);
+        if (controller.signal.aborted) return cancelledResponse(validated);
         const generatedAt = now();
         if (controller.signal.aborted) return cancelledResponse(validated);
         if (!context.runtime) return bootstrapResponse(validated, context, generatedAt);
@@ -376,7 +393,7 @@ if (typeof importScripts === 'function') {
           if (typeof context.runtime.withEnsuredShards !== 'function') {
             throw new TypeError('runtime.withEnsuredShards: is required');
           }
-          return await context.runtime.withEnsuredShards(
+          const response = await context.runtime.withEnsuredShards(
             validated.shardIds,
             { signal: controller.signal },
             (pinnedShards) => {
@@ -395,6 +412,7 @@ if (typeof importScripts === 'function') {
               });
             }
           );
+          return controller.signal.aborted ? cancelledResponse(validated) : response;
         } catch (error) {
           if (controller.signal.aborted || stableFailureCode(error, '') === 'ABORTED') {
             return cancelledResponse(validated);

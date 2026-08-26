@@ -369,6 +369,68 @@ test('overlapping trigger-mode and visual saves remain serialized without losing
   assert.equal(stored.density, 0.75);
 });
 
+test('locked site-host operations reread latest settings and preserve concurrent add, remove, and duplicate edits', async () => {
+  const Persistence = require('../apps/extension/src/shared/profile-persistence');
+  const ProfileControls = require('../apps/extension/src/shared/profile-controls');
+  const Policy = require('../apps/extension/src/shared/site-policy');
+  const storageKey = 'haloSettings';
+  let stored = Settings.migrateSettings({
+    profileRevision: 10,
+    sitePolicy: { schemaVersion: 1, userDenylist: ['old.example'] }
+  });
+  const writes = [];
+  let tail = Promise.resolve();
+  const persistence = Persistence.createProfilePersistence({
+    storage: {
+      async get(key) { return { [key]: JSON.parse(JSON.stringify(stored)) }; },
+      async set(update) { stored = update[storageKey]; writes.push(stored.profileRevision); }
+    },
+    storageKey,
+    lockManager: {
+      request(_name, _options, callback) {
+        const run = tail.then(callback);
+        tail = run.catch(() => {});
+        return run;
+      }
+    },
+    normalizeSettings: Settings.normalizeSettings,
+    mergeUiSettings: ProfileControls.mergeUiSettings
+  });
+  const editHost = (hostname, blocked) => persistence.saveTransform((latest) => {
+    const hosts = new Set(latest.sitePolicy.userDenylist);
+    if (blocked) hosts.add(hostname);
+    else hosts.delete(hostname);
+    return {
+      sitePolicy: { schemaVersion: 1, userDenylist: Policy.normalizeDenylist([...hosts]) }
+    };
+  });
+
+  const [addedA, addedB] = await Promise.all([
+    editHost('a.example', true),
+    editHost('b.example', true)
+  ]);
+  assert.deepEqual(addedA.sitePolicy.userDenylist, ['a.example', 'old.example']);
+  assert.deepEqual(addedB.sitePolicy.userDenylist, ['a.example', 'b.example', 'old.example']);
+  assert.equal(addedA.profileRevision, 11);
+  assert.equal(addedB.profileRevision, 12);
+
+  const [duplicateA, duplicateB] = await Promise.all([
+    editHost('same.example', true),
+    editHost('same.example', true)
+  ]);
+  assert.equal(duplicateA.profileRevision, 13);
+  assert.equal(duplicateB.profileRevision, 13);
+
+  const [removedOld, readdedOld] = await Promise.all([
+    editHost('old.example', false),
+    editHost('old.example', true)
+  ]);
+  assert.equal(removedOld.profileRevision, 14);
+  assert.equal(readdedOld.profileRevision, 15);
+  assert.deepEqual(stored.sitePolicy.userDenylist, ['a.example', 'b.example', 'old.example', 'same.example']);
+  assert.deepEqual(writes, [11, 12, 13, 14, 15]);
+});
+
 test('popup profile persistence fails closed without a cross-context lock manager', async () => {
   const Persistence = require('../apps/extension/src/shared/profile-persistence');
   const ProfileControls = require('../apps/extension/src/shared/profile-controls');
