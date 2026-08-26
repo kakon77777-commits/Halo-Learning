@@ -42,6 +42,26 @@ async function waitForVisiblePanel(page, options) {
   return panel;
 }
 
+async function clickOutsidePanel(page) {
+  const point = await page.evaluate(() => {
+    const host = document.querySelector('[data-halo-owned="panel"]');
+    const panel = host && host.shadowRoot && host.shadowRoot.querySelector('.halo-core-panel');
+    if (!panel) throw new Error('Halo panel unavailable for outside-click geometry');
+    const rect = panel.getBoundingClientRect();
+    const inset = 4;
+    const candidates = [
+      [inset, inset],
+      [Math.max(inset, innerWidth - inset), inset],
+      [inset, Math.max(inset, innerHeight - inset)],
+      [Math.max(inset, innerWidth - inset), Math.max(inset, innerHeight - inset)]
+    ];
+    const selected = candidates.find(([x, y]) => x < rect.left || x > rect.right || y < rect.top || y > rect.bottom);
+    if (!selected) throw new Error('No outside-panel viewport point is available');
+    return { x: selected[0], y: selected[1] };
+  });
+  await page.mouse.click(point.x, point.y);
+}
+
 async function runAndObserveWorkerRecovery(session, scriptUrl, action, timeoutMs = 5000) {
   let listener;
   let timer;
@@ -135,7 +155,7 @@ test('installed MV3 extension verifies popup, command, modes, dismissal, menu re
       let token = page.locator('#lesson [data-halo-owned="token"]').first();
       await token.click();
       await waitForVisiblePanel(page);
-      await page.locator('#outside').click();
+      await clickOutsidePanel(page);
       await page.waitForSelector('[data-halo-owned="panel"]', { state: 'detached' });
 
       const nativeLink = await page.evaluate(() => {
