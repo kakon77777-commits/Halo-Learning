@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const Dynamic = require('../apps/extension/src/shared/dynamic-dom-controller');
+const NavigationBridge = require('../apps/extension/src/shared/navigation-route-bridge');
 
 function eventTarget() {
   const listeners = new Map();
@@ -54,12 +55,12 @@ test('isolated Navigation API observes an external same-document route and clean
   const windowEvents = eventTarget();
   const location = { href: 'https://example.test/a' };
   const document = { body: body() };
+  const BridgedDynamic = NavigationBridge.wrapDynamicModule(Dynamic, { navigation });
 
-  const controller = Dynamic.createDynamicDomController({
+  const controller = BridgedDynamic.createDynamicDomController({
     MutationObserver: FakeMutationObserver,
     history: null,
     location,
-    navigation,
     eventTarget: windowEvents,
     queueMicrotask: microtasks.queueMicrotask,
     onRouteCleanup: ({ epoch }) => calls.push(`cleanup:${epoch}`),
@@ -85,4 +86,43 @@ test('isolated Navigation API observes an external same-document route and clean
   assert.equal(cleaned.cleanupPending, false);
   assert.equal(navigation.count('currententrychange'), 0,
     'final cleanup must remove Navigation API authority');
+});
+
+test('failed Navigation listener removal remains pending and retries without route resurrection', () => {
+  const navigation = eventTarget();
+  const remove = navigation.removeEventListener.bind(navigation);
+  let failRemoval = true;
+  navigation.removeEventListener = (type, listener) => {
+    if (failRemoval) throw new Error('navigation removal failed');
+    remove(type, listener);
+  };
+  const location = { href: 'https://example.test/a' };
+  const errors = [];
+  let routeCleanupCalls = 0;
+  const BridgedDynamic = NavigationBridge.wrapDynamicModule(Dynamic, { navigation });
+  const controller = BridgedDynamic.createDynamicDomController({
+    MutationObserver: FakeMutationObserver,
+    history: null,
+    location,
+    eventTarget: eventTarget(),
+    onRouteCleanup() { routeCleanupCalls += 1; },
+    onError(error, metadata) { errors.push([error.message, metadata.phase]); }
+  });
+  controller.observe({ body: body() });
+
+  const pending = controller.cleanup();
+  assert.equal(pending.cleaned, false);
+  assert.equal(pending.cleanupPending, true);
+  assert.ok(pending.pendingStages.includes('navigation-listener'));
+  assert.deepEqual(errors, [['navigation removal failed', 'cleanup-navigation-listener']]);
+
+  location.href = 'https://example.test/late';
+  navigation.dispatch('currententrychange');
+  assert.equal(routeCleanupCalls, 1, 'inactive retained listener cannot schedule another route cleanup');
+
+  failRemoval = false;
+  const cleaned = controller.cleanup();
+  assert.equal(cleaned.cleaned, true);
+  assert.equal(cleaned.cleanupPending, false);
+  assert.equal(navigation.count('currententrychange'), 0);
 });
