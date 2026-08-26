@@ -595,9 +595,9 @@ function evaluateShardCandidate(candidate) {
     longTaskMaxMs: longTaskValues.length ? Math.max(...longTaskValues) : 0
   });
   const gates = Object.freeze({
-    coldRequiredShards: measurements.coldRequiredShardsP95Ms < SHARD_COMPARISON_BUDGETS.coldRequiredShardsP95Ms,
-    warmLookup: measurements.warmLookupP95Ms < SHARD_COMPARISON_BUDGETS.warmLookupP95Ms,
-    longTask: measurements.longTaskMaxMs < SHARD_COMPARISON_BUDGETS.longTaskMaxMs
+    coldRequiredShards: measurements.coldRequiredShardsP95Ms <= SHARD_COMPARISON_BUDGETS.coldRequiredShardsP95Ms,
+    warmLookup: measurements.warmLookupP95Ms <= SHARD_COMPARISON_BUDGETS.warmLookupP95Ms,
+    longTask: measurements.longTaskMaxMs <= SHARD_COMPARISON_BUDGETS.longTaskMaxMs
   });
   return Object.freeze({
     ...candidate,

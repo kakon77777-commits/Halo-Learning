@@ -80,6 +80,18 @@
     }
   }
 
+  function profileNow() {
+    return root.performance && typeof root.performance.now === 'function'
+      ? root.performance.now()
+      : Date.now();
+  }
+
+  function recordProfileStage(profile, name, started) {
+    if (!profile || !profile.stageMs || typeof profile.stageMs !== 'object') return;
+    const durationMs = profileNow() - started;
+    profile.stageMs[name] = (profile.stageMs[name] || 0) + durationMs;
+  }
+
   function fnv1a(value) {
     let result = 0x811c9dc5;
     for (const byte of bytesFor(value)) {
@@ -149,25 +161,36 @@
   }
 
   async function loadBrowserLexicalManifest(serialized, options) {
+    const profile = options && options.profile;
+    let started = profileNow();
     const raw = parseDocument(serialized, 'MANIFEST_INVALID_JSON', 'Browser lexical manifest is not valid JSON');
+    recordProfileStage(profile, 'manifestJsonParseMs', started);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !validHash(raw.hash)) {
       fail('MANIFEST_INVALID_HASH', 'Browser lexical manifest hash is malformed');
     }
     const payload = { ...raw };
     delete payload.hash;
     const cryptoValue = options && options.crypto ? options.crypto : root.crypto;
+    started = profileNow();
     if (await sha256Hex(canonicalJson(payload), cryptoValue) !== raw.hash.value) {
       fail('MANIFEST_HASH_MISMATCH', 'Browser lexical manifest payload hash does not match');
     }
+    recordProfileStage(profile, 'manifestIntegrityMs', started);
+    started = profileNow();
     validateManifest(payload);
     if (!validHash(payload.rootHash)) fail('MANIFEST_INVALID_ROOT', 'Browser lexical manifest root is malformed');
+    recordProfileStage(profile, 'manifestValidationMs', started);
     const rootPayload = { ...payload };
     delete rootPayload.rootHash;
     delete rootPayload.shards;
+    started = profileNow();
     if (await sha256Hex(canonicalJson(rootPayload), cryptoValue) !== payload.rootHash.value) {
       fail('MANIFEST_ROOT_MISMATCH', 'Browser lexical manifest root does not match');
     }
+    recordProfileStage(profile, 'manifestIntegrityMs', started);
+    started = profileNow();
     const manifest = deepFreeze({ ...payload, hash: { ...raw.hash } });
+    recordProfileStage(profile, 'manifestDeepFreezeMs', started);
     VERIFIED_MANIFESTS.add(manifest);
     return manifest;
   }
@@ -313,22 +336,41 @@
 
   async function loadBrowserLexicalShard(serialized, manifest, options) {
     if (!VERIFIED_MANIFESTS.has(manifest)) throw new TypeError('manifest: must be verified');
+    const profile = options && options.profile;
+    let started = profileNow();
     const raw = parseDocument(serialized, 'SHARD_INVALID_JSON', 'Browser lexical shard is not valid JSON');
+    recordProfileStage(profile, 'shardJsonParseMs', started);
     if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !validHash(raw.hash)) {
       fail('SHARD_INVALID_HASH', 'Browser lexical shard hash is malformed');
     }
     const payload = { ...raw };
     delete payload.hash;
     const cryptoValue = options && options.crypto ? options.crypto : root.crypto;
-    const actualHash = await sha256Hex(canonicalJson(payload), cryptoValue);
+    started = profileNow();
+    const canonicalPayload = canonicalJson(payload);
+    recordProfileStage(profile, 'shardCanonicalizeMs', started);
+    started = profileNow();
+    const actualHash = await sha256Hex(canonicalPayload, cryptoValue);
+    recordProfileStage(profile, 'shardSha256Ms', started);
     if (actualHash !== raw.hash.value) fail('SHARD_HASH_MISMATCH', 'Browser lexical shard payload hash does not match');
     const descriptor = manifest.shards.find((value) => value.id === raw.shardId);
     if (!descriptor) fail('SHARD_NOT_DECLARED', 'Browser lexical shard is absent from the manifest');
-    if (descriptor.hash.value !== raw.hash.value || descriptor.bytes !== bytesFor(canonicalJson(raw)).length) {
+    started = profileNow();
+    const descriptorBytes = bytesFor(canonicalJson(raw)).length;
+    recordProfileStage(profile, 'shardDescriptorBytesMs', started);
+    if (descriptor.hash.value !== raw.hash.value || descriptor.bytes !== descriptorBytes) {
       fail('SHARD_HASH_MISMATCH', 'Browser lexical shard does not match its manifest descriptor');
     }
+    started = profileNow();
     validateShard(payload, manifest, descriptor);
-    return materializeShard(deepFreeze({ ...payload, hash: { ...raw.hash } }), manifest);
+    recordProfileStage(profile, 'shardValidationMs', started);
+    started = profileNow();
+    const document = deepFreeze({ ...payload, hash: { ...raw.hash } });
+    recordProfileStage(profile, 'shardDeepFreezeMs', started);
+    started = profileNow();
+    const shard = materializeShard(document, manifest);
+    recordProfileStage(profile, 'shardMaterializationMs', started);
+    return shard;
   }
 
   function stableFailureCode(error) {
@@ -384,7 +426,7 @@
         .then((serialized) => loadBrowserLexicalShard(
           serialized,
           manifest,
-          { crypto: settings.crypto || root.crypto }
+          { crypto: settings.crypto || root.crypto, profile: settings.profile }
         ))
         .then((shard) => {
           resident.set(id, { shard, usedAt: now() });
