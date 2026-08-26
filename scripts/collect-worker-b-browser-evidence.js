@@ -496,8 +496,8 @@ async function measureMv3(chromiumExecutable, artifacts) {
     const statusResponse = page.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
     const restartedWorker = await restartEvent;
     status = await statusResponse;
-    details.workerRestart = { stopped, status };
-    gates.workerRestart = Boolean(stopped && stopped.runningStatus === 'stopped' && restartedWorker !== worker && status && status.mode === 'ready');
+    details.workerRestart = { stoppedVersionId: stopped, status };
+    gates.workerRestart = Boolean(typeof stopped === 'string' && Boolean(stopped) && restartedWorker !== worker && status && status.mode === 'ready');
     const restartedLifetime = status && status.networkActivity && status.networkActivity.lifetimeId;
     gates.cacheLossReload = Boolean(initialLifetime && restartedLifetime && initialLifetime !== restartedLifetime &&
       status.networkActivity.fetchAttempts >= 1);
