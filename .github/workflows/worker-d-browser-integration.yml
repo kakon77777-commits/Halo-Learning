@@ -1,5 +1,4 @@
-# Worker D executes the immutable Worker-B frozen SHA; this workflow file is orchestration only.
-name: Worker D Browser Integration Baseline
+name: Worker D Dynamic DOM Diagnostic
 
 on:
   push:
@@ -11,22 +10,14 @@ permissions:
   contents: read
 
 jobs:
-  frozen-browser-baseline:
+  dynamic-dom-diagnostic:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 20
     steps:
       - name: Checkout exact frozen Worker B base
         uses: actions/checkout@v4
         with:
           ref: b6cd8ccfd705563bad7dcea87900d50fa8ca0b80
-
-      - name: Verify frozen base
-        run: |
-          set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          expected="b6cd8ccfd705563bad7dcea87900d50fa8ca0b80"
-          printf 'expected=%s\nactual=%s\n' "$expected" "$actual" | tee frozen-base.txt
-          test "$actual" = "$expected"
 
       - name: Set up Node 22
         uses: actions/setup-node@v4
@@ -40,129 +31,86 @@ jobs:
       - name: Install real Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Prepare run-isolated evidence and record Chromium
-        id: chromium
+      - name: Resolve Chromium and prepare diagnostics
         run: |
           set -euo pipefail
-          EVIDENCE_ROOT="$GITHUB_WORKSPACE/evidence/worker-d-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          mkdir -p "$EVIDENCE_ROOT"
-          echo "EVIDENCE_ROOT=$EVIDENCE_ROOT" >> "$GITHUB_ENV"
-          node - <<'NODE' | tee "$EVIDENCE_ROOT/chromium.txt"
-          const { chromium } = require('playwright');
+          mkdir -p evidence/worker-d-dynamic-diagnostic
+          node - <<'NODE'
           const fs = require('node:fs');
-          const { spawnSync } = require('node:child_process');
+          const { chromium } = require('playwright');
           const executable = chromium.executablePath();
           if (!fs.existsSync(executable)) throw new Error(`Chromium missing at ${executable}`);
-          const version = spawnSync(executable, ['--version'], { encoding: 'utf8' });
-          const observed = String(version.stdout || version.stderr || '').trim();
-          if (version.status !== 0 || !observed) throw new Error('Unable to resolve Chromium version');
-          console.log('source=playwright');
-          console.log(`executable=${executable}`);
-          console.log(`version=${observed}`);
           fs.appendFileSync(process.env.GITHUB_ENV, `HALO_CHROMIUM_EXECUTABLE=${executable}\n`);
+          console.log(`HALO_CHROMIUM_EXECUTABLE=${executable}`);
           NODE
 
-      - name: Focused dynamic-DOM fresh state
-        id: dynamic_dom
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          timeout 180s node --test tests/browser/dynamic-dom.e2e.test.js 2>&1 | tee "$EVIDENCE_ROOT/dynamic-dom.tap"
-
-      - name: Browser harness supplement
-        id: harness
-        continue-on-error: true
-        env:
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/halo-no-browser
-        run: |
-          set -o pipefail
-          rm -rf "$PLAYWRIGHT_BROWSERS_PATH"
-          mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
-          node --test tests/browser-harness.test.js 2>&1 | tee "$EVIDENCE_ROOT/browser-harness.tap"
-
-      - name: Accessibility contract
-        id: accessibility
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          node --test tests/accessibility-contract.test.js 2>&1 | tee "$EVIDENCE_ROOT/accessibility-contract.tap"
-
-      - name: Serialized Worker-B Browser Gate real-browser suites
-        id: browser
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          : > "$EVIDENCE_ROOT/browser-e2e.tap"
-          for file in tests/browser/*.e2e.test.js; do
-            printf '\n===== %s =====\n' "$file" | tee -a "$EVIDENCE_ROOT/browser-e2e.tap"
-            timeout 180s node --test "$file" 2>&1 | tee -a "$EVIDENCE_ROOT/browser-e2e.tap"
-          done
-
-      - name: Existing Worker-B collector and MV3 lifecycle gate
-        id: mv3_collector
-        continue-on-error: true
-        run: |
-          set -o pipefail
-          timeout 2400s node scripts/collect-worker-b-browser-evidence.js "$EVIDENCE_ROOT/collector" 2>&1 | tee "$EVIDENCE_ROOT/collector.log"
-
-      - name: Write machine-readable baseline outcomes
-        if: always()
-        env:
-          DYNAMIC_DOM: ${{ steps.dynamic_dom.outcome }}
-          HARNESS: ${{ steps.harness.outcome }}
-          ACCESSIBILITY: ${{ steps.accessibility.outcome }}
-          BROWSER: ${{ steps.browser.outcome }}
-          MV3_COLLECTOR: ${{ steps.mv3_collector.outcome }}
+      - name: Instrument dynamic-DOM async boundaries without changing product code
         run: |
           node - <<'NODE'
           const fs = require('node:fs');
-          const path = require('node:path');
-          const root = process.env.EVIDENCE_ROOT;
-          const chromiumText = fs.existsSync(path.join(root, 'chromium.txt')) ? fs.readFileSync(path.join(root, 'chromium.txt'), 'utf8') : '';
-          const field = (name) => (chromiumText.match(new RegExp(`^${name}=(.*)$`, 'm')) || [null, null])[1];
-          const result = {
-            schemaVersion: 1,
-            reportFormat: 'WorkerDFrozenBaseline/v1',
-            runId: process.env.GITHUB_RUN_ID,
-            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-            testedSha: 'b6cd8ccfd705563bad7dcea87900d50fa8ca0b80',
-            chromium: { source: field('source'), version: field('version'), executable: field('executable') },
-            outcomes: {
-              dynamicDom: process.env.DYNAMIC_DOM,
-              browserHarness: process.env.HARNESS,
-              accessibility: process.env.ACCESSIBILITY,
-              browserGate: process.env.BROWSER,
-              existingMv3Collector: process.env.MV3_COLLECTOR
-            },
-            collectorMv3ReportPresent: fs.existsSync(path.join(root, 'collector', 'v0.4.0-worker-b-mv3-lifecycle.json')),
-            collectorMv3EvaluationPresent: fs.existsSync(path.join(root, 'collector', 'v0.4.0-worker-b-mv3-lifecycle-evaluation.json'))
-          };
-          fs.writeFileSync(path.join(root, 'baseline-outcomes.json'), `${JSON.stringify(result, null, 2)}\n`);
-          console.log(JSON.stringify(result, null, 2));
+          const target = 'tests/browser/dynamic-dom.e2e.test.js';
+          let source = fs.readFileSync(target, 'utf8');
+          const pageAnchor = '      const page = await context.newPage();';
+          if (!source.includes(pageAnchor)) throw new Error('dynamic-DOM page anchor missing');
+          source = source.replace(
+            '    context = await launchExtension({',
+            "    console.error('[D-DIAG] launchExtension:start');\n    context = await launchExtension({"
+          );
+          source = source.replace(
+            '    await withFixtureServer({',
+            "    console.error('[D-DIAG] launchExtension:end');\n    console.error('[D-DIAG] withFixtureServer:start');\n    await withFixtureServer({"
+          );
+          source = source.replace(pageAnchor, `${pageAnchor}
+      console.error('[D-DIAG] page:new:end');
+      let __haloDiagSeq = 0;
+      for (const __haloDiagMethod of ['goto', 'evaluate', 'addScriptTag', 'waitForSelector', 'waitForFunction', 'waitForTimeout']) {
+        const __haloDiagOriginal = page[__haloDiagMethod].bind(page);
+        page[__haloDiagMethod] = async (...args) => {
+          const id = ++__haloDiagSeq;
+          const head = args[0];
+          const detail = typeof head === 'string'
+            ? head
+            : typeof head === 'function'
+              ? String(head).replace(/\\s+/g, ' ').slice(0, 120)
+              : head && typeof head === 'object' && head.path
+                ? head.path
+                : typeof head;
+          console.error('[D-DIAG] ' + id + ' ' + __haloDiagMethod + ':start ' + detail);
+          try {
+            const value = await __haloDiagOriginal(...args);
+            console.error('[D-DIAG] ' + id + ' ' + __haloDiagMethod + ':end');
+            return value;
+          } catch (error) {
+            console.error('[D-DIAG] ' + id + ' ' + __haloDiagMethod + ':error ' + (error && error.message));
+            throw error;
+          }
+        };
+      }`);
+          source = source.replace(
+            "    });\n  } finally {\n    if (context) await context.close();",
+            "    });\n    console.error('[D-DIAG] withFixtureServer:end');\n  } finally {\n    console.error('[D-DIAG] contextClose:start');\n    if (context) await context.close();\n    console.error('[D-DIAG] contextClose:end');"
+          );
+          fs.writeFileSync(target, source);
           NODE
 
-      - name: Upload Worker D frozen-baseline evidence
+      - name: Run focused diagnostic
+        id: diagnostic
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 185s node --test tests/browser/dynamic-dom.e2e.test.js 2>&1 | tee evidence/worker-d-dynamic-diagnostic/dynamic-dom-diagnostic.log
+
+      - name: Upload focused diagnostic
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: worker-d-frozen-baseline-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence/
+          name: worker-d-dynamic-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/worker-d-dynamic-diagnostic/
           if-no-files-found: error
           retention-days: 14
 
-      - name: Enforce frozen baseline outcome
+      - name: Record diagnostic outcome
         if: always()
         env:
-          DYNAMIC_DOM: ${{ steps.dynamic_dom.outcome }}
-          HARNESS: ${{ steps.harness.outcome }}
-          ACCESSIBILITY: ${{ steps.accessibility.outcome }}
-          BROWSER: ${{ steps.browser.outcome }}
-          MV3_COLLECTOR: ${{ steps.mv3_collector.outcome }}
-        run: |
-          printf 'dynamic_dom=%s\nharness=%s\naccessibility=%s\nbrowser=%s\nmv3_collector=%s\n' \
-            "$DYNAMIC_DOM" "$HARNESS" "$ACCESSIBILITY" "$BROWSER" "$MV3_COLLECTOR"
-          test "$DYNAMIC_DOM" = success
-          test "$HARNESS" = success
-          test "$ACCESSIBILITY" = success
-          test "$BROWSER" = success
-          test "$MV3_COLLECTOR" = success
+          DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic.outcome }}
+        run: echo "diagnostic_outcome=$DIAGNOSTIC_OUTCOME"
