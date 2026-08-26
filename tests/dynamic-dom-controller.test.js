@@ -981,6 +981,328 @@ test('cleanup retains and retries only failed listener, observer, and history ca
   assert.equal(pushRestoreAttempts, 2);
 });
 
+function assertCapturedHistoryWrapperStaysNativeAfterCleanup(methodName) {
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  const events = eventTarget();
+  const microtasks = fakeMicrotasks();
+  let currentHref = 'https://example.test/a';
+  let rejectLocationReads = false;
+  const location = {
+    get href() {
+      if (rejectLocationReads) throw new Error('location read after cleanup start');
+      return currentHref;
+    }
+  };
+  const nativeCalls = { pushState: 0, replaceState: 0 };
+  const assignments = { pushState: 0, replaceState: 0 };
+  const current = {
+    pushState(_state, _unused, url) {
+      nativeCalls.pushState += 1;
+      currentHref = new URL(url, currentHref).href;
+      return 'native-push';
+    },
+    replaceState(_state, _unused, url) {
+      nativeCalls.replaceState += 1;
+      currentHref = new URL(url, currentHref).href;
+      return 'native-replace';
+    }
+  };
+  const native = { ...current };
+  const history = {};
+  for (const name of ['pushState', 'replaceState']) {
+    Object.defineProperty(history, name, {
+      configurable: true,
+      get() { return current[name]; },
+      set(next) {
+        assignments[name] += 1;
+        current[name] = next;
+      }
+    });
+  }
+
+  let controller;
+  let capturedHaloWrapper;
+  let cleanupReentryStatus;
+  let routeStartCalls = 0;
+  let duringCleanupResult;
+  const lifecycleErrors = [];
+  controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    history,
+    location,
+    eventTarget: events,
+    queueMicrotask: microtasks.queueMicrotask,
+    onRouteCleanup(metadata) {
+      if (metadata.reason !== 'cleanup') return;
+      rejectLocationReads = true;
+      try {
+        cleanupReentryStatus = controller.cleanup();
+        duringCleanupResult = capturedHaloWrapper({}, '', `/${methodName}-during-cleanup`);
+      } finally {
+        rejectLocationReads = false;
+      }
+    },
+    onRouteStart() { routeStartCalls += 1; },
+    onError(error, metadata) { lifecycleErrors.push([error.message, metadata.phase]); }
+  });
+  controller.observe({ body: element('body') });
+  capturedHaloWrapper = history[methodName];
+  let outerCalls = 0;
+  const thirdPartyOuter = function (...args) {
+    outerCalls += 1;
+    return capturedHaloWrapper.apply(this, args);
+  };
+  history[methodName] = thirdPartyOuter;
+  const epochBeforeCleanup = controller.routeEpoch();
+
+  const cleaned = controller.cleanup();
+  assert.deepEqual(cleaned, {
+    schemaVersion: 1,
+    cleanupStarted: true,
+    cleaned: true,
+    cleanupPending: false,
+    pendingStages: []
+  });
+  assert.equal(cleanupReentryStatus.cleanupStarted, true);
+  assert.equal(cleanupReentryStatus.cleaned, false);
+  assert.equal(duringCleanupResult, `native-${methodName === 'pushState' ? 'push' : 'replace'}`);
+  assert.equal(history[methodName], thirdPartyOuter, 'cleanup must not overwrite a third-party outer wrapper');
+  assert.equal(controller.routeEpoch(), epochBeforeCleanup);
+
+  assert.equal(capturedHaloWrapper({}, '', `/${methodName}-captured-after-cleanup`),
+    `native-${methodName === 'pushState' ? 'push' : 'replace'}`);
+  assert.equal(history[methodName]({}, '', `/${methodName}-outer-after-cleanup`),
+    `native-${methodName === 'pushState' ? 'push' : 'replace'}`);
+  microtasks.flush();
+  assert.equal(routeStartCalls, 0, 'deactivated captured wrappers cannot schedule route work');
+  assert.deepEqual(lifecycleErrors, []);
+  assert.equal(controller.routeEpoch(), epochBeforeCleanup);
+  assert.equal(nativeCalls[methodName], 3);
+  assert.equal(outerCalls, 1);
+
+  const otherMethod = methodName === 'pushState' ? 'replaceState' : 'pushState';
+  assert.equal(history[otherMethod], native[otherMethod]);
+  assert.equal(assignments[methodName], 2, 'Halo install plus third-party outer install only');
+  assert.equal(assignments[otherMethod], 2, 'Halo install plus one exact restoration only');
+  assert.deepEqual(controller.cleanup(), cleaned);
+  assert.equal(assignments[methodName], 2);
+  assert.equal(assignments[otherMethod], 2);
+}
+
+test('captured pushState wrapper remains native-only when a third-party outer survives cleanup', () => {
+  assertCapturedHistoryWrapperStaysNativeAfterCleanup('pushState');
+});
+
+test('captured replaceState wrapper remains native-only when a third-party outer survives cleanup', () => {
+  assertCapturedHistoryWrapperStaysNativeAfterCleanup('replaceState');
+});
+
+test('re-observation never rereads already-installed hostile history properties', () => {
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  const events = eventTarget();
+  const location = { href: 'https://example.test/a' };
+  const nativePushState = function () {};
+  const nativeReplaceState = function () {};
+  const current = { pushState: nativePushState, replaceState: nativeReplaceState };
+  let rejectReads = false;
+  let rejectedReads = 0;
+  const history = {};
+  for (const name of ['pushState', 'replaceState']) {
+    Object.defineProperty(history, name, {
+      configurable: true,
+      get() {
+        if (rejectReads) {
+          rejectedReads += 1;
+          throw new Error(`${name} getter must not be reread`);
+        }
+        return current[name];
+      },
+      set(next) { current[name] = next; }
+    });
+  }
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    history,
+    location,
+    eventTarget: events
+  });
+  controller.observe({ body: element('first') });
+  rejectReads = true;
+  assert.doesNotThrow(() => controller.observe({ body: element('second') }));
+  assert.equal(rejectedReads, 0);
+  rejectReads = false;
+  assert.equal(controller.cleanup().cleaned, true);
+  assert.equal(history.pushState, nativePushState);
+  assert.equal(history.replaceState, nativeReplaceState);
+});
+
+function partialHistoryInstallationHarness(methodName, failureMode) {
+  const calls = [];
+  const MutationObserver = observerFixture(calls);
+  const events = eventTarget();
+  const location = { href: 'https://example.test/a' };
+  const nativeCalls = { pushState: 0, replaceState: 0 };
+  const assignments = { pushState: 0, replaceState: 0 };
+  const native = {
+    pushState() {
+      nativeCalls.pushState += 1;
+      location.href = `https://example.test/push-${nativeCalls.pushState}`;
+      return 'native-push';
+    },
+    replaceState() {
+      nativeCalls.replaceState += 1;
+      location.href = `https://example.test/replace-${nativeCalls.replaceState}`;
+      return 'native-replace';
+    }
+  };
+  const current = { ...native };
+  let rejectTargetReads = false;
+  let armVerificationFailure = failureMode === 'verification-getter';
+  let ignoreTargetWrite = failureMode === 'ignored-write';
+  const history = {};
+  for (const name of ['pushState', 'replaceState']) {
+    Object.defineProperty(history, name, {
+      configurable: true,
+      get() {
+        if (name === methodName && rejectTargetReads) {
+          throw new Error(`${name} verification getter failed`);
+        }
+        return current[name];
+      },
+      set(next) {
+        assignments[name] += 1;
+        if (name === methodName && ignoreTargetWrite) {
+          ignoreTargetWrite = false;
+          return;
+        }
+        current[name] = next;
+        if (name === methodName && armVerificationFailure) {
+          armVerificationFailure = false;
+          rejectTargetReads = true;
+        }
+      }
+    });
+  }
+  const errors = [];
+  const controller = Dynamic.createDynamicDomController({
+    MutationObserver,
+    history,
+    location,
+    eventTarget: events,
+    onError(error, metadata) { errors.push([error.message, metadata.phase]); }
+  });
+  return {
+    assignments,
+    controller,
+    current,
+    errors,
+    history,
+    native,
+    nativeCalls,
+    recoverGetter() { rejectTargetReads = false; }
+  };
+}
+
+function assertVerificationGetterInstallFailureRetainsAuthority(methodName) {
+  const harness = partialHistoryInstallationHarness(methodName, 'verification-getter');
+  assert.throws(
+    () => harness.controller.observe({ body: element('first') }),
+    new RegExp(`${methodName} verification getter failed`)
+  );
+  const capturedWrapper = harness.current[methodName];
+  assert.notEqual(capturedWrapper, harness.native[methodName]);
+  const pending = harness.controller.cleanup();
+  assert.deepEqual(pending, {
+    schemaVersion: 1,
+    cleanupStarted: true,
+    cleaned: false,
+    cleanupPending: true,
+    pendingStages: [methodName === 'pushState' ? 'push-state-hook' : 'replace-state-hook']
+  });
+  const epoch = harness.controller.routeEpoch();
+  assert.equal(capturedWrapper.call(harness.history),
+    methodName === 'pushState' ? 'native-push' : 'native-replace');
+  assert.equal(harness.nativeCalls[methodName], 1);
+  assert.equal(harness.controller.routeEpoch(), epoch);
+
+  harness.recoverGetter();
+  const cleaned = harness.controller.cleanup();
+  assert.equal(cleaned.cleaned, true);
+  assert.equal(cleaned.cleanupPending, false);
+  assert.deepEqual(cleaned.pendingStages, []);
+  assert.equal(harness.history[methodName], harness.native[methodName]);
+  const assignmentCount = harness.assignments[methodName];
+  assert.deepEqual(harness.controller.cleanup(), cleaned);
+  assert.equal(harness.assignments[methodName], assignmentCount);
+}
+
+test('pushState verification-getter failure retains uncertain install authority for cleanup retry', () => {
+  assertVerificationGetterInstallFailureRetainsAuthority('pushState');
+});
+
+test('replaceState verification-getter failure retains uncertain install authority for cleanup retry', () => {
+  assertVerificationGetterInstallFailureRetainsAuthority('replaceState');
+});
+
+function assertIgnoredHistoryInstallRetries(methodName) {
+  const harness = partialHistoryInstallationHarness(methodName, 'ignored-write');
+  assert.throws(
+    () => harness.controller.observe({ body: element('first') }),
+    new RegExp(`${methodName} hook installation was not retained`)
+  );
+  assert.equal(harness.current[methodName], harness.native[methodName]);
+  const attemptsBeforeRetry = harness.assignments[methodName];
+  assert.doesNotThrow(() => harness.controller.observe({ body: element('second') }));
+  assert.notEqual(harness.current[methodName], harness.native[methodName]);
+  assert.equal(harness.assignments[methodName], attemptsBeforeRetry + 1);
+  const epoch = harness.controller.routeEpoch();
+  assert.equal(harness.history[methodName](), methodName === 'pushState' ? 'native-push' : 'native-replace');
+  assert.equal(harness.controller.routeEpoch(), epoch + 1);
+  const cleaned = harness.controller.cleanup();
+  assert.equal(cleaned.cleaned, true);
+  assert.equal(harness.history[methodName], harness.native[methodName]);
+  const finalAssignments = harness.assignments[methodName];
+  harness.controller.cleanup();
+  assert.equal(harness.assignments[methodName], finalAssignments);
+}
+
+test('ignored pushState installation retries after the original property recovers', () => {
+  assertIgnoredHistoryInstallRetries('pushState');
+});
+
+test('ignored replaceState installation retries after the original property recovers', () => {
+  assertIgnoredHistoryInstallRetries('replaceState');
+});
+
+function assertIgnoredInstallNeverOverwritesLaterThirdParty(methodName) {
+  const harness = partialHistoryInstallationHarness(methodName, 'ignored-write');
+  assert.throws(() => harness.controller.observe({ body: element('first') }));
+  const thirdParty = function () { return 'third-party'; };
+  harness.history[methodName] = thirdParty;
+  const assignmentsBeforeRetry = harness.assignments[methodName];
+  assert.throws(
+    () => harness.controller.observe({ body: element('second') }),
+    new RegExp(`${methodName} changed before hook retry`)
+  );
+  assert.equal(harness.history[methodName], thirdParty);
+  assert.equal(harness.assignments[methodName], assignmentsBeforeRetry);
+  const cleaned = harness.controller.cleanup();
+  assert.equal(cleaned.cleaned, true);
+  assert.equal(harness.history[methodName], thirdParty);
+  harness.controller.cleanup();
+  assert.equal(harness.assignments[methodName], assignmentsBeforeRetry);
+}
+
+test('ignored pushState installation never overwrites a later third-party method', () => {
+  assertIgnoredInstallNeverOverwritesLaterThirdParty('pushState');
+});
+
+test('ignored replaceState installation never overwrites a later third-party method', () => {
+  assertIgnoredInstallNeverOverwritesLaterThirdParty('replaceState');
+});
+
 test('observer drain authority survives a pre-cleanup restart failure until a verified retry', () => {
   let disconnectAttempts = 0;
   let takeRecordsAttempts = 0;

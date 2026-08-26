@@ -10,6 +10,14 @@
     'observer-disconnect', 'observer-records', 'popstate-listener',
     'push-state-hook', 'replace-state-hook'
   ]);
+  const HISTORY_HOOK_STATE = Object.freeze({
+    prepared: 'prepared',
+    retryable: 'retryable',
+    uncertain: 'uncertain',
+    installed: 'installed',
+    ownershipLost: 'ownership-lost',
+    released: 'released'
+  });
 
   function defaultIsHaloOwned() {
     return false;
@@ -230,12 +238,8 @@
     let popstateListenerInstalled = false;
     let hashchangeListenerInstalled = false;
     let observedUrl = location && location.href ? String(location.href) : '';
-    let originalPushState = null;
-    let originalReplaceState = null;
-    let pushStateWrapper = null;
-    let replaceStateWrapper = null;
-    let pushStateHookInstalled = false;
-    let replaceStateHookInstalled = false;
+    let pushStateHookRecord = null;
+    let replaceStateHookRecord = null;
     let observerRecordsPending = false;
     let transitioning = false;
     let queuedTransition = null;
@@ -355,6 +359,98 @@
       routeChanged(observedUrl, currentUrl());
     }
 
+    function createHistoryHookRecord(nativeCallable) {
+      const stateCell = { active: false, installation: HISTORY_HOOK_STATE.prepared };
+      const wrapper = function (...args) {
+        const previousUrl = stateCell.active ? currentUrl() : null;
+        const result = nativeCallable.apply(this, args);
+        if (stateCell.active) routeChanged(previousUrl, currentUrl());
+        return result;
+      };
+      return Object.freeze({ nativeCallable, stateCell, wrapper });
+    }
+
+    function historyHookRecord(methodName) {
+      return methodName === 'pushState' ? pushStateHookRecord : replaceStateHookRecord;
+    }
+
+    function storeHistoryHookRecord(methodName, record) {
+      if (methodName === 'pushState') pushStateHookRecord = record;
+      else replaceStateHookRecord = record;
+    }
+
+    function markHistoryInstallFailure(methodName, record) {
+      record.stateCell.active = false;
+      try {
+        const current = history[methodName];
+        if (current === record.wrapper) record.stateCell.installation = HISTORY_HOOK_STATE.installed;
+        else if (current === record.nativeCallable) record.stateCell.installation = HISTORY_HOOK_STATE.retryable;
+        else record.stateCell.installation = HISTORY_HOOK_STATE.ownershipLost;
+      } catch (_error) {
+        record.stateCell.installation = HISTORY_HOOK_STATE.uncertain;
+      }
+    }
+
+    function ensureHistoryHook(methodName) {
+      let record = historyHookRecord(methodName);
+      if (record && record.stateCell.installation === HISTORY_HOOK_STATE.installed) {
+        record.stateCell.active = true;
+        return;
+      }
+      if (record && record.stateCell.installation === HISTORY_HOOK_STATE.ownershipLost) {
+        throw new Error(`${methodName} changed before hook retry`);
+      }
+      let current;
+      try {
+        current = history[methodName];
+      } catch (error) {
+        if (record) {
+          record.stateCell.active = false;
+          record.stateCell.installation = HISTORY_HOOK_STATE.uncertain;
+        }
+        throw error;
+      }
+      if (!record) {
+        if (typeof current !== 'function') return;
+        record = createHistoryHookRecord(current);
+        storeHistoryHookRecord(methodName, record);
+      } else if (current === record.wrapper) {
+        record.stateCell.installation = HISTORY_HOOK_STATE.installed;
+        record.stateCell.active = true;
+        return;
+      } else if (current !== record.nativeCallable) {
+        record.stateCell.active = false;
+        record.stateCell.installation = HISTORY_HOOK_STATE.ownershipLost;
+        throw new Error(`${methodName} changed before hook retry`);
+      }
+
+      record.stateCell.active = false;
+      record.stateCell.installation = HISTORY_HOOK_STATE.uncertain;
+      try {
+        history[methodName] = record.wrapper;
+      } catch (error) {
+        markHistoryInstallFailure(methodName, record);
+        throw error;
+      }
+      let retained;
+      try {
+        retained = history[methodName];
+      } catch (error) {
+        record.stateCell.installation = HISTORY_HOOK_STATE.uncertain;
+        throw error;
+      }
+      if (retained === record.wrapper) {
+        record.stateCell.installation = HISTORY_HOOK_STATE.installed;
+        record.stateCell.active = true;
+        return;
+      }
+      record.stateCell.active = false;
+      record.stateCell.installation = retained === record.nativeCallable
+        ? HISTORY_HOOK_STATE.retryable
+        : HISTORY_HOOK_STATE.ownershipLost;
+      throw new Error(`${methodName} hook installation was not retained`);
+    }
+
     function installHooks() {
       if (cleanupStarted) return;
       if (eventTarget && typeof eventTarget.addEventListener === 'function') {
@@ -368,39 +464,37 @@
         }
       }
       if (!history) return;
-      if (!pushStateHookInstalled && !pushStateWrapper && typeof history.pushState === 'function') {
-        originalPushState = history.pushState;
-        pushStateWrapper = function (...args) {
-          const previousUrl = currentUrl();
-          const result = originalPushState.apply(this, args);
-          routeChanged(previousUrl, currentUrl());
-          return result;
-        };
-        try {
-          history.pushState = pushStateWrapper;
-          if (history.pushState !== pushStateWrapper) throw new Error('pushState hook installation was not retained');
-          pushStateHookInstalled = true;
-        } catch (error) {
-          try { pushStateHookInstalled = history.pushState === pushStateWrapper; } catch (_readError) {}
-          throw error;
+      ensureHistoryHook('pushState');
+      ensureHistoryHook('replaceState');
+    }
+
+    function deactivateHistoryHooks() {
+      if (pushStateHookRecord) pushStateHookRecord.stateCell.active = false;
+      if (replaceStateHookRecord) replaceStateHookRecord.stateCell.active = false;
+    }
+
+    function releaseHistoryHook(record) {
+      record.stateCell.active = false;
+      record.stateCell.installation = HISTORY_HOOK_STATE.released;
+      return null;
+    }
+
+    function restoreHistoryHook(methodName, record, metadata) {
+      if (!record) return null;
+      record.stateCell.active = false;
+      try {
+        if (!history) throw new TypeError(`${methodName} restoration is unavailable`);
+        if (history[methodName] === record.wrapper) {
+          history[methodName] = record.nativeCallable;
+          if (history[methodName] !== record.nativeCallable) {
+            throw new Error(`${methodName} restoration was not retained`);
+          }
         }
-      }
-      if (!replaceStateHookInstalled && !replaceStateWrapper && typeof history.replaceState === 'function') {
-        originalReplaceState = history.replaceState;
-        replaceStateWrapper = function (...args) {
-          const previousUrl = currentUrl();
-          const result = originalReplaceState.apply(this, args);
-          routeChanged(previousUrl, currentUrl());
-          return result;
-        };
-        try {
-          history.replaceState = replaceStateWrapper;
-          if (history.replaceState !== replaceStateWrapper) throw new Error('replaceState hook installation was not retained');
-          replaceStateHookInstalled = true;
-        } catch (error) {
-          try { replaceStateHookInstalled = history.replaceState === replaceStateWrapper; } catch (_readError) {}
-          throw error;
-        }
+        return releaseHistoryHook(record);
+      } catch (error) {
+        record.stateCell.installation = HISTORY_HOOK_STATE.uncertain;
+        reportError(error, `cleanup-${methodName === 'pushState' ? 'push-state' : 'replace-state'}-hook`, metadata);
+        return record;
       }
     }
 
@@ -427,40 +521,8 @@
           reportError(error, 'cleanup-hashchange-listener', metadata);
         }
       }
-      if (pushStateHookInstalled) {
-        try {
-          if (!history) throw new TypeError('pushState restoration is unavailable');
-          if (history.pushState === pushStateWrapper) {
-            history.pushState = originalPushState;
-            if (history.pushState !== originalPushState) throw new Error('pushState restoration was not retained');
-          }
-          pushStateHookInstalled = false;
-          originalPushState = null;
-          pushStateWrapper = null;
-        } catch (error) {
-          reportError(error, 'cleanup-push-state-hook', metadata);
-        }
-      } else if (pushStateWrapper) {
-        originalPushState = null;
-        pushStateWrapper = null;
-      }
-      if (replaceStateHookInstalled) {
-        try {
-          if (!history) throw new TypeError('replaceState restoration is unavailable');
-          if (history.replaceState === replaceStateWrapper) {
-            history.replaceState = originalReplaceState;
-            if (history.replaceState !== originalReplaceState) throw new Error('replaceState restoration was not retained');
-          }
-          replaceStateHookInstalled = false;
-          originalReplaceState = null;
-          replaceStateWrapper = null;
-        } catch (error) {
-          reportError(error, 'cleanup-replace-state-hook', metadata);
-        }
-      } else if (replaceStateWrapper) {
-        originalReplaceState = null;
-        replaceStateWrapper = null;
-      }
+      pushStateHookRecord = restoreHistoryHook('pushState', pushStateHookRecord, metadata);
+      replaceStateHookRecord = restoreHistoryHook('replaceState', replaceStateHookRecord, metadata);
     }
 
     function startObservation() {
@@ -630,8 +692,8 @@
       if (observing) pending.add('observer-disconnect');
       if (observerRecordsPending) pending.add('observer-records');
       if (popstateListenerInstalled) pending.add('popstate-listener');
-      if (pushStateHookInstalled) pending.add('push-state-hook');
-      if (replaceStateHookInstalled) pending.add('replace-state-hook');
+      if (pushStateHookRecord) pending.add('push-state-hook');
+      if (replaceStateHookRecord) pending.add('replace-state-hook');
       const pendingStages = Object.freeze(CLEANUP_STAGE_CODES.filter((stage) => pending.has(stage)));
       return Object.freeze({
         schemaVersion: 1,
@@ -681,6 +743,7 @@
       cleanupInProgress = true;
       const metadata = Object.freeze({ epoch, previousUrl: observedUrl, nextUrl: null, reason: 'cleanup' });
       try {
+        deactivateHistoryHooks();
         cancelPendingRouteStart();
         queuedTransition = null;
         cancelCleanupTimer('debounce-timer', metadata);

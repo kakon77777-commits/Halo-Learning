@@ -9,6 +9,8 @@ Task 9 was implemented on `workbench/v0.4.0-browser-runtime` from base
 clean Task 9 commit `f7b7b09726946bb8cdb638869dc5d998acf4ea34`.
 Fix round 2 was applied from clean commit
 `9708dda462b83837694bbe6309dd4ab6f5c518fb`.
+Fix round 3 was applied from clean commit
+`69036e0caa58740a0e7cae2fca89291a01db683b`.
 
 The installed-extension browser gate remains an explicit failure with zero
 skips because this environment has no Chromium executable. No browser result
@@ -135,6 +137,37 @@ After setPolicyOnly disconnected successfully but takeRecords threw, cleanup
 reported cleaned true with no pending stages and never retried the record drain.
 ```
 
+### Fix-round 3 RED evidence
+
+Both adjudicated round-3 findings and the implementer attack-review cases were
+observed failing before their production changes:
+
+```text
+node --test --test-name-pattern='forged registry sequences mask' \
+  tests/site-policy.test.js
+tests 1; pass 0; fail 1
+https://bank.vault.bitwarden.com.attacker.test/article:
+expected allow false; actual true
+
+node --test --test-name-pattern='captured pushState wrapper|captured replaceState wrapper' \
+  tests/dynamic-dom-controller.test.js
+tests 2; pass 0; fail 2
+TypeError: Cannot read properties of null (reading 'apply')
+
+node --test --test-name-pattern='captured pushState wrapper|captured replaceState wrapper|re-observation never rereads' \
+  tests/dynamic-dom-controller.test.js
+tests 3; pass 0; fail 3
+Cleanup reentry read hostile location before deactivation for both wrappers;
+re-observation reread an already-installed hostile pushState getter.
+
+node --test --test-name-pattern='verification-getter failure|ignored pushState installation|ignored replaceState installation' \
+  tests/dynamic-dom-controller.test.js
+tests 6; pass 0; fail 6
+Verification-getter failures discarded partially installed push/replace
+authority and falsely reported clean. Ignored writes were never retried, and a
+later third-party method was not recognized as changed ownership.
+```
+
 ## Policy contract
 
 - `PolicyDecision/v1` remains frozen and closed to the five canonical fields.
@@ -148,11 +181,20 @@ reported cleaned true with no pending stages and never retried the record drain.
   Secrets Manager, Google Secret Manager, and Azure Key Vault/secrets.
 - This registry is deliberately representative and auditable; it is not
   claimed to classify the web exhaustively. Known-host suffix tricks such as
-  `vault.bitwarden.com.attacker.test` suppress only forged host evidence; they
-  still pass through independent route and form rules. Thus benign paths remain
-  allowed, while `/login`, `/checkout`, `/password-reset`, their single-encoded
-  equivalents, and ambiguous multiply encoded routes block without treating
-  the attacker host as the registered service.
+  `vault.bitwarden.com.attacker.test` are recognized only as exact DNS-label
+  sequences, never substrings such as `notchase`. A bounded deterministic union
+  mask suppresses only labels belonging to forged registered-host sequences;
+  unrelated `bank` labels, independent route/form evidence, and terminal TLD
+  evidence remain available. Multiple sequences are unioned without order
+  dependence.
+- The forged-sequence plus terminal `.gov` combination is one narrow compound
+  government-personal-data signal. It blocks
+  `chase.com.attacker.gov/article` without changing the existing rule for an
+  unrelated public `.gov/article`, which still requires a personal-data route.
+  A bare forged registered host with no independent signal remains allowed.
+- Independent `/login`, `/checkout`, and `/password-reset` paths, their
+  single-encoded equivalents, and ambiguous multiply encoded routes continue
+  to block without treating the attacker host as the registered service.
 - Route evidence is taken from bounded path, search, and hash tokens after safe
   normalization. Credentials, encoded separators/backslashes/dot ambiguity,
   multiple encoding, malformed percent escapes, residual `%xx`, token excess,
@@ -201,6 +243,21 @@ reported cleaned true with no pending stages and never retried the record drain.
   cleanup. Re-observation cannot erase it, and only a successful `takeRecords()`
   releases it; an intermediate failure therefore remains visible and retriable
   during final cleanup.
+- Each history hook now owns a frozen record containing an immutable native
+  callable, a private deactivation cell, and an explicit prepared, retryable,
+  uncertain, installed, ownership-lost, or released state. A record is retained
+  before attempting installation, so a setter that installs and then exposes a
+  throwing verification getter cannot orphan the wrapper. An ignored write is
+  retried only while the property is still the exact captured native callable;
+  a later third-party method is never overwritten. Every retained record is
+  visible in `cleanupPending`. Cleanup deactivates push/replace wrappers before
+  lifecycle reentry, so captured wrappers remain native-only and cannot read
+  route state or schedule work. Exact restoration failures keep the record and
+  pending status for retry; successful restoration releases it once. If a
+  third-party outer wrapper owns the public history property, Halo never
+  overwrites it and releases its record only after deactivation. Repeated
+  cleanup performs no duplicate assignments, and re-observation does not reread
+  already-installed hostile properties.
 - A malformed APPLY or disappearing shared module performs best-effort shutdown
   before module/settings validation. Missing dynamic-controller globals cannot
   prevent a retained controller from suppressing and completing renderer
@@ -289,16 +346,33 @@ environment.
 ## Final verification
 
 ```text
+node --test tests/site-policy.test.js tests/content-policy-lifecycle.test.js \
+  tests/content-trigger-runtime.test.js tests/dynamic-dom-controller.test.js \
+  tests/extension-semantic-service.test.js tests/marking-profile-schema.test.js \
+  tests/popup-actions.test.js tests/profile-migration.test.js \
+  tests/runtime-scheduler.test.js tests/browser-trigger-entry.test.js
+tests 149
+pass 149
+fail 0
+
+node --test --test-name-pattern='terminal cleanup closes an independently tracked panel after reentry leaves dismissed state' \
+  tests/trigger-controller.test.js
+tests 1
+pass 1
+fail 0
+
 node --test tests/*.test.js
-tests 402
-pass 402
+tests 412
+pass 412
 fail 0
 cancelled 0
 skipped 0
 todo 0
 ```
 
-All changed JavaScript passed `node --check`; the extension manifest and
-canonical MarkingProfile schema parsed as JSON; `git diff --check` exited zero.
+All changed JavaScript passed `node --check`; the extension manifest and all
+contract schemas parsed as JSON; `git diff --check` exited zero. An independent
+follow-up review reported no Critical, Important, or Minor findings after the
+partial-install state-machine fix.
 
 `progress.md` was not edited.

@@ -149,6 +149,12 @@
       routeAny: Object.freeze(['keyvault', 'secrets', 'secretlistblade'])
     })
   ]);
+  const REGISTRY_HOST_LABEL_SEQUENCES = Object.freeze(
+    [...new Set(DEFAULT_SERVICE_RULES.flatMap((rule) => [
+      ...Array.from(rule.exactHosts || []),
+      ...Array.from(rule.suffixHosts || [])
+    ]))].sort().map((hostname) => Object.freeze(hostname.split('.')))
+  );
 
   const SENSITIVE_AUTOCOMPLETE = Object.freeze({
     'current-password': 'PASSWORD_AUTOCOMPLETE',
@@ -486,12 +492,28 @@
       hostname === suffix || hostname.endsWith(`.${suffix}`)));
   }
 
-  function registrySuffixTrick(hostname) {
-    return DEFAULT_SERVICE_RULES.some((rule) => [
-      ...Array.from(rule.exactHosts || []),
-      ...Array.from(rule.suffixHosts || [])
-    ].some((knownHost) => hostname.includes(`${knownHost}.`) &&
-      hostname !== knownHost && !hostname.endsWith(`.${knownHost}`)));
+  function forgedRegistryHostEvidence(hostLabels) {
+    const masked = new Array(hostLabels.length).fill(false);
+    let matched = false;
+    for (const knownLabels of REGISTRY_HOST_LABEL_SEQUENCES) {
+      const lastForgedStart = hostLabels.length - knownLabels.length - 1;
+      for (let start = 0; start <= lastForgedStart; start += 1) {
+        let exactSequence = true;
+        for (let offset = 0; offset < knownLabels.length; offset += 1) {
+          if (hostLabels[start + offset] !== knownLabels[offset]) {
+            exactSequence = false;
+            break;
+          }
+        }
+        if (!exactSequence) continue;
+        matched = true;
+        for (let offset = 0; offset < knownLabels.length; offset += 1) masked[start + offset] = true;
+      }
+    }
+    return Object.freeze({
+      matched,
+      unmaskedLabels: Object.freeze(hostLabels.filter((_label, index) => !masked[index]))
+    });
   }
 
   function matchingCategory(hostname, paths) {
@@ -507,10 +529,13 @@
         };
       }
     }
-    const suppressKnownHostEvidence = registrySuffixTrick(hostname);
+    const forgedEvidence = forgedRegistryHostEvidence(hosts);
+    if (forgedEvidence.matched && hosts[hosts.length - 1] === 'gov') {
+      return { category: 'government-personal-data', evidenceKind: 'HOST_LABEL' };
+    }
     for (const rule of DEFAULT_CATEGORY_RULES) {
-      const hostMatch = !suppressKnownHostEvidence && (
-        Boolean(rule.host && rule.host.some((label) => hosts.includes(label))) ||
+      const hostMatch = (
+        Boolean(rule.host && rule.host.some((label) => forgedEvidence.unmaskedLabels.includes(label))) ||
         Boolean(rule.governmentTld && hosts[hosts.length - 1] === 'gov')
       );
       const pathMatch = Boolean(rule.path && rule.path.some((label) => paths.includes(label)));

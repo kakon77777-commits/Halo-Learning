@@ -205,6 +205,29 @@ test('forged known-host suffix suppresses only host evidence while independent s
   ]) assert.equal(classify(url).allow, true, url);
 });
 
+test('forged registry sequences mask only their exact labels and preserve unrelated generic evidence', () => {
+  for (const [url, category] of [
+    ['https://bank.vault.bitwarden.com.attacker.test/article', 'banking'],
+    ['https://bank.notchase.com.attacker.test/article', 'banking'],
+    ['https://chase.com.attacker.gov/article', 'government-personal-data'],
+    ['https://bank.chase.com.vault.bitwarden.com.attacker.test/article', 'banking']
+  ]) {
+    const decision = classify(url);
+    assert.equal(decision.allow, false, url);
+    assert.equal(decision.category, category, url);
+    assert.equal(decision.evidenceKind, 'HOST_LABEL', url);
+  }
+
+  for (const url of [
+    'https://vault.bitwarden.com.attacker.test/article',
+    'https://public-agency.gov/article'
+  ]) {
+    const decision = classify(url);
+    assert.equal(decision.allow, true, url);
+    assert.equal(decision.category, 'public', url);
+  }
+});
+
 test('denylist canonicalizes case, one trailing dot, and IDNA then sorts and deduplicates', () => {
   const denylist = Policy.normalizeDenylist([
     'Private.Example.',
