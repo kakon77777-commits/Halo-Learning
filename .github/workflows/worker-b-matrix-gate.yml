@@ -12,7 +12,7 @@ permissions:
 jobs:
   matrix:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,5 +20,6 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Matrix inventory and E2E
+      - run: npx playwright install --with-deps chromium
+      - name: Matrix inventory and real Chromium behavior
         run: node --test tests/browser/browser-runtime-matrix.e2e.test.js
