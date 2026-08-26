@@ -38,6 +38,30 @@ function artifacts() {
   });
 }
 
+function denseEnglishShardArtifacts(rowCount) {
+  const bucketCount = 64;
+  const targetBucket = 0;
+  const entries = [];
+  for (let candidate = 0; entries.length < rowCount; candidate += 1) {
+    const surface = `worker-e-${candidate}`;
+    if (Shards.routeEnglishSurface(surface, bucketCount) !== targetBucket) continue;
+    entries.push({
+      locale: 'en',
+      row: [surface, surface, 'n', 1, `en:${surface}`, `gloss:${surface}`, 0, 0],
+      gloss: 'shared Worker E gloss'
+    });
+  }
+  return Shards.buildBrowserLexicalArtifacts(entries, {
+    bucketCount,
+    builtAt: '2026-08-25T00:00:00.000Z',
+    sourceIndex: {
+      format: 'halo-runtime-lexical-index-v1',
+      hash: { algorithm: 'sha256', value: 'c'.repeat(64) }
+    },
+    datasets: [{ datasetId: 'fixture-en', version: '1', locale: 'en' }]
+  });
+}
+
 test('verified browser shard loading exposes the required cold-path stage decomposition', async () => {
   const built = artifacts();
   const manifestProfile = { stageMs: {} };
@@ -129,4 +153,40 @@ test('cold-path decomposition reports stable p50 p95 max stage statistics and lo
     shardCount: { p50: 3, p95: 5, max: 5 },
     usedJsHeapBytes: { measurableSamples: 1, max: 5000 }
   });
+});
+
+test('canonical row-order validation encodes each dense lexical row at most once for ordering', async () => {
+  const rowCount = 32;
+  const built = denseEnglishShardArtifacts(rowCount);
+  const manifest = await BrowserLoader.loadBrowserLexicalManifest(built.serializedManifest);
+  const descriptor = manifest.shards.find((value) => value.locale === 'en' && value.rowCounts.lexical === rowCount);
+  assert.ok(descriptor, 'dense fixture must occupy one English shard');
+
+  const OriginalTextEncoder = global.TextEncoder;
+  let encodeCalls = 0;
+  global.TextEncoder = class CountingTextEncoder {
+    constructor() {
+      this.delegate = new OriginalTextEncoder();
+    }
+    encode(value) {
+      encodeCalls += 1;
+      return this.delegate.encode(value);
+    }
+  };
+  try {
+    await BrowserLoader.loadBrowserLexicalShard(
+      built.serializedShards[descriptor.path],
+      manifest
+    );
+  } finally {
+    global.TextEncoder = OriginalTextEncoder;
+  }
+
+  // SHA input + descriptor bytes + one ordering encoding per lexical row +
+  // one routing encoding per lexical row. Allow two calls of headroom for
+  // future fixed-size metadata checks, but not the previous adjacent-pair re-encoding.
+  assert.ok(
+    encodeCalls <= (rowCount * 2) + 4,
+    `expected linear row encoding work, observed ${encodeCalls} TextEncoder.encode calls for ${rowCount} rows`
+  );
 });
