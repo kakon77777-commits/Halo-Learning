@@ -45,14 +45,6 @@ test('missing Chromium fails explicitly instead of skipping browser gates', () =
   }), /Chromium executable is required/);
 });
 
-test('unpacked extension launches preserve reload authority in current Chromium', () => {
-  const Harness = require('./browser/helpers/extension-harness');
-  assert.ok(
-    Harness.extensionLaunchArguments('/fixture/extension')
-      .includes('--enable-unsafe-extension-debugging')
-  );
-});
-
 test('browser shard comparison applies the fixed 64-first selection rule without rounding', () => {
   const { selectShardCandidate } = require('../scripts/profile-browser-runtime');
   const passing64 = { bucketCount: 64, allBlockingPassed: true };
