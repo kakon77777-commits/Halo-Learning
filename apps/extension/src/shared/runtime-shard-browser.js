@@ -117,6 +117,26 @@
     }
   }
 
+  function compareBytes(left, right) {
+    const length = Math.min(left.length, right.length);
+    for (let index = 0; index < length; index += 1) {
+      if (left[index] !== right[index]) return left[index] - right[index];
+    }
+    return left.length - right.length;
+  }
+
+  function assertCanonicalRows(name, values) {
+    if (values.length < 2) return;
+    let previous = bytesFor(canonicalJson(values[0]));
+    for (let index = 1; index < values.length; index += 1) {
+      const current = bytesFor(canonicalJson(values[index]));
+      if (compareBytes(previous, current) > 0) {
+        fail('NON_CANONICAL_ORDER', `${name} is not canonical`);
+      }
+      previous = current;
+    }
+  }
+
   function validateManifest(raw) {
     if (raw.schemaVersion !== SCHEMA_VERSION || raw.manifestFormat !== MANIFEST_FORMAT ||
         !raw.builder || raw.builder.id !== BUILDER.id || raw.builder.version !== BUILDER.version) {
@@ -257,8 +277,8 @@
       fail('SHARD_INVALID', 'Browser lexical shard metadata is invalid');
     }
     assertCanonical('shard glosses', raw.glosses, compareUtf8);
-    assertCanonical('shard lexical rows', raw.lexicalRows, compareRows);
-    assertCanonical('shard morphology rows', raw.morphologyRows, compareRows);
+    assertCanonicalRows('shard lexical rows', raw.lexicalRows);
+    assertCanonicalRows('shard morphology rows', raw.morphologyRows);
     for (const [index, row] of raw.lexicalRows.entries()) {
       const expectedLength = raw.locale === 'en' ? 8 : 9;
       if (!Array.isArray(row) || row.length !== expectedLength || typeof row[0] !== 'string' || !row[0] ||
