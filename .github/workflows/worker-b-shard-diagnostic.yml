@@ -1,43 +1,30 @@
-name: Worker E Runtime Performance Diagnostic
+name: Worker B Shard Diagnostic
 
 on:
   push:
     branches:
-      - parallel/v0.4.0-runtime-performance
+      - parallel/v0.4.0-browser-ux
 
 permissions:
   contents: read
 
 jobs:
   diagnose:
+    if: github.event.head_commit.message == 'ci: diagnose Worker B shard budgets'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-
-      - name: Worker E RED/GREEN contract
-        run: node --test tests/worker-e-runtime-performance.test.js
-
-      - name: Lexical shard regression tests
-        run: node --test tests/browser-lexical-shards.test.js tests/browser-shard-loader.test.js
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
+      - run: npx playwright install --with-deps chromium
       - name: Run fixed 64/128 real Chromium comparison
-        id: comparison
-        continue-on-error: true
         run: |
-          mkdir -p evidence/worker-e
-          node - <<'NODE' | tee evidence/worker-e/summary.txt
+          mkdir -p evidence/shard-diagnostic
+          node - <<'NODE' | tee evidence/shard-diagnostic/summary.txt
           const fs = require('node:fs');
           const { chromium } = require('playwright');
           const { runShardComparison, verifyBrowserShardComparison } = require('./scripts/profile-browser-runtime');
@@ -45,50 +32,34 @@ jobs:
             const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
             verifyBrowserShardComparison(comparison);
             fs.writeFileSync(
-              'evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json',
+              'evidence/shard-diagnostic/v0.4.0-browser-shard-comparison.json',
               JSON.stringify(comparison, null, 2) + '\n'
             );
-            console.log(JSON.stringify({
+            const summary = {
               browser: comparison.browser,
               host: comparison.host,
               selection: comparison.selection,
               candidates: comparison.candidates.map((candidate) => ({
                 bucketCount: candidate.bucketCount,
-                sizes: candidate.sizes,
                 measurements: candidate.measurements,
+                budgets: candidate.budgets,
                 gates: candidate.gates,
                 allBlockingPassed: candidate.allBlockingPassed,
-                coldSamples: candidate.conditions.cold.samples,
+                coldRawMs: candidate.conditions.cold.samples.map((sample) => sample.durationMs),
                 warmSampleCount: candidate.conditions.warm.samples.reduce((n, sample) => n + sample.samplesMs.length, 0),
                 longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
               }))
-            }, null, 2));
+            };
+            console.log(JSON.stringify(summary, null, 2));
           })().catch((error) => {
             console.error(error.stack || error.message);
             process.exitCode = 1;
           });
           NODE
-
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: worker-e-runtime-performance-evidence
-          path: evidence/worker-e/
-          if-no-files-found: warn
+          name: worker-b-shard-diagnostic
+          path: evidence/shard-diagnostic/
+          if-no-files-found: error
           retention-days: 14
-
-      - name: Enforce frozen Worker E selection
-        if: always()
-        run: |
-          test -f evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const comparison = JSON.parse(fs.readFileSync(
-            'evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json',
-            'utf8'
-          ));
-          if (!comparison.selection || comparison.selection.status !== 'selected') {
-            throw new Error(`Worker E selection remains blocked: ${JSON.stringify(comparison.selection)}`);
-          }
-          console.log(`selectedBucketCount=${comparison.selection.selectedBucketCount}`);
-          NODE
