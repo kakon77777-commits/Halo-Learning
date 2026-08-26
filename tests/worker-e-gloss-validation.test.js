@@ -16,7 +16,7 @@ function denseUniqueGlossArtifacts(rowCount) {
     const gloss = `worker-e-unique-gloss-${String(entries.length).padStart(3, '0')}`;
     entries.push({
       locale: 'en',
-      row: [surface, surface, 'n', 1, `en:${surface}`, `gloss:${surface}`, 0, entries.length],
+      row: [surface, surface, 'n', 1, `en:${surface}`, `gloss:${surface}`, 0, 0],
       gloss
     });
   }
