@@ -1,0 +1,24 @@
+name: Worker B Performance and MV3 Gate
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-ux
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Browser performance acceptance model
+        run: node --test tests/browser-performance-metrics.test.js
