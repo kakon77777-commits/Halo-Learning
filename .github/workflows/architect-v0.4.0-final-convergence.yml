@@ -1,0 +1,129 @@
+name: Architect v0.4.0 Final Convergence
+
+on:
+  push:
+    branches:
+      - integration/v0.4.0-final-convergence
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Full Node regression
+        run: npm test
+      - name: Canonical lexical runtime
+        run: npm run verify:runtime
+      - name: Semantic quality regression
+        run: npm run quality:verify
+      - name: Worker E focused regression
+        run: node --test tests/worker-e-descriptor-bytes.test.js tests/worker-e-gloss-validation.test.js tests/worker-e-runtime-performance.test.js
+      - name: Worker C release-tooling regression
+        run: node --test tests/release-validator-v0.4.0.test.js tests/release-packaging-v0.4.0.test.js
+
+  browser-file:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        file:
+          - accessibility
+          - browser-runtime-matrix
+          - dynamic-dom
+          - reversible-renderer
+          - sensitive-site
+          - sentence-pipeline
+          - trigger-controller
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run isolated real-browser file
+        run: timeout --kill-after=10s 180s node --test "tests/browser/${{ matrix.file }}.e2e.test.js"
+
+  mv3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Collect MV3 lifecycle evidence
+        run: |
+          mkdir -p evidence/architect-mv3
+          node scripts/collect-worker-b-browser-evidence.js evidence/architect-mv3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: architect-v0.4.0-mv3-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/architect-mv3/
+          if-no-files-found: warn
+          retention-days: 14
+
+  performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Fresh frozen 64/128 comparison
+        run: |
+          mkdir -p evidence/architect-performance
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const { runShardComparison } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            fs.writeFileSync(
+              'evidence/architect-performance/v0.4.0-browser-shard-comparison.json',
+              JSON.stringify(comparison, null, 2) + '\n'
+            );
+            console.log(JSON.stringify({
+              browser: comparison.browser,
+              selection: comparison.selection,
+              candidates: comparison.candidates.map((candidate) => ({
+                bucketCount: candidate.bucketCount,
+                measurements: candidate.measurements,
+                bottleneckDecomposition: candidate.bottleneckDecomposition,
+                gates: candidate.gates,
+                allBlockingPassed: candidate.allBlockingPassed
+              }))
+            }, null, 2));
+            if (!comparison.selection || comparison.selection.status !== 'selected') process.exitCode = 2;
+          })().catch((error) => {
+            console.error(error.stack || error.message);
+            process.exitCode = 1;
+          });
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: architect-v0.4.0-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/architect-performance/
+          if-no-files-found: error
+          retention-days: 14
