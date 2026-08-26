@@ -215,28 +215,32 @@ test('real Chromium enforces viewport budgets, cancellation, and long-root multi
           }
           return response;
         }
-        Object.defineProperty(globalThis, 'chrome', {
+        const chromeNamespace = globalThis.chrome && typeof globalThis.chrome === 'object'
+          ? globalThis.chrome
+          : {};
+        if (globalThis.chrome !== chromeNamespace) {
+          Object.defineProperty(globalThis, 'chrome', { configurable: true, value: chromeNamespace });
+        }
+        Object.defineProperty(chromeNamespace, 'runtime', {
           configurable: true,
           value: {
-            runtime: {
-              onMessage: { addListener: (listener) => listeners.push(listener) },
-              sendMessage: async (message) => {
-                if (message.type === 'HALO_CANCEL_REQUEST') {
-                  cancelRequests.push(message.requestId);
-                  const blocked = pending.get(message.requestId);
-                  if (blocked) {
-                    pending.delete(message.requestId);
-                    blocked.resolve(responseFor(blocked.message));
-                  }
-                  return { status: 'cancelled' };
+            onMessage: { addListener: (listener) => listeners.push(listener) },
+            sendMessage: async (message) => {
+              if (message.type === 'HALO_CANCEL_REQUEST') {
+                cancelRequests.push(message.requestId);
+                const blocked = pending.get(message.requestId);
+                if (blocked) {
+                  pending.delete(message.requestId);
+                  blocked.resolve(responseFor(blocked.message));
                 }
-                if (message.type !== 'HALO_ENRICH_BATCH') return null;
-                semanticRequests.push(message);
-                if (message.items.some((item) => item.text.includes('Cancellable'))) {
-                  return new Promise((resolve) => pending.set(message.requestId, { resolve, message }));
-                }
-                return responseFor(message);
+                return { status: 'cancelled' };
               }
+              if (message.type !== 'HALO_ENRICH_BATCH') return null;
+              semanticRequests.push(message);
+              if (message.items.some((item) => item.text.includes('Cancellable'))) {
+                return new Promise((resolve) => pending.set(message.requestId, { resolve, message }));
+              }
+              return responseFor(message);
             }
           }
         });
