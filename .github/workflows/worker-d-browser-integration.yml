@@ -1,0 +1,167 @@
+name: Worker D Browser Integration Baseline
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-integration
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frozen-browser-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact frozen Worker B base
+        uses: actions/checkout@v4
+        with:
+          ref: b6cd8ccfd705563bad7dcea87900d50fa8ca0b80
+
+      - name: Verify frozen base
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="b6cd8ccfd705563bad7dcea87900d50fa8ca0b80"
+          printf 'expected=%s\nactual=%s\n' "$expected" "$actual" | tee frozen-base.txt
+          test "$actual" = "$expected"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install exact locked dependencies
+        run: npm ci
+
+      - name: Install real Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare run-isolated evidence and record Chromium
+        id: chromium
+        run: |
+          set -euo pipefail
+          EVIDENCE_ROOT="$GITHUB_WORKSPACE/evidence/worker-d-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$EVIDENCE_ROOT"
+          echo "EVIDENCE_ROOT=$EVIDENCE_ROOT" >> "$GITHUB_ENV"
+          node - <<'NODE' | tee "$EVIDENCE_ROOT/chromium.txt"
+          const { chromium } = require('playwright');
+          const fs = require('node:fs');
+          const { spawnSync } = require('node:child_process');
+          const executable = chromium.executablePath();
+          if (!fs.existsSync(executable)) throw new Error(`Chromium missing at ${executable}`);
+          const version = spawnSync(executable, ['--version'], { encoding: 'utf8' });
+          const observed = String(version.stdout || version.stderr || '').trim();
+          if (version.status !== 0 || !observed) throw new Error('Unable to resolve Chromium version');
+          console.log('source=playwright');
+          console.log(`executable=${executable}`);
+          console.log(`version=${observed}`);
+          fs.appendFileSync(process.env.GITHUB_ENV, `HALO_CHROMIUM_EXECUTABLE=${executable}\n`);
+          NODE
+
+      - name: Focused dynamic-DOM fresh state
+        id: dynamic_dom
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 180s node --test tests/browser/dynamic-dom.e2e.test.js 2>&1 | tee "$EVIDENCE_ROOT/dynamic-dom.tap"
+
+      - name: Browser harness supplement
+        id: harness
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/halo-no-browser
+        run: |
+          set -o pipefail
+          rm -rf "$PLAYWRIGHT_BROWSERS_PATH"
+          mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+          node --test tests/browser-harness.test.js 2>&1 | tee "$EVIDENCE_ROOT/browser-harness.tap"
+
+      - name: Accessibility contract
+        id: accessibility
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test tests/accessibility-contract.test.js 2>&1 | tee "$EVIDENCE_ROOT/accessibility-contract.tap"
+
+      - name: Serialized Worker-B Browser Gate real-browser suites
+        id: browser
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          : > "$EVIDENCE_ROOT/browser-e2e.tap"
+          for file in tests/browser/*.e2e.test.js; do
+            printf '\n===== %s =====\n' "$file" | tee -a "$EVIDENCE_ROOT/browser-e2e.tap"
+            timeout 180s node --test "$file" 2>&1 | tee -a "$EVIDENCE_ROOT/browser-e2e.tap"
+          done
+
+      - name: Existing Worker-B collector and MV3 lifecycle gate
+        id: mv3_collector
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 2400s node scripts/collect-worker-b-browser-evidence.js "$EVIDENCE_ROOT/collector" 2>&1 | tee "$EVIDENCE_ROOT/collector.log"
+
+      - name: Write machine-readable baseline outcomes
+        if: always()
+        env:
+          DYNAMIC_DOM: ${{ steps.dynamic_dom.outcome }}
+          HARNESS: ${{ steps.harness.outcome }}
+          ACCESSIBILITY: ${{ steps.accessibility.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+          MV3_COLLECTOR: ${{ steps.mv3_collector.outcome }}
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.env.EVIDENCE_ROOT;
+          const chromiumText = fs.existsSync(path.join(root, 'chromium.txt')) ? fs.readFileSync(path.join(root, 'chromium.txt'), 'utf8') : '';
+          const field = (name) => (chromiumText.match(new RegExp(`^${name}=(.*)$`, 'm')) || [null, null])[1];
+          const result = {
+            schemaVersion: 1,
+            reportFormat: 'WorkerDFrozenBaseline/v1',
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            testedSha: 'b6cd8ccfd705563bad7dcea87900d50fa8ca0b80',
+            chromium: { source: field('source'), version: field('version'), executable: field('executable') },
+            outcomes: {
+              dynamicDom: process.env.DYNAMIC_DOM,
+              browserHarness: process.env.HARNESS,
+              accessibility: process.env.ACCESSIBILITY,
+              browserGate: process.env.BROWSER,
+              existingMv3Collector: process.env.MV3_COLLECTOR
+            },
+            collectorMv3ReportPresent: fs.existsSync(path.join(root, 'collector', 'v0.4.0-worker-b-mv3-lifecycle.json')),
+            collectorMv3EvaluationPresent: fs.existsSync(path.join(root, 'collector', 'v0.4.0-worker-b-mv3-lifecycle-evaluation.json'))
+          };
+          fs.writeFileSync(path.join(root, 'baseline-outcomes.json'), `${JSON.stringify(result, null, 2)}\n`);
+          console.log(JSON.stringify(result, null, 2));
+          NODE
+
+      - name: Upload Worker D frozen-baseline evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-d-frozen-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce frozen baseline outcome
+        if: always()
+        env:
+          DYNAMIC_DOM: ${{ steps.dynamic_dom.outcome }}
+          HARNESS: ${{ steps.harness.outcome }}
+          ACCESSIBILITY: ${{ steps.accessibility.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+          MV3_COLLECTOR: ${{ steps.mv3_collector.outcome }}
+        run: |
+          printf 'dynamic_dom=%s\nharness=%s\naccessibility=%s\nbrowser=%s\nmv3_collector=%s\n' \
+            "$DYNAMIC_DOM" "$HARNESS" "$ACCESSIBILITY" "$BROWSER" "$MV3_COLLECTOR"
+          test "$DYNAMIC_DOM" = success
+          test "$HARNESS" = success
+          test "$ACCESSIBILITY" = success
+          test "$BROWSER" = success
+          test "$MV3_COLLECTOR" = success
