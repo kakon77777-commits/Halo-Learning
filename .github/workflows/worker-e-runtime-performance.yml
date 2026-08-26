@@ -35,7 +35,7 @@ jobs:
           git diff --check
 
       - name: Worker E RED/GREEN contract
-        run: node --test tests/worker-e-runtime-performance.test.js
+        run: node --test tests/worker-e-runtime-performance.test.js tests/worker-e-descriptor-bytes.test.js
 
       - name: Lexical shard regression tests
         run: node --test tests/browser-lexical-shards.test.js tests/browser-shard-loader.test.js
