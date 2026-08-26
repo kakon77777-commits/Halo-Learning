@@ -1,13 +1,15 @@
 # Worker D — Final Freeze Handoff
 
-> Status: **FROZEN / BLOCKED**  
-> Scope: final freeze and Architect handoff only. No second long browser repair loop was started.
+> **FROZEN / BLOCKED** — Architect handoff only. No second long browser repair loop was started.
 
 ```yaml
 latest_head: 474f98c86cfac97aec0e41e964056177094ca88c
+latest_head_role: frozen_tested_code_head_before_docs_handoff
 latest_head_commit: "ci: verify Worker D repair round 1"
 branch: parallel/v0.4.0-browser-integration
 base_sha: b6cd8ccfd705563bad7dcea87900d50fa8ca0b80
+handoff_file: WORKER_D_FINAL_FREEZE_HANDOFF.md
+handoff_commit_policy: "docs-only [skip ci]; any later branch-tip SHA is handoff-only and is not a retested code state"
 
 latest_ci_run:
   workflow: "Worker D Browser Integration Verification"
@@ -38,13 +40,12 @@ final_enforce:
     - "worker-d-verification-32961382968-1/browser-e2e.tap"
     - "worker-d-verification-32961382968-1/collector.log"
   suspected_root_cause: >-
-    Worker-D-owned real-browser lifecycle/orchestration remains unstable. The focused Dynamic DOM
-    command reaches only the TAP header and exceeds its 180-second bound. In the serialized browser
-    gate, five of seven browser files time out with exit_code=124. Separately, the MV3 collector
-    times out waiting 12 seconds for a new Playwright serviceworker event during extension reload,
-    so the MV3 lifecycle report/evaluation files are never emitted. The Actions UI/job API shows
-    continue-on-error steps as successful conclusions, but steps.<id>.outcome and verification.json
-    correctly record the underlying failures; the final enforce step therefore fails on DYNAMIC first.
+    Worker-D-owned real-browser lifecycle/completion remains unstable. Focused Dynamic DOM reaches
+    only the TAP header and exceeds 180 seconds. In the serialized gate, five of seven browser files
+    time out with exit_code=124. Separately, the MV3 collector times out waiting 12 seconds for a
+    Playwright serviceworker event during extension reload, so MV3 lifecycle report/evaluation files
+    are not emitted. continue-on-error makes the Actions job UI show successful step conclusions,
+    but steps.<id>.outcome and verification.json correctly preserve the underlying failures.
 
 classification:
   type: BLOCKER
@@ -71,18 +72,18 @@ commits_since_b6cd8cc:
   - "474f98c86cfac97aec0e41e964056177094ca88c ci: verify Worker D repair round 1"
 
 recommended_next_action:
-  - "Architect should treat 474f98c86cfac97aec0e41e964056177094ca88c as the frozen tested Worker D code state, not as a passing gate."
-  - "Preserve and inspect artifact worker-d-verification-32961382968-1 before any future repair; do not infer PASS from continue-on-error step conclusions."
-  - "If work resumes, keep the next repair D-owned and focused on real-browser completion/teardown plus extension-reload service-worker observation; do not broaden into production features or performance."
+  - "Treat 474f98c86cfac97aec0e41e964056177094ca88c as the authoritative frozen tested Worker D code state, not as a passing gate."
+  - "Preserve artifact worker-d-verification-32961382968-1; do not infer PASS from continue-on-error step conclusions."
+  - "If work resumes, keep the next repair D-owned and narrowly focused on browser completion/teardown and extension-reload service-worker observation."
   - "Do not route to Worker A or E from this evidence alone."
   - "Do not run another long CI merely to restate this freeze."
 ```
 
-## Evidence reconciliation
+## Exact evidence reconciliation
 
-The latest remote branch HEAD is still `474f98c86cfac97aec0e41e964056177094ca88c`. The latest verification run is GitHub Actions run `32961382968` against that SHA.
+The authoritative tested code SHA is `474f98c86cfac97aec0e41e964056177094ca88c`. A docs-only `[skip ci]` handoff commit may sit above it on the branch; that handoff commit intentionally does not represent a new browser verification state.
 
-A key reconciliation is required between the Actions step display and the uploaded raw evidence. The workflow marks the focused browser, serialized browser, and MV3 collector steps with `continue-on-error: true`. GitHub therefore reports those step *conclusions* as success in the job summary even when the underlying command failed. The workflow's own `Summarize verification` step records `steps.<id>.outcome`, and the uploaded `verification.json` contains:
+The workflow marks the focused browser, serialized browser, and MV3 collector steps with `continue-on-error: true`. Consequently, the Actions job API can show those step **conclusions** as success even when the underlying commands failed. The uploaded `verification.json`, built from `steps.<id>.outcome`, records:
 
 ```json
 {
@@ -94,23 +95,13 @@ A key reconciliation is required between the Actions step display and the upload
 }
 ```
 
-The final enforce step uses those same underlying outcomes. With `set -euo pipefail`, its first guard is `test "$DYNAMIC" = success`; because `DYNAMIC=failure`, that condition is the exact first failure and the step exits before the later MV3 JSON assertion.
+The final enforce step uses the same underlying outcomes. With `set -euo pipefail`, the first guard is `test "$DYNAMIC" = success`; since `DYNAMIC=failure`, this is the exact first failed condition. The later MV3 JSON assertion is never reached.
 
-## Raw browser evidence
+## Real-browser evidence
 
-### Focused Dynamic DOM
+Focused `tests/browser/dynamic-dom.e2e.test.js` produced only `TAP version 13` and then exceeded its 180-second bound.
 
-`dynamic-dom.tap` contains only:
-
-```text
-TAP version 13
-```
-
-The focused workflow command is bounded by `timeout 180s`; its underlying outcome is `failure`. This is consistent with a timeout/hang rather than an assertion-style test failure.
-
-### Serialized real-browser gate
-
-Seven browser files were attempted serially:
+The serialized gate attempted seven files:
 
 ```text
 exit_code=0   tests/browser/accessibility.e2e.test.js
@@ -122,51 +113,33 @@ exit_code=124 tests/browser/sentence-pipeline.e2e.test.js
 exit_code=124 tests/browser/trigger-controller.e2e.test.js
 ```
 
-The browser-runtime matrix itself completed `22/22` PASS before the later timeout set. Therefore the current evidence does **not** support a claim that the production runtime is broadly broken; it supports an unresolved D-owned real-browser lifecycle/completion blocker.
-
-### Browser harness / accessibility
-
-- Browser harness: `19/19` PASS.
-- Accessibility contract: `4/4` PASS.
-
-These are fresh from run `32961382968`, but they do not override the blocking real-browser timeouts.
+The browser-runtime matrix itself completed `22/22` PASS; browser harness completed `19/19` PASS; accessibility contract completed `4/4` PASS. These fresh passes are important, but they do not override the five bounded real-browser timeouts. The evidence therefore does not support claiming that production runtime is broadly broken; it supports an unresolved D-owned integration/lifecycle blocker.
 
 ## MV3 lifecycle evidence
 
-The MV3 collector failed before writing its lifecycle report/evaluation. `verification.json` therefore has:
+The collector did not produce `v0.4.0-worker-b-mv3-lifecycle.json` or `v0.4.0-worker-b-mv3-lifecycle-evaluation.json`; `verification.json` therefore contains `mv3Report: null` and `mv3Evaluation: null`.
 
-```json
-{
-  "mv3Report": null,
-  "mv3Evaluation": null
-}
-```
-
-The raw collector error is:
+Raw error:
 
 ```text
 browserContext.waitForEvent: Timeout 12000ms exceeded while waiting for event "serviceworker"
     at measureMv3 (.../scripts/collect-worker-b-browser-evidence.js:529:43)
 ```
 
-At the frozen source, that line is in the extension-reload section: the collector arms `context.waitForEvent('serviceworker', { timeout: 12_000 })`, invokes `chrome.runtime.reload()`, and waits for a distinct Playwright service-worker event. No event arrives within the bound. This is a D-owned lifecycle/evidence blocker; no MV3 gate PASS may be claimed from this run.
+At the frozen source this is the extension-reload section: the collector arms `context.waitForEvent('serviceworker', { timeout: 12_000 })`, invokes `chrome.runtime.reload()`, and waits for a distinct Playwright service-worker event. No event arrives within the bound. No MV3 lifecycle PASS may be claimed from this run.
 
 ## Artifact identity
 
-GitHub Actions artifact:
-
-- name: `worker-d-verification-32961382968-1`
+- GitHub Actions artifact: `worker-d-verification-32961382968-1`
 - artifact id: `9604628161`
 - size: `6861` bytes
 - SHA-256: `79a1224441a9031a3131de14721bf0fc55f91dd922095cd3d8246842cda97723`
 - expires: `2026-09-09T11:23:52Z`
 
-Local verification of the downloaded archive matched the GitHub-reported SHA-256.
+The downloaded archive was re-hashed locally and matched the GitHub-reported SHA-256.
 
-## Ownership / routing
+## Ownership and stop condition
 
-No Worker A production defect is established by this freeze. No Worker E performance defect is established or investigated. The blocking evidence is in browser completion/lifecycle orchestration and MV3 lifecycle evidence capture, which remains Worker D territory under the original ownership split.
+No Worker A production defect is established by this freeze. No Worker E performance defect is established or investigated. The blocking evidence remains in browser completion/lifecycle orchestration and MV3 lifecycle evidence capture, so the suspected owner remains Worker D.
 
-## Freeze decision
-
-**STOP Worker D here.** Do not start a second large browser repair loop. Architect should take over from the frozen tested code SHA `474f98c86cfac97aec0e41e964056177094ca88c` with the raw artifact above as the authoritative fresh evidence.
+**STOP Worker D here.** Architect should take over from frozen tested code SHA `474f98c86cfac97aec0e41e964056177094ca88c` and the raw artifact above.
