@@ -8,19 +8,19 @@ release:
 branch:
   name: integration/v0.4.0-final-convergence
   remote_head: self
-  source_head_before_ledger_commit: 1ef04836e79291f36b66654f6bbd88a82aa650bf
+  source_head_before_ledger_commit: 6fd65fdaa588ae264ca81084770ae38ad19fa204
 
 last_round:
-  blocker_id: B09
-  prompt: 01_B09_DEVELOPMENT_VALIDATOR_HYGIENE_PROMPT.md
+  blocker_id: B10
+  prompt: 02_B10_STANDALONE_VALIDATOR_FIXTURE_PROMPT.md
   result: resolved
   commits:
-    - 753df4f82b38f704ff5ecb8dc8a68402248fb1f3
-    - 2b1c31884f4a9f8f80bdc88dff5242634ef0d2b4
-    - 1ef04836e79291f36b66654f6bbd88a82aa650bf
+    - 51b030c32acbc663ca7b9290fba0f8c5f74c2359
+    - 81ffbd3c3658d85f31b1fa17df40bc6e9bceb686
+    - 6fd65fdaa588ae264ca81084770ae38ad19fa204
   ci_runs: []
   evidence:
-    - docs/validation/v0.4.0-b09-development-validator-hygiene.md
+    - docs/validation/v0.4.0-b10-standalone-validator-fixture.md
 
 blockers:
   B01_dynamic_child_insertion:
@@ -51,11 +51,11 @@ blockers:
     state: resolved
     evidence: docs/validation/v0.4.0-b09-development-validator-hygiene.md
   B10_standalone_validator_fixture:
-    state: open
-    evidence: HALO_LEARNING_V0.4.0_ARCHITECT_FINAL_FOCUSED_REPAIR_CLOSURE_2026-08-26.md
+    state: resolved
+    evidence: docs/validation/v0.4.0-b10-standalone-validator-fixture.md
 
 resolved_this_round:
-  - B09
+  - B10
 
 blockers_remaining:
   - B01
@@ -66,7 +66,6 @@ blockers_remaining:
   - B06
   - B07
   - B08
-  - B10
 
 release_debt:
   - release-evidence job remains non-blocking while captured validator summary can be red
