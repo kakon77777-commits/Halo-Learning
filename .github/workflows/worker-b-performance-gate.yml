@@ -22,3 +22,42 @@ jobs:
       - run: npm ci
       - name: Browser performance acceptance model
         run: node --test tests/browser-performance-metrics.test.js
+
+  real-chromium-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Collect real Chromium performance and MV3 evidence
+        run: |
+          rm -rf evidence/worker-b-final
+          timeout 1500s node scripts/collect-worker-b-browser-evidence.js evidence/worker-b-final | tee evidence/worker-b-final.log
+      - name: Verify generated performance and lifecycle evidence
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { evaluateBrowserPerformance, evaluateMv3Lifecycle } = require('./packages/quality/browser-performance');
+          const performance = JSON.parse(fs.readFileSync('evidence/worker-b-final/v0.4.0-worker-b-browser-performance.json', 'utf8'));
+          const mv3 = JSON.parse(fs.readFileSync('evidence/worker-b-final/v0.4.0-worker-b-mv3-lifecycle.json', 'utf8'));
+          if (!evaluateBrowserPerformance(performance).allBlockingPassed) throw new Error('performance evidence does not pass frozen gates');
+          if (!evaluateMv3Lifecycle(mv3).allBlockingPassed) throw new Error('MV3 evidence does not pass frozen gates');
+          if (!mv3.details || mv3.details.routeNavigation !== true) throw new Error('route-navigation evidence is missing');
+          console.log('fresh Worker B real Chromium evidence verified');
+          NODE
+      - name: Upload Worker B performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-b-performance-mv3-evidence
+          path: |
+            evidence/worker-b-final/
+            evidence/worker-b-final.log
+          if-no-files-found: error
+          retention-days: 14
