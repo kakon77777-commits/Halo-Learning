@@ -29,9 +29,12 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
+      - name: Prepare evidence directory
+        run: mkdir -p evidence
+
       - name: Record Chromium executable and version
         run: |
-          node - <<'NODE'
+          node - <<'NODE' | tee evidence/chromium.txt
           const { chromium } = require('playwright');
           const fs = require('node:fs');
           const { spawnSync } = require('node:child_process');
@@ -43,10 +46,43 @@ jobs:
           NODE
 
       - name: Browser harness supplement
-        run: node --test tests/browser-harness.test.js
+        id: harness
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test tests/browser-harness.test.js 2>&1 | tee evidence/browser-harness.tap
 
       - name: Accessibility contract
-        run: node --test tests/accessibility-contract.test.js
+        id: accessibility
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test tests/accessibility-contract.test.js 2>&1 | tee evidence/accessibility-contract.tap
 
       - name: Real-browser suites
-        run: npm run test:browser
+        id: browser
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm run test:browser 2>&1 | tee evidence/browser-e2e.tap
+
+      - name: Upload Worker B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-b-browser-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce gate result
+        if: always()
+        env:
+          HARNESS: ${{ steps.harness.outcome }}
+          ACCESSIBILITY: ${{ steps.accessibility.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+        run: |
+          printf 'harness=%s\naccessibility=%s\nbrowser=%s\n' "$HARNESS" "$ACCESSIBILITY" "$BROWSER"
+          test "$HARNESS" = success
+          test "$ACCESSIBILITY" = success
+          test "$BROWSER" = success
