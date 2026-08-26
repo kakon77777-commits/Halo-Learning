@@ -92,3 +92,32 @@
 .halo-pos-pron { color: var(--halo-pos-pron, #be185d) !important; }
 .halo-pos-aux { color: var(--halo-pos-aux, #c2410c) !important; }
 .halo-pos-modal { color: var(--halo-pos-modal, #6d28d9) !important; }
+
+
+/* v0.4 accessibility: visual projection never becomes the only carrier. */
+.halo-token::before,
+.halo-token::after {
+  speak: none;
+}
+
+[data-halo-owned]:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-halo-owned] {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .halo-token {
+    color: CanvasText !important;
+    outline: 1px dotted CanvasText;
+    text-decoration-color: CanvasText !important;
+    forced-color-adjust: auto;
+  }
+}

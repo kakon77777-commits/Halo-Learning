@@ -10,6 +10,7 @@
   const OWNED_PANEL = 'panel';
   const LABEL_POSITIONS = new Set(['top-right', 'top-left', 'bottom-right', 'inline']);
   const SAFE_PROJECTION_CLASS = /^halo-(?:pos|structure)-[a-z0-9-]+$/;
+  const LIVE_STATUS_MESSAGES = new Set(['Ready', 'Analyzing', 'Enriched', 'Blocked', 'Closed']);
   const PANEL_CSS = `
     :host { all: initial; }
     .halo-core-panel {
@@ -29,8 +30,15 @@
       overflow-wrap: anywhere;
     }
     .halo-core-panel h2 { margin: 0 0 0.5rem; font: 700 1.05rem/1.3 ui-sans-serif, system-ui, sans-serif; }
+    .halo-core-panel h2:focus { outline: 2px solid Highlight; outline-offset: 2px; }
     .halo-core-panel p { margin: 0.35rem 0; }
     .halo-core-status { font-size: 0.875rem; font-weight: 650; }
+    @media (prefers-reduced-motion: reduce) {
+      .halo-core-panel, .halo-core-panel * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+    }
+    @media (forced-colors: active) {
+      .halo-core-panel { color: CanvasText; background: Canvas; border-color: CanvasText; box-shadow: none; }
+    }
   `;
 
   function frozenResult(value) {
@@ -358,6 +366,7 @@
     panel.setAttribute('aria-labelledby', 'halo-panel-title');
     const title = document.createElement('h2');
     title.setAttribute('id', 'halo-panel-title');
+    title.setAttribute('tabindex', '-1');
     const body = document.createElement('p');
     body.className = 'halo-core-body';
     const status = document.createElement('p');
@@ -408,6 +417,7 @@
     let panelParts = null;
     let panelOpen = false;
     let panelCloseReason = null;
+    let returnFocus = null;
     let lastAction = 'idle';
 
     function track(node) {
@@ -966,10 +976,48 @@
       parts.host.parentNode.removeChild(parts.host);
     }
 
+    function isReturnFocusTarget(candidate, excludedHost) {
+      return Boolean(candidate && typeof candidate.focus === 'function' &&
+        candidate.isConnected !== false && candidate !== document.body &&
+        candidate !== document.documentElement && candidate !== excludedHost);
+    }
+
+    function focusSafely(candidate) {
+      if (!candidate || typeof candidate.focus !== 'function') return false;
+      try {
+        candidate.focus({ preventScroll: true });
+        return true;
+      } catch (_error) {
+        try { candidate.focus(); return true; } catch (_ignored) { return false; }
+      }
+    }
+
+    function nextReturnFocus(model, priorParts) {
+      const explicit = model && model.trigger;
+      if (isReturnFocusTarget(explicit, priorParts && priorParts.host)) return explicit;
+      if (isReturnFocusTarget(returnFocus, priorParts && priorParts.host)) return returnFocus;
+      const active = document.activeElement;
+      return isReturnFocusTarget(active, priorParts && priorParts.host) ? active : null;
+    }
+
+    function configureLiveStatus(parts, statusText) {
+      parts.status.textContent = statusText;
+      if (LIVE_STATUS_MESSAGES.has(statusText)) {
+        parts.status.setAttribute('role', 'status');
+        parts.status.setAttribute('aria-live', 'polite');
+        parts.status.setAttribute('aria-atomic', 'true');
+      } else {
+        parts.status.removeAttribute('role');
+        parts.status.setAttribute('aria-live', 'off');
+        parts.status.removeAttribute('aria-atomic');
+      }
+    }
+
     function closePanel(reason) {
       const closeReason = reason === undefined ? 'closed' : nonemptyString(reason, 'reason', 128);
       if (!panelOpen || !panelParts) return frozenResult({ action: 'noop', reason: panelCloseReason });
       const closingParts = panelParts;
+      const focusAfterClose = returnFocus;
       const location = nodeLocation(closingParts.host);
       runSuppressedTransaction(
         () => removePanelHost(closingParts),
@@ -979,6 +1027,8 @@
       panelOpen = false;
       panelCapabilities.delete(closingParts.host);
       panelCloseReason = closeReason;
+      returnFocus = null;
+      focusSafely(focusAfterClose);
       lastAction = 'panel-closed';
       return frozenResult({ action: 'closed', reason: closeReason });
     }
@@ -992,6 +1042,7 @@
         snapshots.push(captureSubtree(renderRoot));
       }
       const closingParts = panelOpen ? panelParts : null;
+      const focusAfterRemoveAll = closingParts ? returnFocus : null;
       const panelLocation = closingParts ? nodeLocation(closingParts.host) : null;
       let wrappers = 0;
       const releasedWrappers = [];
@@ -1015,6 +1066,8 @@
         panelParts = null;
         panelOpen = false;
         panelCloseReason = 'remove-all';
+        returnFocus = null;
+        focusSafely(focusAfterRemoveAll);
       }
       lastAction = 'removed-all';
       return frozenResult({ action: 'removed-all', wrappers });
@@ -1031,11 +1084,12 @@
       const viewport = { width: Number(view.innerWidth) || 0, height: Number(view.innerHeight) || 0 };
       const container = document.body || document.documentElement;
       if (!container || typeof container.appendChild !== 'function') throw new TypeError('panel container: is unavailable');
+      const priorParts = panelOpen ? panelParts : null;
+      const focusAfterPanel = nextReturnFocus(model, priorParts);
       const nextParts = createCorePanel(document);
       nextParts.title.textContent = titleText;
       nextParts.body.textContent = bodyText;
-      nextParts.status.textContent = statusText;
-      const priorParts = panelOpen ? panelParts : null;
+      configureLiveStatus(nextParts, statusText);
       const nextLocation = nodeLocation(nextParts.host);
       const priorLocation = priorParts ? nodeLocation(priorParts.host) : null;
       let position;
@@ -1057,6 +1111,8 @@
       panelCapabilities.add(nextParts.host);
       if (priorParts) panelCapabilities.delete(priorParts.host);
       panelCloseReason = null;
+      returnFocus = focusAfterPanel;
+      focusSafely(nextParts.title);
       lastAction = 'panel-opened';
       return frozenResult({ action: 'opened', position });
     }
