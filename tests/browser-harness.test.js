@@ -103,7 +103,17 @@ test('comparison verification requires candidate manifest hashes and a selected 
           condition: 'long-tasks', contextIndex, durationsMs: []
         })) }
       },
-      measurements: { coldRequiredShardsP95Ms: 10, warmLookupP95Ms: 1, longTaskMaxMs: 0 },
+      measurements: {
+        coldRequiredShardsP50Ms: 10,
+        coldRequiredShardsP95Ms: 10,
+        coldRequiredShardsMaxMs: 10,
+        warmLookupP50Ms: 1,
+        warmLookupP95Ms: 1,
+        warmLookupMaxMs: 1,
+        longTaskP50Ms: 0,
+        longTaskP95Ms: 0,
+        longTaskMaxMs: 0
+      },
       budgets: { coldRequiredShardsP95Ms: 300, warmLookupP95Ms: 100, longTaskMaxMs: 50 },
       gates: { coldRequiredShards: true, warmLookup: true, longTask: true },
       allBlockingPassed: true
