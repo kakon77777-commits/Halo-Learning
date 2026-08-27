@@ -1,5 +1,53 @@
 'use strict';
 
+async function waitForExtensionServiceWorkerVersion(options) {
+  const { session, scriptUrl, previousVersionId } = options || {};
+  const timeoutMs = Number.isFinite(options && options.timeoutMs) ? options.timeoutMs : 5000;
+  const schedule = options && options.setTimeout ? options.setTimeout : setTimeout;
+  const unschedule = options && options.clearTimeout ? options.clearTimeout : clearTimeout;
+  if (!session || typeof session.send !== 'function' || typeof session.on !== 'function' || typeof session.off !== 'function' ||
+      typeof schedule !== 'function' || typeof unschedule !== 'function' ||
+      typeof scriptUrl !== 'string' || !scriptUrl.startsWith('chrome-extension://') ||
+      typeof previousVersionId !== 'string' || previousVersionId.length === 0) {
+    throw new TypeError('CDP session, extension worker script URL, and previous version id are required');
+  }
+
+  let timer;
+  let listener;
+  let settled = false;
+  const cleanup = () => {
+    if (timer !== undefined) { const active = timer; timer = undefined; unschedule(active); }
+    if (listener) { const active = listener; listener = null; session.off('ServiceWorker.workerVersionUpdated', active); }
+  };
+  const result = new Promise((resolve, reject) => {
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    listener = (event) => {
+      const fresh = (event && Array.isArray(event.versions) ? event.versions : []).find((version) =>
+        version && version.scriptURL === scriptUrl && version.status === 'activated' &&
+        version.runningStatus === 'running' && typeof version.versionId === 'string' &&
+        version.versionId.length > 0 && version.versionId !== previousVersionId);
+      if (!fresh || settled) return;
+      settled = true;
+      const selected = fresh.versionId;
+      cleanup();
+      resolve(selected);
+    };
+    timer = schedule(() => fail(new Error('CDP fresh service-worker version timed out')), timeoutMs);
+    session.on('ServiceWorker.workerVersionUpdated', listener);
+    try { Promise.resolve(session.send('ServiceWorker.enable')).catch(fail); } catch (error) { fail(error); }
+  });
+  try {
+    return await result;
+  } finally {
+    cleanup();
+  }
+}
+
 async function stopExtensionServiceWorker(options) {
   const { session, scriptUrl } = options || {};
   const timeoutMs = Number.isFinite(options && options.timeoutMs) ? options.timeoutMs : 5000;
@@ -68,4 +116,4 @@ async function stopExtensionServiceWorker(options) {
     cleanupStop();
   }
 }
-module.exports = Object.freeze({ stopExtensionServiceWorker });
+module.exports = Object.freeze({ stopExtensionServiceWorker, waitForExtensionServiceWorkerVersion });
