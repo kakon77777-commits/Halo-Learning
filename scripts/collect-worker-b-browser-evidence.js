@@ -11,7 +11,7 @@ const {
 } = require('../tests/browser/helpers/extension-harness');
 const {
   stopExtensionServiceWorker,
-  waitForExtensionServiceWorkerVersion
+  waitForExtensionServiceWorkerTargetReplacement
 } = require('../tests/browser/helpers/service-worker-cdp');
 const {
   prepareShardCandidateExtension,
@@ -272,14 +272,14 @@ async function measureLexical(chromiumExecutable) {
   const comparison = await runShardComparison({ executablePath: chromiumExecutable });
   verifyBrowserShardComparison(comparison);
   const selectionPassed = Boolean(comparison.selection && comparison.selection.status === 'selected');
-const selectedBucketCount = selectionPassed ? comparison.selection.selectedBucketCount : null;
-const diagnosticBucketCount = selectedBucketCount || 128;
-const artifacts = buildBrowserRuntimeArtifacts({
-  ...CORPORA,
-  builtAt: '2026-08-25T00:00:00.000Z',
-  bucketCount: diagnosticBucketCount,
-  selectionStatus: selectionPassed ? 'selected-by-browser-comparison' : 'worker-b-diagnostic-only'
-});
+  const selectedBucketCount = selectionPassed ? comparison.selection.selectedBucketCount : null;
+  const diagnosticBucketCount = selectedBucketCount || 128;
+  const artifacts = buildBrowserRuntimeArtifacts({
+    ...CORPORA,
+    builtAt: '2026-08-25T00:00:00.000Z',
+    bucketCount: diagnosticBucketCount,
+    selectionStatus: selectionPassed ? 'selected-by-browser-comparison' : 'worker-b-diagnostic-only'
+  });
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'halo-worker-b-lexical-'));
   try {
     const extensionRoot = prepareShardCandidateExtension(artifacts, temporaryRoot);
@@ -494,10 +494,6 @@ async function measureMv3(chromiumExecutable, artifacts) {
     } finally {
       await cdp.detach().catch(() => {});
     }
-    // Playwright keeps the same Worker handle across MV3 idle/restart cycles and does not
-    // emit a second `serviceworker` event. The CDP stop above proves suspension; a successful
-    // runtime message on the retained handle proves browser-driven restart, while the runtime
-    // lifetime id proves a fresh service-worker lifetime/cache reload.
     status = await page.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));
     const restartedLifetime = status && status.networkActivity && status.networkActivity.lifetimeId;
     details.workerRestart = {
@@ -533,39 +529,28 @@ async function measureMv3(chromiumExecutable, artifacts) {
     const workerScriptUrl = worker.url();
     let reloadObserverPage = null;
     let reloadCdp = null;
-    let currentVersionId = null;
-    let reloadedVersionId = null;
+    let targetReplacement = null;
     try {
       reloadObserverPage = await context.newPage();
       await reloadObserverPage.goto('data:text/html,<p>mv3-reload-observer</p>');
       reloadCdp = await context.newCDPSession(reloadObserverPage);
-      currentVersionId = await waitForExtensionServiceWorkerVersion({
+      targetReplacement = await waitForExtensionServiceWorkerTargetReplacement({
         session: reloadCdp,
         scriptUrl: workerScriptUrl,
-        previousVersionId: stopped,
-        timeoutMs: 8_000
+        timeoutMs: 12_000,
+        action: async () => {
+          const reloadScheduled = await worker.evaluate(() => {
+            setTimeout(() => chrome.runtime.reload(), 0);
+            return true;
+          }).catch(() => false);
+          if (!reloadScheduled) throw new Error('extension reload command could not be scheduled');
+        }
       });
-      const freshVersion = waitForExtensionServiceWorkerVersion({
-        session: reloadCdp,
-        scriptUrl: workerScriptUrl,
-        previousVersionId: currentVersionId,
-        timeoutMs: 12_000
-      });
-      const reloadScheduled = await worker.evaluate(() => {
-        setTimeout(() => chrome.runtime.reload(), 0);
-        return true;
-      }).catch(() => false);
-      if (!reloadScheduled) throw new Error('extension reload command could not be scheduled');
-      reloadedVersionId = await freshVersion;
     } finally {
       if (reloadCdp) await reloadCdp.detach().catch(() => {});
       if (reloadObserverPage) await reloadObserverPage.close().catch(() => {});
     }
 
-    // A fresh activated/running worker version is the authoritative reload boundary.
-    // Only after Chromium reports that boundary do we open an extension page to read
-    // the new runtime lifetime. This avoids treating transient popup navigation during
-    // extension reload as proof that the reload itself failed.
     const reloadDeadline = Date.now() + 8_000;
     let reloadPage = null;
     let reloadStatus = null;
@@ -596,18 +581,19 @@ async function measureMv3(chromiumExecutable, artifacts) {
       const detail = reloadObservationError && reloadObservationError.message
         ? `: ${reloadObservationError.message}`
         : '';
-      throw new Error(`extension reload produced worker version ${reloadedVersionId || 'unknown'} but no fresh ready runtime lifetime${detail}`);
+      throw new Error(`extension reload replaced service-worker target ${targetReplacement && targetReplacement.oldTargetId || 'unknown'} -> ${targetReplacement && targetReplacement.newTargetId || 'unknown'} but no fresh ready runtime lifetime${detail}`);
     }
     const reloadedLifetime = reloadStatus.networkActivity.lifetimeId;
     const observedWorker = context.serviceWorkers().find((candidate) =>
       new URL(candidate.url()).hostname === extensionId) || null;
     gates.extensionReload = Boolean(priorReloadLifetime && reloadedLifetime !== priorReloadLifetime &&
-      currentVersionId && reloadedVersionId && currentVersionId !== reloadedVersionId);
+      targetReplacement && targetReplacement.oldTargetId && targetReplacement.newTargetId &&
+      targetReplacement.oldTargetId !== targetReplacement.newTargetId);
     details.extensionReloadStatus = {
       priorLifetime: priorReloadLifetime,
       reloadedLifetime,
-      currentVersionId,
-      reloadedVersionId,
+      oldTargetId: targetReplacement.oldTargetId,
+      newTargetId: targetReplacement.newTargetId,
       workerHandleReused: observedWorker === priorReloadWorker,
       status: reloadStatus
     };
