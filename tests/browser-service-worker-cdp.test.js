@@ -1,7 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { stopExtensionServiceWorker } = require('./browser/helpers/service-worker-cdp');
+const {
+  stopExtensionServiceWorker,
+  waitForExtensionServiceWorkerVersion
+} = require('./browser/helpers/service-worker-cdp');
 
 function controlledTimers() {
   let next = 0;
@@ -117,4 +120,28 @@ test('CDP stop requires listener removal support', async () => {
     session: { send() {}, on() {} },
     scriptUrl: 'chrome-extension://abc/src/service-worker.js'
   }), /on\/off/);
+});
+
+test('CDP fresh-version wait ignores the prior version and other extension workers without leaking resources', async () => {
+  const timers = controlledTimers();
+  const url = 'chrome-extension://abc/src/service-worker.js';
+  const session = eventSession((method, _params, self) => {
+    if (method !== 'ServiceWorker.enable') return;
+    self.emit({ versions: [
+      { versionId: 'v7', scriptURL: url, status: 'activated', runningStatus: 'running' },
+      { versionId: 'foreign', scriptURL: 'chrome-extension://other/src/service-worker.js', status: 'activated', runningStatus: 'running' }
+    ] });
+    self.emit({ versions: [{ versionId: 'v8', scriptURL: url, status: 'activated', runningStatus: 'running' }] });
+  });
+  assert.equal(await waitForExtensionServiceWorkerVersion({
+    session,
+    scriptUrl: url,
+    previousVersionId: 'v7',
+    timeoutMs: 50,
+    setTimeout: timers.setTimeout,
+    clearTimeout: timers.clearTimeout
+  }), 'v8');
+  assert.deepEqual(session.calls, [['ServiceWorker.enable', undefined]]);
+  assert.equal(session.listeners.size, 0);
+  assert.equal(timers.count(), 0);
 });
