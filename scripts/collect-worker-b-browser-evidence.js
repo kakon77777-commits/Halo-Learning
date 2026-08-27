@@ -9,7 +9,10 @@ const {
   launchExtension,
   resolveChromiumExecutable
 } = require('../tests/browser/helpers/extension-harness');
-const { stopExtensionServiceWorker } = require('../tests/browser/helpers/service-worker-cdp');
+const {
+  stopExtensionServiceWorker,
+  waitForExtensionServiceWorkerVersion
+} = require('../tests/browser/helpers/service-worker-cdp');
 const {
   prepareShardCandidateExtension,
   runShardColdContext,
@@ -527,12 +530,43 @@ async function measureMv3(chromiumExecutable, artifacts) {
 
     const priorReloadWorker = worker;
     const priorReloadLifetime = restartedLifetime;
-    await worker.evaluate(() => {
-      setTimeout(() => chrome.runtime.reload(), 0);
-      return true;
-    }).catch(() => false);
+    const workerScriptUrl = worker.url();
+    let reloadObserverPage = null;
+    let reloadCdp = null;
+    let currentVersionId = null;
+    let reloadedVersionId = null;
+    try {
+      reloadObserverPage = await context.newPage();
+      await reloadObserverPage.goto('data:text/html,<p>mv3-reload-observer</p>');
+      reloadCdp = await context.newCDPSession(reloadObserverPage);
+      currentVersionId = await waitForExtensionServiceWorkerVersion({
+        session: reloadCdp,
+        scriptUrl: workerScriptUrl,
+        previousVersionId: stopped,
+        timeoutMs: 8_000
+      });
+      const freshVersion = waitForExtensionServiceWorkerVersion({
+        session: reloadCdp,
+        scriptUrl: workerScriptUrl,
+        previousVersionId: currentVersionId,
+        timeoutMs: 12_000
+      });
+      const reloadScheduled = await worker.evaluate(() => {
+        setTimeout(() => chrome.runtime.reload(), 0);
+        return true;
+      }).catch(() => false);
+      if (!reloadScheduled) throw new Error('extension reload command could not be scheduled');
+      reloadedVersionId = await freshVersion;
+    } finally {
+      if (reloadCdp) await reloadCdp.detach().catch(() => {});
+      if (reloadObserverPage) await reloadObserverPage.close().catch(() => {});
+    }
 
-    const reloadDeadline = Date.now() + 12_000;
+    // A fresh activated/running worker version is the authoritative reload boundary.
+    // Only after Chromium reports that boundary do we open an extension page to read
+    // the new runtime lifetime. This avoids treating transient popup navigation during
+    // extension reload as proof that the reload itself failed.
+    const reloadDeadline = Date.now() + 8_000;
     let reloadPage = null;
     let reloadStatus = null;
     let reloadObservationError = null;
@@ -562,15 +596,18 @@ async function measureMv3(chromiumExecutable, artifacts) {
       const detail = reloadObservationError && reloadObservationError.message
         ? `: ${reloadObservationError.message}`
         : '';
-      throw new Error(`extension reload did not expose a fresh ready runtime lifetime${detail}`);
+      throw new Error(`extension reload produced worker version ${reloadedVersionId || 'unknown'} but no fresh ready runtime lifetime${detail}`);
     }
     const reloadedLifetime = reloadStatus.networkActivity.lifetimeId;
     const observedWorker = context.serviceWorkers().find((candidate) =>
       new URL(candidate.url()).hostname === extensionId) || null;
-    gates.extensionReload = Boolean(priorReloadLifetime && reloadedLifetime !== priorReloadLifetime);
+    gates.extensionReload = Boolean(priorReloadLifetime && reloadedLifetime !== priorReloadLifetime &&
+      currentVersionId && reloadedVersionId && currentVersionId !== reloadedVersionId);
     details.extensionReloadStatus = {
       priorLifetime: priorReloadLifetime,
       reloadedLifetime,
+      currentVersionId,
+      reloadedVersionId,
       workerHandleReused: observedWorker === priorReloadWorker,
       status: reloadStatus
     };
