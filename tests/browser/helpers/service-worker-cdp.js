@@ -48,6 +48,78 @@ async function waitForExtensionServiceWorkerVersion(options) {
   }
 }
 
+async function waitForExtensionServiceWorkerTargetReplacement(options) {
+  const { session, scriptUrl, action } = options || {};
+  const timeoutMs = Number.isFinite(options && options.timeoutMs) ? options.timeoutMs : 5000;
+  const schedule = options && options.setTimeout ? options.setTimeout : setTimeout;
+  const unschedule = options && options.clearTimeout ? options.clearTimeout : clearTimeout;
+  if (!session || typeof session.send !== 'function' || typeof session.on !== 'function' || typeof session.off !== 'function' ||
+      typeof schedule !== 'function' || typeof unschedule !== 'function' ||
+      typeof scriptUrl !== 'string' || !scriptUrl.startsWith('chrome-extension://') ||
+      typeof action !== 'function') {
+    throw new TypeError('CDP session, extension worker script URL, and reload action are required');
+  }
+
+  await session.send('Target.setDiscoverTargets', { discover: true });
+  const snapshot = await session.send('Target.getTargets');
+  const current = (snapshot && Array.isArray(snapshot.targetInfos) ? snapshot.targetInfos : []).find((target) =>
+    target && target.type === 'service_worker' && target.url === scriptUrl &&
+    typeof target.targetId === 'string' && target.targetId.length > 0);
+  if (!current) throw new Error('current extension service-worker target is unavailable');
+
+  let timer;
+  let createdListener;
+  let destroyedListener;
+  let settled = false;
+  let oldDestroyed = false;
+  let replacementTargetId = null;
+  const cleanup = () => {
+    if (timer !== undefined) { const active = timer; timer = undefined; unschedule(active); }
+    if (createdListener) { const active = createdListener; createdListener = null; session.off('Target.targetCreated', active); }
+    if (destroyedListener) { const active = destroyedListener; destroyedListener = null; session.off('Target.targetDestroyed', active); }
+  };
+
+  return new Promise((resolve, reject) => {
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const maybeResolve = () => {
+      if (settled || !oldDestroyed || !replacementTargetId) return;
+      settled = true;
+      const result = Object.freeze({
+        oldTargetId: current.targetId,
+        newTargetId: replacementTargetId
+      });
+      cleanup();
+      resolve(result);
+    };
+    createdListener = (event) => {
+      const target = event && event.targetInfo;
+      if (!target || target.type !== 'service_worker' || target.url !== scriptUrl ||
+          typeof target.targetId !== 'string' || target.targetId.length === 0 ||
+          target.targetId === current.targetId) return;
+      replacementTargetId = target.targetId;
+      maybeResolve();
+    };
+    destroyedListener = (event) => {
+      if (!event || event.targetId !== current.targetId) return;
+      oldDestroyed = true;
+      maybeResolve();
+    };
+    timer = schedule(() => fail(new Error('CDP extension service-worker target replacement timed out')), timeoutMs);
+    session.on('Target.targetCreated', createdListener);
+    session.on('Target.targetDestroyed', destroyedListener);
+    try {
+      Promise.resolve(action()).catch(fail);
+    } catch (error) {
+      fail(error);
+    }
+  }).finally(cleanup);
+}
+
 async function stopExtensionServiceWorker(options) {
   const { session, scriptUrl } = options || {};
   const timeoutMs = Number.isFinite(options && options.timeoutMs) ? options.timeoutMs : 5000;
@@ -116,4 +188,8 @@ async function stopExtensionServiceWorker(options) {
     cleanupStop();
   }
 }
-module.exports = Object.freeze({ stopExtensionServiceWorker, waitForExtensionServiceWorkerVersion });
+module.exports = Object.freeze({
+  stopExtensionServiceWorker,
+  waitForExtensionServiceWorkerTargetReplacement,
+  waitForExtensionServiceWorkerVersion
+});
