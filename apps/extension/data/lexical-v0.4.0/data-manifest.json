@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "release": "v0.4.0",
+  "generatedAt": "2026-08-25T00:00:00.000Z",
+  "selectionStatus": "selected-by-browser-comparison",
+  "bucketCount": 64,
+  "locales": [
+    "en",
+    "zh-Hant"
+  ],
+  "manifest": {
+    "path": "manifest.json",
+    "format": "halo-browser-lexical-manifest-v1",
+    "rootHash": {
+      "algorithm": "sha256",
+      "value": "50bd7b032a48cb0536e2aff5138e70014edc510baf3afabec053f180efd21031"
+    },
+    "hash": {
+      "algorithm": "sha256",
+      "value": "8d5e11ccf28f4872879ed84444d99c317969892bacfc1048110c6243f56e3d92"
+    },
+    "shardCount": 128
+  },
+  "sourceIndex": {
+    "format": "halo-runtime-lexical-index-v1",
+    "hash": {
+      "algorithm": "sha256",
+      "value": "f2a63b7b5af3673a7faea6acaed53776cb94bcf4146949d965a37b76003fca21"
+    }
+  },
+  "datasets": [
+    {
+      "attributionRequirements": [
+        "Attribute CC-CEDICT and MDBG, retain the embedded publisher and license notice, and link CC BY-SA 4.0.",
+        "Indicate whether the dataset or generated lexical projection was modified."
+      ],
+      "bundled": true,
+      "datasetId": "cc-cedict-v1-2026-08-24",
+      "files": [
+        {
+          "bytes": 9838770,
+          "path": "cedict_1_0_ts_utf-8_mdbg.txt",
+          "role": "dictionary",
+          "sha256": "27b881871e6ca5cacbc376e5b0fd0d60187e8940f9e6b2b7ac83d3c1f05bf5d4"
+        }
+      ],
+      "formatVersion": "CC-CEDICT-V1",
+      "hash": {
+        "algorithm": "sha256",
+        "value": "205018c6e766de913f808a5a8471163ceca96ea8cca053883baba8bd55545541"
+      },
+      "license": {
+        "attributionRequired": true,
+        "commercialUse": "allowed",
+        "licenseId": "CC-BY-SA-4.0",
+        "name": "Creative Commons Attribution-ShareAlike 4.0 International",
+        "redistribution": "share-alike",
+        "redistributionNote": "Attribute CC-CEDICT/MDBG, link the license, indicate changes, and distribute adaptations under CC BY-SA 4.0.",
+        "schemaVersion": 1,
+        "shareAlike": true,
+        "url": "https://creativecommons.org/licenses/by-sa/4.0/",
+        "verificationUrl": "https://www.mdbg.net/chinese/dictionary?page=cc-cedict",
+        "verifiedAt": "2026-08-25"
+      },
+      "locale": "zh-Hant",
+      "name": "CC-CEDICT verified MDBG release — Version 1 edition",
+      "redistributionNote": "The exact verified V1 edition bytes are bundled for reproducible local builds under CC BY-SA 4.0.",
+      "redistributionRequirements": [
+        "Redistribute the dataset and adaptations under CC BY-SA 4.0.",
+        "Retain attribution, license link, and change notice."
+      ],
+      "releaseIdentity": "MDBG-2026-08-24T05:05:01Z-124925",
+      "schemaVersion": 1,
+      "source": {
+        "acquiredAt": "2026-08-25T08:00:00.000Z",
+        "canonicalUrl": "https://www.mdbg.net/chinese/dictionary?page=cc-cedict",
+        "publisher": "MDBG / CC-CEDICT community",
+        "retrievalMode": "verified-release",
+        "transport": {
+          "kind": "pinned-public-mirror",
+          "note": "Retrieval transport only. MDBG prohibits automated download; the pinned mirror bytes were matched to the official release timestamp, entry count, V1 header, and license notice.",
+          "revision": "6514f6822e8dc582fb924a00e1afdf5bbc66fe62",
+          "url": "https://github.com/rhcarvalho/cedict"
+        }
+      },
+      "version": "2026-08-24T05:05:01Z"
+    },
+    {
+      "attributionRequirements": [
+        "Retain the WordNet 3.0 copyright, license, and disclaimer with every copy of the database, documentation, or modification.",
+        "Attribute Princeton WordNet 3.0 in third-party notices."
+      ],
+      "bundled": true,
+      "datasetId": "princeton-wordnet-3.0",
+      "files": [
+        {
+          "bytes": 23019,
+          "path": "adj.exc",
+          "role": "adjective-exceptions",
+          "sha256": "8824cc24bbedd797b9702316b27f07cd4c2b76b629539f0a1276f03926758016"
+        },
+        {
+          "bytes": 85,
+          "path": "adv.exc",
+          "role": "adverb-exceptions",
+          "sha256": "e7291461b629abfe63301bbe1998cee09fd575ed7107abd7ea9763adb05bf0a8"
+        },
+        {
+          "bytes": 3155426,
+          "path": "data.adj",
+          "role": "adjective",
+          "sha256": "f24b635368be441501c9b8001e9271fd3b30b203f00d91e332979e6f8fe35646"
+        },
+        {
+          "bytes": 516696,
+          "path": "data.adv",
+          "role": "adverb",
+          "sha256": "e66dbbda0e0359e41b7f225bff71dd0c263dc7c66c1b61abc9ba334973d92979"
+        },
+        {
+          "bytes": 15300280,
+          "path": "data.noun",
+          "role": "noun",
+          "sha256": "489f145e0f68877c0be5bd0eb4117adaaac52f38f6204eb8d85dbe2158b614cc"
+        },
+        {
+          "bytes": 2772517,
+          "path": "data.verb",
+          "role": "verb",
+          "sha256": "7fff397e93b4fb152fdaee116747cf1c40d7badedccb4b63f5503e8e962d9102"
+        },
+        {
+          "bytes": 1625,
+          "path": "LICENSE",
+          "role": "license",
+          "sha256": "7731175a77952e259390b496fab905e57118b8d19ad3a8383c67eee724ff443f"
+        },
+        {
+          "bytes": 38301,
+          "path": "noun.exc",
+          "role": "noun-exceptions",
+          "sha256": "2b5d675c380b39ecf595af9fa9d4e7feb1d58c643b0bff08c40ed5bfe41fab7a"
+        },
+        {
+          "bytes": 38033,
+          "path": "verb.exc",
+          "role": "verb-exceptions",
+          "sha256": "dbbcf9a601b2d77e934e413b91d90e88ec7f933a8b77cfc00602a923b891b42c"
+        }
+      ],
+      "formatVersion": "WordNet-database-files-3.0",
+      "hash": {
+        "algorithm": "sha256",
+        "value": "9c082f9c9d193e0458e89bc5a290757d2d9fec54c8bed54eb2f85ad588cf60a2"
+      },
+      "license": {
+        "attributionRequired": true,
+        "commercialUse": "allowed",
+        "licenseId": "WordNet-3.0",
+        "name": "Princeton WordNet 3.0 License",
+        "redistribution": "allowed-with-notice",
+        "redistributionNote": "Preserve the WordNet copyright, license, and disclaimer on every copy or modification; do not use Princeton's name in advertising or publicity.",
+        "schemaVersion": 1,
+        "shareAlike": false,
+        "url": "https://wordnet.princeton.edu/documentation/wnlicens7wn",
+        "verificationUrl": "https://wordnet.princeton.edu/documentation/wnlicens7wn",
+        "verifiedAt": "2026-08-25"
+      },
+      "locale": "en",
+      "name": "Princeton WordNet 3.0",
+      "redistributionNote": "The verified WordNet 3.0 dictionary, exception files, and complete upstream LICENSE are bundled for reproducible local builds.",
+      "redistributionRequirements": [
+        "Preserve the complete license and copyright notice.",
+        "Do not use Princeton University or Princeton for advertising or publicity."
+      ],
+      "releaseIdentity": "Princeton-WordNet-3.0",
+      "schemaVersion": 1,
+      "source": {
+        "acquiredAt": "2026-08-25T08:00:00.000Z",
+        "canonicalUrl": "https://wordnetcode.princeton.edu/3.0/",
+        "publisher": "Princeton University",
+        "retrievalMode": "verified-release",
+        "transport": {
+          "kind": "direct-upstream",
+          "note": "Direct download from the official Princeton WordNet 3.0 distribution index.",
+          "revision": "WordNet-3.0.tar.gz@sha256:640db279c949a88f61f851dd54ebbb22d003f8b90b85267042ef85a3781d3a52",
+          "url": "https://wordnetcode.princeton.edu/3.0/WordNet-3.0.tar.gz"
+        }
+      },
+      "version": "3.0"
+    }
+  ],
+  "statistics": {
+    "lexicalRowCount": 331903,
+    "englishRowCount": 206978,
+    "chineseRowCount": 124925,
+    "morphologyRowCount": 6052,
+    "rejectedCount": 0,
+    "shardCount": 128
+  },
+  "limitation": null
+}
