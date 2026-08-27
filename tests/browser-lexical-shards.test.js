@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const Shards = require('../packages/lexical-index/browser-lexical-shards');
 const BrowserBuild = require('../scripts/build-browser-lexical-runtime');
@@ -108,6 +109,22 @@ test('same corpus and bucket count produce byte-identical manifest and shards', 
   assert.deepEqual(first.serializedShards, second.serializedShards);
   assert.equal(Object.keys(first.serializedShards).length, 128);
   assert.equal(first.manifest.statistics.rejectedCount, 0);
+});
+
+test('build-time shard attestation cryptographically binds the exact canonical delivered bytes', () => {
+  const artifacts = Shards.buildBrowserLexicalArtifacts(FIXTURE_ENTRIES, fixtureOptions(64));
+  for (const descriptor of artifacts.manifest.shards) {
+    const serialized = artifacts.serializedShards[descriptor.path];
+    assert.deepEqual(descriptor.validation, {
+      id: 'halo-browser-lexical-build-validation',
+      version: '1.0.0'
+    });
+    assert.equal(descriptor.serializedHash.algorithm, 'sha256');
+    assert.equal(
+      descriptor.serializedHash.value,
+      crypto.createHash('sha256').update(serialized, 'utf8').digest('hex')
+    );
+  }
 });
 
 test('every shard uses a canonical local gloss table and binds to the manifest root', () => {

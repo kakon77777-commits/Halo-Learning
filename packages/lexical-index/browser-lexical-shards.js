@@ -6,6 +6,7 @@ const SCHEMA_VERSION = 1;
 const MANIFEST_FORMAT = 'halo-browser-lexical-manifest-v1';
 const SHARD_FORMAT = 'halo-browser-lexical-shard-v1';
 const BUILDER = Object.freeze({ id: 'halo-browser-lexical-builder', version: '1.0.0' });
+const BUILD_VALIDATION = Object.freeze({ id: 'halo-browser-lexical-build-validation', version: '1.0.0' });
 const ROUTING = Object.freeze({
   en: Object.freeze({ id: 'fnv1a-normalized-surface', version: '1.0.0' }),
   'zh-Hant': Object.freeze({ id: 'fnv1a-first-code-point', version: '1.0.0' })
@@ -244,7 +245,9 @@ function buildBrowserLexicalArtifacts(entryValues, options) {
           morphology: morphologyRows.length,
           glosses: glosses.length
         }),
-        hash: document.hash
+        hash: document.hash,
+        serializedHash: hash(serialized),
+        validation: BUILD_VALIDATION
       }));
     }
   }
@@ -264,6 +267,7 @@ module.exports = Object.freeze({
   MANIFEST_FORMAT,
   SHARD_FORMAT,
   BUILDER,
+  BUILD_VALIDATION,
   ROUTING,
   routeEnglishSurface,
   routeChineseSurface,

@@ -155,7 +155,7 @@ test('cold-path decomposition reports stable p50 p95 max stage statistics and lo
   });
 });
 
-test('canonical row-order validation encodes each dense lexical row at most once for ordering', async () => {
+test('build-attested runtime loading removes per-row canonical/routing encoding from the cold path', async () => {
   const rowCount = 32;
   const built = denseEnglishShardArtifacts(rowCount);
   const manifest = await BrowserLoader.loadBrowserLexicalManifest(built.serializedManifest);
@@ -174,19 +174,20 @@ test('canonical row-order validation encodes each dense lexical row at most once
     }
   };
   try {
-    await BrowserLoader.loadBrowserLexicalShard(
-      built.serializedShards[descriptor.path],
-      manifest
-    );
+    const runtime = BrowserLoader.createBrowserLexicalRuntime({
+      manifest,
+      readText: async (resourcePath) => built.serializedShards[resourcePath]
+    });
+    await runtime.ensureShards([descriptor.id]);
   } finally {
     global.TextEncoder = OriginalTextEncoder;
   }
 
-  // SHA input + descriptor bytes + one ordering encoding per lexical row +
-  // one routing encoding per lexical row. Allow two calls of headroom for
-  // future fixed-size metadata checks, but not the previous adjacent-pair re-encoding.
+  // The production runtime path is bound to exact builder-attested serialized bytes.
+  // Row-order and routing invariants were established by the deterministic builder,
+  // so cold loading must not re-encode work proportional to lexical row count.
   assert.ok(
-    encodeCalls <= (rowCount * 2) + 4,
-    `expected linear row encoding work, observed ${encodeCalls} TextEncoder.encode calls for ${rowCount} rows`
+    encodeCalls <= 6,
+    `expected constant-size attestation hashing work, observed ${encodeCalls} TextEncoder.encode calls for ${rowCount} rows`
   );
 });
