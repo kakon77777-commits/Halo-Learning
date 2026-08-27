@@ -1,0 +1,126 @@
+name: B07 Promote Selected Runtime
+
+on:
+  push:
+    branches:
+      - integration/v0.4.0-final-convergence
+    paths:
+      - .github/workflows/b07-promote-selected-runtime.yml
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Fresh frozen Chromium comparison
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const { runShardComparison } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            if (!comparison.selection || comparison.selection.status !== 'selected') {
+              throw new Error('B07 promotion requires a selected frozen comparison');
+            }
+            if (comparison.selection.selectedBucketCount !== 64) {
+              throw new Error(`fixed selection rule expected bucket 64, got ${comparison.selection.selectedBucketCount}`);
+            }
+            for (const candidate of comparison.candidates) {
+              if (!candidate.allBlockingPassed || !Object.values(candidate.gates).every(Boolean)) {
+                throw new Error(`candidate ${candidate.bucketCount} does not pass all frozen gates`);
+              }
+            }
+            fs.writeFileSync(
+              'docs/validation/v0.4.0-browser-shard-comparison.json',
+              JSON.stringify(comparison, null, 2) + '\n'
+            );
+            console.log(JSON.stringify({ browser: comparison.browser, selection: comparison.selection,
+              candidates: comparison.candidates.map(c => ({
+                bucketCount: c.bucketCount,
+                measurements: c.measurements,
+                gates: c.gates,
+                allBlockingPassed: c.allBlockingPassed,
+                sampleCount: c.bottleneckDecomposition && c.bottleneckDecomposition.sampleCount
+              })) }, null, 2));
+          })().catch((error) => { console.error(error.stack || error.message); process.exit(1); });
+          NODE
+      - name: Promote selected 64 runtime with evidence binding
+        run: |
+          set -euo pipefail
+          rm -rf apps/extension/data/lexical-v0.4.0 dist/lexical-v0.4.0
+          node scripts/build-browser-lexical-runtime.js --write --selection-file docs/validation/v0.4.0-browser-shard-comparison.json
+          node scripts/build-browser-lexical-runtime.js --verify --selection-file docs/validation/v0.4.0-browser-shard-comparison.json
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const evidence = JSON.parse(fs.readFileSync('docs/validation/v0.4.0-browser-shard-comparison.json', 'utf8'));
+          const manifest = JSON.parse(fs.readFileSync('apps/extension/data/lexical-v0.4.0/manifest.json', 'utf8'));
+          const dataManifest = JSON.parse(fs.readFileSync('apps/extension/data/lexical-v0.4.0/data-manifest.json', 'utf8'));
+          if (evidence.selection.selectedBucketCount !== 64 || manifest.bucketCount !== 64 || dataManifest.bucketCount !== 64) {
+            throw new Error('selected 64 bucket binding failed');
+          }
+          if (dataManifest.selectionStatus !== 'selected-by-browser-comparison') {
+            throw new Error('runtime tree is not marked as selected by browser comparison');
+          }
+          console.log(JSON.stringify({ selected: 64, manifestHash: manifest.hash, rootHash: manifest.rootHash,
+            selectionStatus: dataManifest.selectionStatus, shardCount: manifest.statistics.shardCount }, null, 2));
+          NODE
+      - name: Functional equivalence and integrity regression
+        run: |
+          set -euo pipefail
+          node --test \
+            tests/browser-lexical-shards.test.js \
+            tests/browser-shard-loader.test.js \
+            tests/sharded-dictionary-provider.test.js \
+            tests/runtime-dictionary-provider.test.js \
+            tests/extension-semantic-service.test.js \
+            tests/worker-e-descriptor-bytes.test.js \
+            tests/worker-e-gloss-validation.test.js \
+            tests/worker-e-runtime-performance.test.js
+          npm run verify:runtime
+          npm run quality:verify
+      - name: Deterministic package and packaged-runtime proof
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/b07-package-first
+          mkdir -p /tmp/b07-package-first
+          npm run package:release
+          cp dist/halo-learning-magic-hand-v0.4.0.zip /tmp/b07-package-first/extension.zip
+          cp releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip /tmp/b07-package-first/source.zip
+          cp dist/halo-learning-v0.4.0-package-manifest.json /tmp/b07-package-first/manifest.json
+          npm run package:release
+          cmp /tmp/b07-package-first/extension.zip dist/halo-learning-magic-hand-v0.4.0.zip
+          cmp /tmp/b07-package-first/source.zip releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
+          cmp /tmp/b07-package-first/manifest.json dist/halo-learning-v0.4.0-package-manifest.json
+          unzip -l dist/halo-learning-magic-hand-v0.4.0.zip | grep -F 'data/lexical-v0.4.0/manifest.json'
+          unzip -l dist/halo-learning-magic-hand-v0.4.0.zip | grep -F 'data/lexical-v0.4.0/shards/'
+          echo 'deterministic package and selected packaged runtime: PASS'
+      - name: Atomic publication after collaborator race check
+        run: |
+          set -euo pipefail
+          git config user.name 'Halo Learning B07 Workbench'
+          git config user.email 'actions@users.noreply.github.com'
+          git fetch origin integration/v0.4.0-final-convergence
+          REMOTE_HEAD="$(git rev-parse origin/integration/v0.4.0-final-convergence)"
+          if [ "$REMOTE_HEAD" != "$GITHUB_SHA" ]; then
+            echo "Collaborator moved remote to $REMOTE_HEAD; refusing to overwrite $GITHUB_SHA" >&2
+            exit 3
+          fi
+          git rm .github/workflows/b07-promote-selected-runtime.yml
+          git add docs/validation/v0.4.0-browser-shard-comparison.json apps/extension/data/lexical-v0.4.0 dist/lexical-v0.4.0
+          git status --short
+          git commit -m 'perf: promote selected 64-shard runtime for B07'
+          git push origin HEAD:integration/v0.4.0-final-convergence
