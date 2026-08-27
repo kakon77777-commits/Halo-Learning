@@ -1,0 +1,226 @@
+--- a/packages/lexical-index/browser-lexical-shards.js
++++ b/packages/lexical-index/browser-lexical-shards.js
+@@ -6,6 +6,7 @@
+ const MANIFEST_FORMAT = 'halo-browser-lexical-manifest-v1';
+ const SHARD_FORMAT = 'halo-browser-lexical-shard-v1';
+ const BUILDER = Object.freeze({ id: 'halo-browser-lexical-builder', version: '1.0.0' });
++const BUILD_VALIDATION = Object.freeze({ id: 'halo-browser-lexical-build-validation', version: '1.0.0' });
+ const ROUTING = Object.freeze({
+   en: Object.freeze({ id: 'fnv1a-normalized-surface', version: '1.0.0' }),
+   'zh-Hant': Object.freeze({ id: 'fnv1a-first-code-point', version: '1.0.0' })
+@@ -244,7 +245,9 @@
+           morphology: morphologyRows.length,
+           glosses: glosses.length
+         }),
+-        hash: document.hash
++        hash: document.hash,
++        serializedHash: hash(serialized),
++        validation: BUILD_VALIDATION
+       }));
+     }
+   }
+@@ -264,6 +267,7 @@
+   MANIFEST_FORMAT,
+   SHARD_FORMAT,
+   BUILDER,
++  BUILD_VALIDATION,
+   ROUTING,
+   routeEnglishSurface,
+   routeChineseSurface,
+--- a/apps/extension/src/shared/runtime-shard-browser.js
++++ b/apps/extension/src/shared/runtime-shard-browser.js
+@@ -9,6 +9,7 @@
+   const MANIFEST_FORMAT = 'halo-browser-lexical-manifest-v1';
+   const SHARD_FORMAT = 'halo-browser-lexical-shard-v1';
+   const BUILDER = Object.freeze({ id: 'halo-browser-lexical-builder', version: '1.0.0' });
++  const BUILD_VALIDATION = Object.freeze({ id: 'halo-browser-lexical-build-validation', version: '1.0.0' });
+   const ROUTING = Object.freeze({
+     en: Object.freeze({ id: 'fnv1a-normalized-surface', version: '1.0.0' }),
+     'zh-Hant': Object.freeze({ id: 'fnv1a-first-code-point', version: '1.0.0' })
+@@ -64,14 +65,22 @@
+     return value && value.algorithm === 'sha256' && /^[a-f0-9]{64}$/.test(value.value || '');
+   }
+ 
+-  async function sha256Hex(value, cryptoValue) {
++  async function sha256BytesHex(bytes, cryptoValue) {
+     if (!cryptoValue || !cryptoValue.subtle || typeof cryptoValue.subtle.digest !== 'function') {
+       fail('CRYPTO_UNAVAILABLE', 'Web Crypto SHA-256 is unavailable');
+     }
+-    const digest = await cryptoValue.subtle.digest('SHA-256', bytesFor(value));
++    const digest = await cryptoValue.subtle.digest('SHA-256', bytes);
+     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+   }
+ 
++  async function sha256Hex(value, cryptoValue) {
++    return sha256BytesHex(bytesFor(value), cryptoValue);
++  }
++
++  function validBuildValidation(value) {
++    return Boolean(value && value.id === BUILD_VALIDATION.id && value.version === BUILD_VALIDATION.version);
++  }
++
+   function parseDocument(serialized, code, message) {
+     try {
+       return typeof serialized === 'string' ? JSON.parse(serialized.trim()) : serialized;
+@@ -178,6 +187,7 @@
+           descriptor.locale !== expectedLocale || descriptor.bucket !== expectedBucket ||
+           descriptor.id !== expectedId || descriptor.path !== expectedPath ||
+           !Number.isInteger(descriptor.bytes) || descriptor.bytes < 1 || !validHash(descriptor.hash) ||
++          !validHash(descriptor.serializedHash) || !validBuildValidation(descriptor.validation) ||
+           !descriptor.rowCounts || !['lexical', 'morphology', 'glosses'].every((name) =>
+             Number.isInteger(descriptor.rowCounts[name]) && descriptor.rowCounts[name] >= 0)) {
+         fail('MANIFEST_INVALID', 'Browser lexical shard descriptor is invalid');
+@@ -366,8 +376,62 @@
+     });
+   }
+ 
++  function validateAttestedShard(raw, manifest, descriptor) {
++    if (!raw || typeof raw !== 'object' || Array.isArray(raw) ||
++        raw.schemaVersion !== SCHEMA_VERSION || raw.shardFormat !== SHARD_FORMAT ||
++        raw.shardId !== descriptor.id || raw.locale !== descriptor.locale || raw.bucket !== descriptor.bucket ||
++        raw.bucketCount !== manifest.bucketCount || canonicalJson(raw.routing) !== canonicalJson(ROUTING[raw.locale]) ||
++        canonicalJson(raw.manifestRoot) !== canonicalJson(manifest.rootHash) ||
++        !validHash(raw.hash) || raw.hash.value !== descriptor.hash.value ||
++        !Array.isArray(raw.glosses) || !Array.isArray(raw.lexicalRows) || !Array.isArray(raw.morphologyRows) ||
++        !raw.statistics || raw.statistics.lexicalRowCount !== raw.lexicalRows.length ||
++        raw.statistics.morphologyRowCount !== raw.morphologyRows.length ||
++        raw.statistics.glossCount !== raw.glosses.length ||
++        descriptor.rowCounts.lexical !== raw.lexicalRows.length ||
++        descriptor.rowCounts.morphology !== raw.morphologyRows.length ||
++        descriptor.rowCounts.glosses !== raw.glosses.length) {
++      fail('SHARD_INVALID', 'Builder-attested browser lexical shard metadata is invalid');
++    }
++  }
++
++  async function loadAttestedBrowserLexicalShard(serialized, manifest, descriptor, options) {
++    const profile = options && options.profile;
++    const cryptoValue = options && options.crypto ? options.crypto : root.crypto;
++    let started = profileNow();
++    const text = typeof serialized === 'string' ? serialized.trim() : canonicalJson(serialized);
++    const serializedBytes = bytesFor(text);
++    recordProfileStage(profile, 'shardSerializedBytesMs', started);
++    if (descriptor.bytes !== serializedBytes.length) {
++      fail('SHARD_HASH_MISMATCH', 'Browser lexical shard delivered bytes do not match its manifest descriptor');
++    }
++    started = profileNow();
++    const deliveredHash = await sha256BytesHex(serializedBytes, cryptoValue);
++    recordProfileStage(profile, 'shardSerializedHashMs', started);
++    if (deliveredHash !== descriptor.serializedHash.value) {
++      fail('SHARD_HASH_MISMATCH', 'Browser lexical shard delivered bytes do not match its build attestation');
++    }
++    started = profileNow();
++    const raw = parseDocument(text, 'SHARD_INVALID_JSON', 'Browser lexical shard is not valid JSON');
++    recordProfileStage(profile, 'shardJsonParseMs', started);
++    started = profileNow();
++    validateAttestedShard(raw, manifest, descriptor);
++    recordProfileStage(profile, 'shardAttestationValidationMs', started);
++    started = profileNow();
++    const document = deepFreeze(raw);
++    recordProfileStage(profile, 'shardDeepFreezeMs', started);
++    started = profileNow();
++    const shard = materializeShard(document, manifest);
++    recordProfileStage(profile, 'shardMaterializationMs', started);
++    return shard;
++  }
++
+   async function loadBrowserLexicalShard(serialized, manifest, options) {
+     if (!VERIFIED_MANIFESTS.has(manifest)) throw new TypeError('manifest: must be verified');
++    const suppliedDescriptor = options && options.descriptor;
++    if (suppliedDescriptor && manifest.shards.includes(suppliedDescriptor) &&
++        validBuildValidation(suppliedDescriptor.validation) && validHash(suppliedDescriptor.serializedHash)) {
++      return loadAttestedBrowserLexicalShard(serialized, manifest, suppliedDescriptor, options);
++    }
+     const profile = options && options.profile;
+     let started = profileNow();
+     const raw = parseDocument(serialized, 'SHARD_INVALID_JSON', 'Browser lexical shard is not valid JSON');
+@@ -460,7 +524,7 @@
+         .then((serialized) => loadBrowserLexicalShard(
+           serialized,
+           manifest,
+-          { crypto: settings.crypto || root.crypto, profile: settings.profile }
++          { crypto: settings.crypto || root.crypto, profile: settings.profile, descriptor }
+         ))
+         .then((shard) => {
+           resident.set(id, { shard, usedAt: now() });
+@@ -644,6 +708,7 @@
+     MANIFEST_FORMAT,
+     SHARD_FORMAT,
+     BUILDER,
++    BUILD_VALIDATION,
+     ROUTING,
+     BrowserShardError,
+     loadBrowserLexicalManifest,
+--- a/tests/browser-lexical-shards.test.js
++++ b/tests/browser-lexical-shards.test.js
+@@ -5,6 +5,7 @@
+ const fs = require('node:fs');
+ const os = require('node:os');
+ const path = require('node:path');
++const crypto = require('node:crypto');
+ 
+ const Shards = require('../packages/lexical-index/browser-lexical-shards');
+ const BrowserBuild = require('../scripts/build-browser-lexical-runtime');
+@@ -110,6 +111,22 @@
+   assert.equal(first.manifest.statistics.rejectedCount, 0);
+ });
+ 
++test('build-time shard attestation cryptographically binds the exact canonical delivered bytes', () => {
++  const artifacts = Shards.buildBrowserLexicalArtifacts(FIXTURE_ENTRIES, fixtureOptions(64));
++  for (const descriptor of artifacts.manifest.shards) {
++    const serialized = artifacts.serializedShards[descriptor.path];
++    assert.deepEqual(descriptor.validation, {
++      id: 'halo-browser-lexical-build-validation',
++      version: '1.0.0'
++    });
++    assert.equal(descriptor.serializedHash.algorithm, 'sha256');
++    assert.equal(
++      descriptor.serializedHash.value,
++      crypto.createHash('sha256').update(serialized, 'utf8').digest('hex')
++    );
++  }
++});
++
+ test('every shard uses a canonical local gloss table and binds to the manifest root', () => {
+   const artifacts = Shards.buildBrowserLexicalArtifacts(FIXTURE_ENTRIES, fixtureOptions(64));
+   const populated = Object.values(artifacts.serializedShards)
+--- a/tests/worker-e-runtime-performance.test.js
++++ b/tests/worker-e-runtime-performance.test.js
+@@ -155,7 +155,7 @@
+   });
+ });
+ 
+-test('canonical row-order validation encodes each dense lexical row at most once for ordering', async () => {
++test('build-attested runtime loading removes per-row canonical/routing encoding from the cold path', async () => {
+   const rowCount = 32;
+   const built = denseEnglishShardArtifacts(rowCount);
+   const manifest = await BrowserLoader.loadBrowserLexicalManifest(built.serializedManifest);
+@@ -174,19 +174,20 @@
+     }
+   };
+   try {
+-    await BrowserLoader.loadBrowserLexicalShard(
+-      built.serializedShards[descriptor.path],
+-      manifest
+-    );
++    const runtime = BrowserLoader.createBrowserLexicalRuntime({
++      manifest,
++      readText: async (resourcePath) => built.serializedShards[resourcePath]
++    });
++    await runtime.ensureShards([descriptor.id]);
+   } finally {
+     global.TextEncoder = OriginalTextEncoder;
+   }
+ 
+-  // SHA input + descriptor bytes + one ordering encoding per lexical row +
+-  // one routing encoding per lexical row. Allow two calls of headroom for
+-  // future fixed-size metadata checks, but not the previous adjacent-pair re-encoding.
++  // The production runtime path is bound to exact builder-attested serialized bytes.
++  // Row-order and routing invariants were established by the deterministic builder,
++  // so cold loading must not re-encode work proportional to lexical row count.
+   assert.ok(
+-    encodeCalls <= (rowCount * 2) + 4,
+-    `expected linear row encoding work, observed ${encodeCalls} TextEncoder.encode calls for ${rowCount} rows`
++    encodeCalls <= 6,
++    `expected constant-size attestation hashing work, observed ${encodeCalls} TextEncoder.encode calls for ${rowCount} rows`
+   );
+ });
