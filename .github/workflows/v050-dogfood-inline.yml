@@ -53,7 +53,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          xvfb-run -a timeout --kill-after=10s 600s node --test tests/browser/v050-*.e2e.test.js
+          xvfb-run -a timeout --kill-after=10s 600s node --test --test-concurrency=1 tests/browser/v050-*.e2e.test.js
 
   node:
     needs: dogfood-focused
