@@ -143,7 +143,7 @@
         typeof root.chrome.runtime.onMessage.addListener === 'function') {
       root.chrome.runtime.onMessage.addListener((message) => {
         if (!message || message.type !== 'HALO_REMOVE_MARKING') return false;
-        Promise.resolve().then(() => runtime.recordUserRemove()).catch(() => null);
+        try { runtime.recordUserRemove(); } catch (_error) {}
         return false;
       });
     }
