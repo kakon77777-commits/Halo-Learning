@@ -114,12 +114,13 @@ function validateSelectedRuntime(rootValue) {
       selected.manifestRootHash.value !== dataManifest.manifest.rootHash.value) {
     throw new Error('production lexical runtime hashes are not bound to the selected comparison candidate');
   }
-  if (receipt.bucketCount !== 64 || receipt.deterministic !== true || receipt.shardCount !== 128) {
+  const shardCount = receipt.statistics && receipt.statistics.shardCount;
+  if (receipt.bucketCount !== 64 || receipt.deterministic !== true || shardCount !== 128) {
     throw new Error('production lexical build receipt is not the deterministic selected 64-bucket runtime');
   }
   return Object.freeze({
     bucketCount: 64,
-    shardCount: receipt.shardCount,
+    shardCount,
     deterministic: true,
     manifestHash: dataManifest.manifest.hash.value,
     manifestRootHash: dataManifest.manifest.rootHash.value
