@@ -21,6 +21,10 @@
     'src/shared/token-child-continuity.js',
     'src/shared/reversible-renderer.js',
     'src/shared/trigger-controller.js',
+    'src/shared/dogfood-contracts.js',
+    'src/shared/dogfood-source.js',
+    'src/shared/dogfood-capture.js',
+    'src/shared/dogfood-content.js',
     'src/content.js'
   ]);
   const CONTENT_CSS_FILES = Object.freeze(['src/content.css']);
