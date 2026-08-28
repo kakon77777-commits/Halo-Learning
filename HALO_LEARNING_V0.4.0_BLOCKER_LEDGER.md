@@ -3,30 +3,24 @@
 ```yaml
 release:
   version: v0.4.0
-  state: closure-candidate
+  state: release-ready
 
 branch:
   name: integration/v0.4.0-final-convergence
   remote_head: self
-  preclosure_validated_head: 75017337b1f531b0f0d7c6afcd47bf623c3baf50
+  validated_release_basis: 6c8bfd3974fee51186361de2a0da9eac6f9d4582
 
-last_round:
-  blocker_id: B08
-  result: resolved
-  preclosure_final_revalidation:
-    run: 33170120169
-    result: pass
-    source_head: 75017337b1f531b0f0d7c6afcd47bf623c3baf50
-    jobs:
-      core: 98844935815
-      product_browser: 98844935873
-      trigger_controller: 98844935770
-      performance: 98844935682
-      release_package_validator: 98844935775
-  evidence:
-    - docs/validation/v0.4.0-b08-canonical-browser-evidence.md
-    - docs/validation/v0.4.0-final-release-scope-correction.md
-    - docs/validation/v0.4.0-final-release-validation.md
+final_release_validation:
+  workflow: v0.4.0 Final Release Revalidation
+  validated_basis_run: 33170635672
+  validated_basis_result: pass
+  validated_basis_jobs:
+    core: 98846648094
+    product_browser: 98846648149
+    trigger_controller: 98846648193
+    performance: 98846648146
+    release_package_validator: 98846648131
+  exact_self_guard_required_before_merge: true
 
 blockers:
   B01_dynamic_child_insertion:
@@ -72,17 +66,9 @@ blockers:
     state: resolved
     evidence: docs/validation/v0.4.0-b10-standalone-validator-fixture.md
 
-resolved_this_round:
-  - B03
-  - B07
-  - B08
-
 blockers_remaining: []
-
 product_blockers: []
-
-evidence_blockers:
-  - exact-head-final-merge-guard
+evidence_blockers: []
 
 release_debt:
   - id: b06-deterministic-runtime-reload-continuity
@@ -98,9 +84,9 @@ future_hardening:
 
 final_merge_guard:
   required: true
-  rule: exact integration HEAD containing this ledger and final closure documents must pass v0.4.0 Final Release Revalidation before merge
+  rule: exact integration HEAD containing this release-ready ledger must pass v0.4.0 Final Release Revalidation and remain unchanged until PR #4 merge
 
-main_merge_allowed: false
+main_merge_allowed: true
 ```
 
-`self` means the Git commit containing this document. The final merge gate is intentionally still closed at this closure-candidate stage; it may be opened only after the exact current integration HEAD receives a successful final revalidation and the branch does not move before merge.
+`main_merge_allowed: true` is conditional on the final merge guard above. This commit is intentionally the last integration-branch mutation before final exact-head validation. If that validation passes and the branch remains unchanged, PR #4 may be synchronized, marked ready, and merged without any further source or documentation commit.
