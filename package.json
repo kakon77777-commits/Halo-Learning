@@ -1,6 +1,6 @@
 {
   "name": "halo-learning",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "Local-first, provider-agnostic Halo Learning reference implementation",
   "scripts": {
@@ -18,7 +18,10 @@
     "package:release": "node scripts/package-v0.4.0.js",
     "browser:install": "playwright install chromium",
     "test:browser": "node --test tests/browser/*.e2e.test.js",
-    "profile:browser": "node scripts/profile-browser-runtime.js --write"
+    "profile:browser": "node scripts/profile-browser-runtime.js --write",
+    "dogfood:test": "node --test tests/dogfood-*.test.js",
+    "dogfood:browser": "node --test --test-concurrency=1 tests/browser/v050-*.e2e.test.js",
+    "dogfood:package": "node scripts/package-v0.5.0-dogfood.js"
   },
   "devDependencies": {
     "playwright": "1.62.1"
