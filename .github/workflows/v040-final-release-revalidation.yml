@@ -58,10 +58,28 @@ jobs:
         run: timeout --kill-after=10s 180s node --test tests/browser/browser-runtime-matrix.e2e.test.js
       - name: Reversible renderer
         run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/reversible-renderer.e2e.test.js
-      - name: Trigger controller
-        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/trigger-controller.e2e.test.js
       - name: Accessibility
         run: timeout --kill-after=10s 180s node --test tests/browser/accessibility.e2e.test.js
+
+  trigger-controller:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: Trigger controller unit regression
+        run: node --test tests/trigger-controller.test.js tests/browser-trigger-entry.test.js
+      - name: Trigger controller installed-browser lifecycle
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/trigger-controller.e2e.test.js
 
   performance:
     runs-on: ubuntu-24.04
