@@ -67,6 +67,28 @@ function captureEnvelope() {
   return { event, source, sentenceRecord };
 }
 
+function laterExplicitEnvelope(eventType, eventId, timestamp) {
+  const first = captureEnvelope();
+  const event = Contracts.normalizeLearningEvent({
+    ...first.event,
+    eventId,
+    timestamp,
+    eventType,
+    interactionClass: eventType.startsWith('dogfood_note_') ? 'dogfood-note' : 'explicit-learning',
+    detail: { noteText: eventType === 'dogfood_note_created' ? 'Observed note.' : null }
+  });
+  const source = Contracts.normalizeSourceRef({
+    ...first.source,
+    fullUrl: 'https://example.com/read?view=1#return'
+  });
+  const sentenceRecord = Contracts.normalizeSentenceRecord({
+    ...first.sentenceRecord,
+    captureReason: eventType,
+    capturedAt: timestamp
+  });
+  return { event, source, sentenceRecord };
+}
+
 test('persistCapture writes normalized source/sentence/profile before append-only event', async () => {
   const repository = fixtureRepository();
   const service = DataService.createDogfoodDataService({
@@ -77,6 +99,25 @@ test('persistCapture writes normalized source/sentence/profile before append-onl
   assert.equal(result.status, 'inserted');
   assert.deepEqual(repository.calls.map((call) => call[0]), ['source', 'sentence', 'profile', 'event']);
   assert.deepEqual(service.status(), { schemaVersion: 1, mode: 'ready', captureEnabled: true, lastErrorCode: null });
+});
+
+test('later explicit events reuse the canonical retained sentence instead of rewriting capture metadata', async () => {
+  const repository = fixtureRepository();
+  const service = DataService.createDogfoodDataService({
+    repository, contracts: Contracts, sourceModule: Source, projector: Projector,
+    now: () => Date.parse('2026-08-28T14:00:00.000Z'), randomUUID: () => 'service-uuid', getCurrentProfile: async () => baseProfile()
+  });
+  await service.persistCapture(captureEnvelope());
+  await service.persistCapture(laterExplicitEnvelope('sentence_saved', 'event:capture:2', '2026-08-28T14:01:00.000Z'));
+  await service.persistCapture(laterExplicitEnvelope('dogfood_note_created', 'event:capture:3', '2026-08-28T14:02:00.000Z'));
+
+  assert.equal(repository.calls.filter(([kind]) => kind === 'sentence').length, 1,
+    'one source+text identity has one canonical SentenceRecord');
+  assert.deepEqual(repository.calls.filter(([kind]) => kind === 'event').map(([, type]) => type),
+    ['gloss_opened', 'sentence_saved', 'dogfood_note_created']);
+  const retained = await repository.getSentence('sentence:one');
+  assert.equal(retained.captureReason, 'gloss_opened');
+  assert.equal(retained.capturedAt, '2026-08-28T14:00:00.000Z');
 });
 
 test('capture-disabled page writes are no-op and pause/resume ordering is deterministic', async () => {
