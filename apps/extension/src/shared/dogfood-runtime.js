@@ -90,6 +90,14 @@
       fire(task);
     }
 
+    function fireForCapturedSession(barrier, callback) {
+      const task = Promise.resolve(barrier).then((ready) => {
+        if (ready !== true) return null;
+        try { return callback(); } catch (_error) { return null; }
+      });
+      fire(task);
+    }
+
     function resetSessionBarrier() {
       sessionGeneration += 1;
       sessionReady = Promise.resolve(false);
@@ -345,11 +353,14 @@
 
     function recordUserRemove() {
       if (currentPolicy && currentProfile) {
+        const policyDecision = currentPolicy;
         const profile = currentProfile;
-        fireAfterSession(() => client.recordRemove({
+        const sourceUrl = String(windowLike.location && windowLike.location.href || '');
+        const barrier = sessionReady;
+        fireForCapturedSession(barrier, () => client.recordRemove({
           language: profile.languageMode || 'und',
-          sourceUrl: String(windowLike.location && windowLike.location.href || ''),
-          policyDecision: currentPolicy,
+          sourceUrl,
+          policyDecision,
           profile,
           algorithmVersion: null
         }));
