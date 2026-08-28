@@ -37,18 +37,21 @@ async function selectLesson(page) {
   });
 }
 
-async function grantActiveTab(page) {
+async function invokeAllowedCommand(page) {
   await selectLesson(page);
   await page.bringToFront();
   await page.keyboard.press('Alt+Shift+H');
   const panel = page.locator('[data-halo-owned="panel"]').locator('.halo-core-panel');
-  try {
-    await panel.waitFor({ state: 'visible', timeout: 5000 });
-    await page.keyboard.press('Escape');
-    await page.locator('[data-halo-owned="panel"]').waitFor({ state: 'detached', timeout: 5000 });
-  } catch (_error) {
-    // Sensitive pages intentionally fail closed and therefore may not open a panel.
-  }
+  await panel.waitFor({ state: 'visible', timeout: 10000 });
+  await page.keyboard.press('Escape');
+  await page.locator('[data-halo-owned="panel"]').waitFor({ state: 'detached', timeout: 5000 });
+}
+
+async function invokeBlockedCommand(page) {
+  await selectLesson(page);
+  await page.bringToFront();
+  await page.keyboard.press('Alt+Shift+H');
+  await page.waitForTimeout(250);
 }
 
 async function directApply(extensionPage, tabId) {
@@ -139,13 +142,6 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
     assert.ok(match, `real installed extension worker expected, got ${worker.url()}`);
     const extensionId = match[1];
 
-    const popup = await context.newPage();
-    await popup.goto(`chrome-extension://${extensionId}/src/popup.html`);
-    await popup.waitForSelector('#applyButton:not([disabled])');
-    const dogfoodStatus = await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DOGFOOD_STATUS' }));
-    assert.equal(dogfoodStatus.schemaVersion, 1);
-    assert.equal(dogfoodStatus.captureEnabled, true);
-
     await withFixtureServer({
       '/allowed-en.html': {
         contentType: 'text/html',
@@ -161,10 +157,20 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
       }
     }, async ({ origin }) => {
       const page = await context.newPage();
-
       const enUrl = `${origin}/allowed-en.html?token=secret-query#private-fragment`;
       await page.goto(enUrl);
-      await grantActiveTab(page);
+
+      // Reuse the already validated v0.4 installed-command path to establish
+      // activeTab and a live content runtime before opening an extension page.
+      await invokeAllowedCommand(page);
+
+      const popup = await context.newPage();
+      await popup.goto(`chrome-extension://${extensionId}/src/popup.html`);
+      await popup.waitForSelector('#applyButton:not([disabled])');
+      const dogfoodStatus = await popup.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DOGFOOD_STATUS' }));
+      assert.equal(dogfoodStatus.schemaVersion, 1);
+      assert.equal(dogfoodStatus.captureEnabled, true);
+
       let tabId = await activeFixtureTabId(popup, page);
       const enApply = await directApply(popup, tabId);
       assert.equal(enApply.policyDecision.allow, true);
@@ -224,7 +230,7 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
 
       const zhUrl = `${origin}/allowed-zh.html?view=1#zh-fragment`;
       await page.goto(zhUrl);
-      await grantActiveTab(page);
+      await invokeAllowedCommand(page);
       tabId = await activeFixtureTabId(popup, page);
       const zhApply = await directApply(popup, tabId);
       assert.equal(zhApply.policyDecision.allow, true);
@@ -247,7 +253,7 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
 
       const sensitiveUrl = `${origin}/sensitive.html`;
       await page.goto(sensitiveUrl);
-      await grantActiveTab(page);
+      await invokeBlockedCommand(page);
       tabId = await activeFixtureTabId(popup, page);
       const blocked = await directApply(popup, tabId);
       assert.equal(blocked.policyDecision.allow, false);
