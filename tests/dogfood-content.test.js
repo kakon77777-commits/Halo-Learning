@@ -129,7 +129,9 @@ test('packaged content injection loads the dogfood client dependencies before co
     'src/shared/dogfood-contracts.js',
     'src/shared/dogfood-source.js',
     'src/shared/dogfood-capture.js',
-    'src/shared/dogfood-content.js'
+    'src/shared/dogfood-content.js',
+    'src/shared/dogfood-runtime.js',
+    'src/shared/dogfood-browser-observer.js'
   ]) {
     const index = files.indexOf(dependency);
     assert.ok(index >= 0, `${dependency} must be packaged for content injection`);
