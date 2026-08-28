@@ -15,6 +15,16 @@ test('final selected-runtime validator reads canonical shard count from build re
   assert.equal(selected.deterministic, true);
 });
 
+test('final validator requires the canonical B08 evidence envelope and has no open evidence blocker after publication', () => {
+  const b08 = FinalValidator.FINAL_ACCEPTANCE_MAP.find((item) => item.id === 'canonical-browser-evidence-envelope');
+  assert.ok(b08, 'final acceptance map must require canonical B08 evidence');
+  assert.ok(
+    b08.evidenceAny.includes('docs/validation/v0.4.0-b08-canonical-browser-evidence.md'),
+    'B08 acceptance must bind the canonical evidence envelope path'
+  );
+  assert.deepEqual(FinalValidator.FINAL_EVIDENCE_BLOCKERS, []);
+});
+
 test('final release workflow fail-closes validator pipes and isolates browser gates that need native display state', (t) => {
   if (!fs.existsSync(FINAL_WORKFLOW)) {
     t.skip('GitHub workflow metadata is intentionally absent from the standalone source package');
