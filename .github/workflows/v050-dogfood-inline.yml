@@ -14,9 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dogfood-node:
+  dogfood-focused:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,16 +24,34 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Focused v0.5 dogfood tests
+      - name: Focused v0.5 dogfood Node tests
         shell: bash
         run: |
           set -euo pipefail
           if compgen -G 'tests/dogfood-*.test.js' > /dev/null; then
             node --test tests/dogfood-*.test.js
           fi
+      - id: detect-browser
+        name: Detect v0.5 browser tests
+        shell: bash
+        run: |
+          if compgen -G 'tests/browser/v050-*.e2e.test.js' > /dev/null; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.detect-browser.outputs.run == 'true'
+        name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - if: steps.detect-browser.outputs.run == 'true'
+        name: Focused v0.5 Chromium gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          xvfb-run -a timeout --kill-after=10s 600s node --test tests/browser/v050-*.e2e.test.js
 
   node:
-    needs: dogfood-node
+    needs: dogfood-focused
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -48,37 +66,8 @@ jobs:
       - name: Source hygiene
         run: git diff --check
 
-  browser-dogfood:
-    needs: node
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - id: detect
-        name: Detect v0.5 browser tests
-        shell: bash
-        run: |
-          if compgen -G 'tests/browser/v050-*.e2e.test.js' > /dev/null; then
-            echo 'run=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'run=false' >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.detect.outputs.run == 'true'
-        run: npx playwright install --with-deps chromium
-      - if: steps.detect.outputs.run == 'true'
-        name: v0.5 dogfood Chromium gates
-        shell: bash
-        run: |
-          set -euo pipefail
-          xvfb-run -a timeout --kill-after=10s 600s node --test tests/browser/v050-*.e2e.test.js
-
   dogfood-package:
-    needs: browser-dogfood
+    needs: node
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
