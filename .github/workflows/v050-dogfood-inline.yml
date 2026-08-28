@@ -33,6 +33,7 @@ jobs:
           fi
 
   node:
+    needs: dogfood-node
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -48,6 +49,7 @@ jobs:
         run: git diff --check
 
   browser-dogfood:
+    needs: node
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -76,7 +78,7 @@ jobs:
           xvfb-run -a timeout --kill-after=10s 600s node --test tests/browser/v050-*.e2e.test.js
 
   dogfood-package:
-    needs: [dogfood-node, node, browser-dogfood]
+    needs: browser-dogfood
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
