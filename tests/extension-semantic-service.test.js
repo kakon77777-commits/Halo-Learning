@@ -544,12 +544,15 @@ test('duplicate request IDs are rejected while authorization is pending and canc
   assert.equal((await first).status, 'cancelled');
 });
 
-test('MV3 worker source loads only candidate-independent local shard modules', () => {
+test('MV3 semantic worker remains candidate-independent and local under the v0.5 composition entry', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
+  const workerEntrySource = fs.readFileSync(path.join(extensionRoot, 'src/worker-entry.js'), 'utf8');
   const serviceSource = fs.readFileSync(path.join(extensionRoot, 'src/service-worker.js'), 'utf8');
 
-  assert.equal(manifest.background.service_worker, 'src/service-worker.js');
+  assert.equal(manifest.background.service_worker, 'src/worker-entry.js');
   assert.equal(Object.hasOwn(manifest, 'host_permissions'), false);
+  assert.match(workerEntrySource, /['"]service-worker\.js['"]/);
+  assert.doesNotMatch(workerEntrySource, /https?:\/\//i);
   assert.match(serviceSource, /runtime-shard-browser\.js/);
   assert.match(serviceSource, /progressive-runtime\.js/);
   assert.match(serviceSource, /sharded-dictionary-provider\.js/);
