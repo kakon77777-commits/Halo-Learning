@@ -46,7 +46,7 @@
       if (!sourceUrl) throw new Error('dogfood page session has not started');
       return Source.createSourceRef({
         url: sourceUrl,
-        language: value.language || (page && page.language) || 'und',
+        language: (page && page.language) || value.language || 'und',
         retainFullUrl: retainFullUrl === true,
         cryptoApi
       });
