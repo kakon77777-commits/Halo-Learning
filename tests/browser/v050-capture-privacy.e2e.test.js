@@ -173,7 +173,7 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
 
       let tabId = await activeFixtureTabId(popup, page);
       const enApply = await directApply(popup, tabId);
-      assert.equal(enApply.policyDecision.allow, true);
+      assert.equal(enApply.lastError, null);
       await page.waitForSelector('#lesson [data-halo-owned="token"]', { timeout: 10000 });
 
       const passive = await waitForDataset(
@@ -233,7 +233,7 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
       await invokeAllowedCommand(page);
       tabId = await activeFixtureTabId(popup, page);
       const zhApply = await directApply(popup, tabId);
-      assert.equal(zhApply.policyDecision.allow, true);
+      assert.equal(zhApply.lastError, null);
       await page.waitForSelector('#lesson [data-halo-owned="token"]', { timeout: 10000 });
       await waitForDataset(
         worker,
