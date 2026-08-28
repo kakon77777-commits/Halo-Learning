@@ -25,7 +25,7 @@ test('final validator requires the canonical B08 evidence envelope and has no op
   assert.deepEqual(FinalValidator.FINAL_EVIDENCE_BLOCKERS, []);
 });
 
-test('final release workflow fail-closes validator pipes and isolates browser gates that need native display state', (t) => {
+test('final release workflow fail-closes validator pipes and isolates focus-sensitive installed-browser gates', (t) => {
   if (!fs.existsSync(FINAL_WORKFLOW)) {
     t.skip('GitHub workflow metadata is intentionally absent from the standalone source package');
     return;
@@ -47,12 +47,23 @@ test('final release workflow fail-closes validator pipes and isolates browser ga
 
   assert.match(
     workflow,
+    /\n  allowed-site-marking:\n[\s\S]*?name: Allowed-site marking product path\n\s+run: xvfb-run -a timeout --kill-after=10s 240s node --test tests\/browser\/final-closure-allowed-marking\.e2e\.test\.js/,
+    'allowed-site native marking acceptance must run in an isolated final-release job'
+  );
+
+  assert.match(
+    workflow,
     /\n  trigger-controller:\n[\s\S]*?name: Trigger controller installed-browser lifecycle\n\s+run: xvfb-run -a timeout --kill-after=10s 180s node --test tests\/browser\/trigger-controller\.e2e\.test\.js/,
     'native-shortcut trigger acceptance must run in an isolated final-release job'
   );
 
   const productBrowser = workflow.match(/\n  product-browser:\n([\s\S]*?)\n  [a-z0-9-]+:\n/);
   assert.ok(productBrowser, 'product-browser job must remain present');
+  assert.doesNotMatch(
+    productBrowser[1],
+    /name: Allowed-site marking product path/,
+    'combined product-browser job must not rerun the focus-sensitive allowed-site marking lifecycle'
+  );
   assert.doesNotMatch(
     productBrowser[1],
     /name: Trigger controller/,
