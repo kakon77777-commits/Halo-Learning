@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Halo Learning - Magic Hand",
-  "version": "0.4.0",
-  "description": "Local-first English/Traditional-Chinese semantic annotation with configurable, reversible projection.",
+  "version": "0.5.0",
+  "description": "Local-first English/Traditional-Chinese semantic annotation with configurable, reversible projection and a local dogfood observatory.",
   "permissions": ["activeTab", "contextMenus", "scripting", "storage"],
   "background": {
     "service_worker": "src/worker-entry.js"
@@ -11,6 +11,7 @@
     "default_popup": "src/popup.html",
     "default_title": "Halo Learning - Magic Hand"
   },
+  "options_page": "src/options.html",
   "commands": {
     "halo-analyze-selection": {
       "suggested_key": { "default": "Alt+Shift+H" },
