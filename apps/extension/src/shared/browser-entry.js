@@ -24,6 +24,7 @@
     'src/content.js'
   ]);
   const CONTENT_CSS_FILES = Object.freeze(['src/content.css']);
+  const STATUS_MESSAGE = Object.freeze({ type: 'HALO_STATUS' });
   const EXPLICIT_SELECTION_MESSAGE = Object.freeze({
     type: 'HALO_EXPLICIT_SELECTION',
     action: 'analyze-selection'
@@ -43,14 +44,29 @@
     return chromeApi;
   }
 
+  function isLiveStatus(value) {
+    return Boolean(value && typeof value === 'object' && typeof value.active === 'boolean');
+  }
+
+  async function hasLivePackagedRuntime(chromeApi, tabId) {
+    try {
+      return isLiveStatus(await chromeApi.tabs.sendMessage(tabId, STATUS_MESSAGE));
+    } catch (_error) {
+      return false;
+    }
+  }
+
   async function injectPackagedRuntime(options) {
     const settings = options || {};
     const chromeApi = validateChrome(settings.chrome);
     if (!validTabId(settings.tabId)) throw new TypeError('tabId: must be a non-negative safe integer');
+    if (await hasLivePackagedRuntime(chromeApi, settings.tabId)) {
+      return Object.freeze({ tabId: settings.tabId, reused: true });
+    }
     const target = { tabId: settings.tabId };
     await chromeApi.scripting.insertCSS({ target, files: CONTENT_CSS_FILES });
     await chromeApi.scripting.executeScript({ target, files: INJECT_FILES });
-    return Object.freeze({ tabId: settings.tabId });
+    return Object.freeze({ tabId: settings.tabId, reused: false });
   }
 
   async function injectAndSendExplicitSelection(options) {

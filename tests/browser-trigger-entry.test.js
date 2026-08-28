@@ -9,6 +9,7 @@ const ServiceWorker = require('../apps/extension/src/service-worker');
 function browserFixture(options) {
   const settings = options || {};
   const calls = [];
+  const injectedTabs = new Set();
   const listeners = {
     installed: [],
     clicked: [],
@@ -39,6 +40,11 @@ function browserFixture(options) {
         return settings.tabs || [{ id: 17 }];
       },
       async sendMessage(tabId, message) {
+        if (message && message.type === 'HALO_STATUS') {
+          calls.push(['status-message', tabId, message]);
+          if (!injectedTabs.has(tabId)) throw new Error('receiver unavailable');
+          return { active: false };
+        }
         calls.push(['message', tabId, message]);
         if (settings.messageError) throw settings.messageError;
         return { accepted: true };
@@ -52,6 +58,7 @@ function browserFixture(options) {
       async executeScript(value) {
         calls.push(['script', value]);
         if (settings.scriptError) throw settings.scriptError;
+        if (value && value.target && Array.isArray(value.files)) injectedTabs.add(value.target.tabId);
       }
     }
   };
@@ -63,6 +70,7 @@ test('canonical browser entry injects local files in order then sends the exact 
   const result = await Entry.injectAndSendExplicitSelection({ chrome: fixture.chromeApi, tabId: 17 });
 
   assert.deepEqual(fixture.calls, [
+    ['status-message', 17, { type: 'HALO_STATUS' }],
     ['css', { target: { tabId: 17 }, files: ['src/content.css'] }],
     ['script', { target: { tabId: 17 }, files: Entry.INJECT_FILES }],
     ['message', 17, { type: 'HALO_EXPLICIT_SELECTION', action: 'analyze-selection' }]
