@@ -25,7 +25,7 @@ jobs:
         run: sudo apt-get install -y xdotool
       - name: B03 policy and fail-closed contracts
         run: node --test tests/site-policy.test.js tests/content-policy-lifecycle.test.js tests/browser-trigger-entry.test.js
-      - name: B03 installed Chromium security matrix with native command gesture
+      - name: B03 installed Chromium product-security matrix with native command gesture
         env:
           HALO_NATIVE_SHORTCUT_DRIVER: xdotool
-        run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/sensitive-site.e2e.test.js
+        run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/sensitive-site-product-security.e2e.test.js
