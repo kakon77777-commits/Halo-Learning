@@ -65,12 +65,45 @@
     let activeRenderer = null;
     let explicitToken = null;
     let sequence = 0;
+    let sessionGeneration = 0;
+    let sessionReady = Promise.resolve(false);
 
-    function fire(value) {
+    function track(value) {
       let promise;
-      try { promise = Promise.resolve(value); } catch (_error) { return; }
+      try { promise = Promise.resolve(value); } catch (_error) { return Promise.resolve(null); }
       pending.add(promise);
       promise.catch(() => null).finally(() => pending.delete(promise));
+      return promise;
+    }
+
+    function fire(value) {
+      track(value);
+    }
+
+    function fireAfterSession(callback) {
+      const barrier = sessionReady;
+      const generation = sessionGeneration;
+      const task = barrier.then((ready) => {
+        if (ready !== true || generation !== sessionGeneration || barrier !== sessionReady || !currentPolicy) return null;
+        try { return callback(); } catch (_error) { return null; }
+      });
+      fire(task);
+    }
+
+    function resetSessionBarrier() {
+      sessionGeneration += 1;
+      sessionReady = Promise.resolve(false);
+    }
+
+    function beginSession(task) {
+      const generation = ++sessionGeneration;
+      const ready = Promise.resolve().then(task).then(
+        () => generation === sessionGeneration,
+        () => false
+      );
+      sessionReady = ready;
+      track(ready);
+      return ready;
     }
 
     async function flush() {
@@ -103,28 +136,30 @@
       };
     }
 
-    async function applyAllowedProfile(profile) {
+    function applyAllowedProfile(profile) {
       const decision = policyFor(profile);
       currentProfile = profile || null;
       currentPolicy = decision;
-      if (!decision) return null;
-      try {
+      if (!decision) {
+        resetSessionBarrier();
+        return Promise.resolve(null);
+      }
+      const url = String(windowLike.location.href || '');
+      const ready = beginSession(async () => {
         await client.startPageSession({
-          url: String(windowLike.location.href || ''),
+          url,
           language: profile.languageMode || 'und',
           policyDecision: decision
         });
         await client.recordApply({
           language: profile.languageMode || 'und',
-          sourceUrl: String(windowLike.location.href || ''),
+          sourceUrl: url,
           policyDecision: decision,
           profile,
           algorithmVersion: null
         });
-        return decision;
-      } catch (_error) {
-        return decision;
-      }
+      });
+      return ready.then(() => decision);
     }
 
     function rememberSentenceRecords(contentRoot, records) {
@@ -207,7 +242,7 @@
         if (!exposed.has(key) && !seenObservations.has(key)) {
           exposed.add(key);
           seenObservations.add(key);
-          fire(client.recordExposure(captureInput(context)));
+          fireAfterSession(() => client.recordExposure(captureInput(context)));
         }
         changed = true;
         return Object.freeze({ ...fragment, observationKey: key });
@@ -238,7 +273,7 @@
       let tokenGloss = null;
       try { tokenGloss = typeof token.getAttribute === 'function' ? token.getAttribute('data-halo-gloss') : null; } catch (_error) {}
       const hasGloss = Boolean(tokenGloss && String(tokenGloss).trim()) || /\bgloss\b/i.test(String(model && model.body || ''));
-      fire(client.recordExplicitOpen(captureInput(context, { hasGloss })));
+      fireAfterSession(() => client.recordExplicitOpen(captureInput(context, { hasGloss })));
       return Object.freeze({ ...(model || {}), observationKey: key, actions: PANEL_ACTIONS });
     }
 
@@ -247,11 +282,11 @@
       const context = contextForObservation(action.observationKey);
       if (!context) return null;
       if (action.id === 'save-sentence') {
-        fire(client.saveSentence(captureInput(context)));
+        fireAfterSession(() => client.saveSentence(captureInput(context)));
         return true;
       }
       if (action.id === 'dogfood-note' && typeof action.value === 'string' && action.value.trim()) {
-        fire(client.createNote(captureInput(context, { noteText: action.value.trim() })));
+        fireAfterSession(() => client.createNote(captureInput(context, { noteText: action.value.trim() })));
         return true;
       }
       return null;
@@ -282,35 +317,40 @@
 
     async function routeCleanup() {
       clearAll();
+      resetSessionBarrier();
       return null;
     }
 
-    async function routeChanged() {
+    function routeChanged() {
       clearAll();
       if (!currentProfile) {
         currentPolicy = null;
-        return null;
+        resetSessionBarrier();
+        return Promise.resolve(null);
       }
       currentPolicy = policyFor(currentProfile);
-      if (!currentPolicy) return null;
-      try {
-        return await client.routeChanged({
-          url: String(windowLike.location && windowLike.location.href || ''),
-          language: currentProfile.languageMode || 'und',
-          policyDecision: currentPolicy
-        });
-      } catch (_error) {
-        return null;
+      if (!currentPolicy) {
+        resetSessionBarrier();
+        return Promise.resolve(null);
       }
+      const decision = currentPolicy;
+      const url = String(windowLike.location && windowLike.location.href || '');
+      const ready = beginSession(() => client.routeChanged({
+        url,
+        language: currentProfile.languageMode || 'und',
+        policyDecision: decision
+      }));
+      return ready.then((ok) => ok ? decision : null);
     }
 
     function recordUserRemove() {
       if (currentPolicy && currentProfile) {
-        fire(client.recordRemove({
-          language: currentProfile.languageMode || 'und',
+        const profile = currentProfile;
+        fireAfterSession(() => client.recordRemove({
+          language: profile.languageMode || 'und',
           sourceUrl: String(windowLike.location && windowLike.location.href || ''),
           policyDecision: currentPolicy,
-          profile: currentProfile,
+          profile,
           algorithmVersion: null
         }));
       }
@@ -320,11 +360,12 @@
     function recordProfileDiff(previous, next) {
       if (!currentPolicy) return null;
       currentProfile = next || currentProfile;
-      fire(client.recordProfileDiff({
+      const profile = currentProfile;
+      fireAfterSession(() => client.recordProfileDiff({
         previous,
         next,
         policyDecision: currentPolicy,
-        language: currentProfile && currentProfile.languageMode || 'und',
+        language: profile && profile.languageMode || 'und',
         sourceUrl: String(windowLike.location && windowLike.location.href || '')
       }));
       return true;
