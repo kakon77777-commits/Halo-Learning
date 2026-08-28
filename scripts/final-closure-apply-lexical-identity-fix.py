@@ -11,7 +11,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 sw_path = Path('apps/extension/src/service-worker.js')
 sw = sw_path.read_text(encoding='utf-8')
-if "lexicalVersion: context.lexicalVersion" not in sw:
+if "const lexicalVersion = context && context.lexicalVersion;" not in sw:
     sw = replace_once(
         sw,
         "        analysisKey: value.analysisKey,\n        phase,",
@@ -30,12 +30,12 @@ content_path = Path('apps/extension/src/content.js')
 content = content_path.read_text(encoding='utf-8')
 if "function lexicalVersionFromDictionaryStatus" not in content:
     anchor = "  function validateEnrichmentResponse(response, request, Contracts) {"
-    helper = "  function lexicalVersionFromDictionaryStatus(status) {\n    const value = status && status.lexicalVersion;\n    if (typeof value !== 'string' || value.length < 1 || value.length > 256 ||\n        !/^[A-Za-z0-9._:@-]+$/u.test(value)) return null;\n    return value;\n  }\n\n"
+    helper = "  function lexicalVersionFromDictionaryStatus(status) {\n    const value = status && status.lexicalVersion;\n    if (typeof value !== 'string' || value.length < 1 || value.length > 256 ||\n        !/^[A-Za-z0-9._:@-]+$/u.test(value)) return null;\n    return value;\n  }\n\n  function resolveProgressiveAnalysisKeyModule(Progressive) {\n    if (Progressive && typeof Progressive.createAnalysisKey === 'function') return Progressive;\n    if (root.HaloProgressiveRuntime && typeof root.HaloProgressiveRuntime.createAnalysisKey === 'function') {\n      return root.HaloProgressiveRuntime;\n    }\n    if (typeof require === 'function') {\n      try {\n        const required = require('./shared/progressive-runtime');\n        if (required && typeof required.createAnalysisKey === 'function') return required;\n      } catch (_error) {}\n    }\n    return null;\n  }\n\n"
     content = replace_once(content, anchor, helper + "  function validateEnrichmentResponse(response, request, Contracts, Progressive) {", 'content identity helper/signature')
     content = replace_once(
         content,
         "    const schemaVersion = Contracts.SEMANTIC_SCHEMA_VERSION;\n    if (!response || typeof response !== 'object' || response.error ||",
-        "    if (!Progressive || typeof Progressive.createAnalysisKey !== 'function') {\n      throw new TypeError('canonical progressive analysis key module is required');\n    }\n    const schemaVersion = Contracts.SEMANTIC_SCHEMA_VERSION;\n    if (!response || typeof response !== 'object' || response.error ||",
+        "    const keyModule = resolveProgressiveAnalysisKeyModule(Progressive);\n    if (!keyModule) throw new TypeError('canonical progressive analysis key module is required');\n    const schemaVersion = Contracts.SEMANTIC_SCHEMA_VERSION;\n    if (!response || typeof response !== 'object' || response.error ||",
         'content progressive validator requirement'
     )
     old = """        if (!expected || result.requestId !== request.requestId ||
@@ -52,7 +52,7 @@ if "function lexicalVersionFromDictionaryStatus" not in content:
         if (result.phase === 'lexical') {
           if (result.lexicalVersion !== expected.lexicalVersion) return null;
         } else {
-          expectedAnalysisKey = Progressive.createAnalysisKey({
+          expectedAnalysisKey = keyModule.createAnalysisKey({
             text: expected.text,
             languageMode: expected.languageMode,
             semanticVersion: expected.semanticVersion,
@@ -73,7 +73,7 @@ if "function lexicalVersionFromDictionaryStatus" not in content:
     content = replace_once(
         content,
         "      const provider = Dictionary.createBootstrapDictionaryProvider();\n      const lexicalVersion = `${provider.id}@${provider.version}`;",
-        "      const dictionaryStatus = await root.chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' });\n      const lexicalVersion = lexicalVersionFromDictionaryStatus(dictionaryStatus);\n      if (!lexicalVersion) throw new Error('Canonical lexical runtime identity is unavailable');",
+        "      const provider = Dictionary.createBootstrapDictionaryProvider();\n      let lexicalVersion = `${provider.id}@${provider.version}`;\n      const installedRuntime = root.chrome && root.chrome.runtime &&\n        typeof root.chrome.runtime.id === 'string' && root.chrome.runtime.id.length > 0;\n      if (installedRuntime) {\n        const dictionaryStatus = await root.chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' });\n        const canonicalLexicalVersion = lexicalVersionFromDictionaryStatus(dictionaryStatus);\n        if (!canonicalLexicalVersion) throw new Error('Canonical lexical runtime identity is unavailable');\n        lexicalVersion = canonicalLexicalVersion;\n      }",
         'content lexical identity handshake'
     )
     content = replace_once(
