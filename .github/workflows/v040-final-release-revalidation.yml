@@ -203,7 +203,7 @@ jobs:
           name: halo-v0.4.0-final-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             /tmp/halo-v040-final-release/
-            dist/halo-learning-magic-hand-v0.4.0-package-manifest.json
+            dist/halo-learning-v0.4.0-package-manifest.json
             dist/halo-learning-magic-hand-v0.4.0.zip
             releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
           if-no-files-found: warn
