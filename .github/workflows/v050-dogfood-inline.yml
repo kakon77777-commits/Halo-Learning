@@ -44,7 +44,12 @@ jobs:
         name: Install Chromium
         run: npx playwright install --with-deps chromium
       - if: steps.detect-browser.outputs.run == 'true'
+        name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - if: steps.detect-browser.outputs.run == 'true'
         name: Focused v0.5 Chromium gates
+        env:
+          HALO_NATIVE_SHORTCUT_DRIVER: xdotool
         shell: bash
         run: |
           set -euo pipefail
