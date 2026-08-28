@@ -15,7 +15,7 @@ test('final selected-runtime validator reads canonical shard count from build re
   assert.equal(selected.deterministic, true);
 });
 
-test('final release workflow fail-closes validator pipes and gives reversible renderer an X server', (t) => {
+test('final release workflow fail-closes validator pipes and isolates browser gates that need native display state', (t) => {
   if (!fs.existsSync(FINAL_WORKFLOW)) {
     t.skip('GitHub workflow metadata is intentionally absent from the standalone source package');
     return;
@@ -33,5 +33,19 @@ test('final release workflow fail-closes validator pipes and gives reversible re
     workflow,
     /name: Reversible renderer\n\s+run: xvfb-run -a timeout --kill-after=10s 180s node --test tests\/browser\/reversible-renderer\.e2e\.test\.js/,
     'reversible renderer launches a headed persistent extension context and therefore needs Xvfb in CI'
+  );
+
+  assert.match(
+    workflow,
+    /\n  trigger-controller:\n[\s\S]*?name: Trigger controller installed-browser lifecycle\n\s+run: xvfb-run -a timeout --kill-after=10s 180s node --test tests\/browser\/trigger-controller\.e2e\.test\.js/,
+    'native-shortcut trigger acceptance must run in an isolated final-release job'
+  );
+
+  const productBrowser = workflow.match(/\n  product-browser:\n([\s\S]*?)\n  [a-z0-9-]+:\n/);
+  assert.ok(productBrowser, 'product-browser job must remain present');
+  assert.doesNotMatch(
+    productBrowser[1],
+    /name: Trigger controller/,
+    'combined product-browser job must not rerun the focus-sensitive trigger lifecycle'
   );
 });
