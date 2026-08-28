@@ -16,15 +16,13 @@ async function extensionWorker(context) {
   return context.serviceWorkers()[0] || context.waitForEvent('serviceworker');
 }
 
-async function activateFixture(extensionPage, origin) {
-  return extensionPage.evaluate(async (url) => {
-    const tabs = await chrome.tabs.query({});
-    const tab = tabs.find((candidate) => Number.isInteger(candidate.id) &&
-      typeof candidate.url === 'string' && candidate.url.startsWith(`${url}/`));
-    if (!tab) throw new Error(`fixture tab unavailable for ${url}; tabs=${JSON.stringify(tabs.map((value) => value.url))}`);
-    await chrome.tabs.update(tab.id, { active: true });
+async function activeFixtureTabId(extensionPage, page) {
+  await page.bringToFront();
+  return extensionPage.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !Number.isInteger(tab.id)) throw new Error('active fixture tab unavailable');
     return tab.id;
-  }, origin);
+  });
 }
 
 async function selectLesson(page) {
@@ -167,7 +165,7 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
       const enUrl = `${origin}/allowed-en.html?token=secret-query#private-fragment`;
       await page.goto(enUrl);
       await grantActiveTab(page);
-      let tabId = await activateFixture(popup, origin);
+      let tabId = await activeFixtureTabId(popup, page);
       const enApply = await directApply(popup, tabId);
       assert.equal(enApply.policyDecision.allow, true);
       await page.waitForSelector('#lesson [data-halo-owned="token"]', { timeout: 10000 });
@@ -227,7 +225,7 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
       const zhUrl = `${origin}/allowed-zh.html?view=1#zh-fragment`;
       await page.goto(zhUrl);
       await grantActiveTab(page);
-      tabId = await activateFixture(popup, origin);
+      tabId = await activeFixtureTabId(popup, page);
       const zhApply = await directApply(popup, tabId);
       assert.equal(zhApply.policyDecision.allow, true);
       await page.waitForSelector('#lesson [data-halo-owned="token"]', { timeout: 10000 });
@@ -250,7 +248,7 @@ test('v0.5 installed dogfood capture is durable, privacy-minimized, explicit-ret
       const sensitiveUrl = `${origin}/sensitive.html`;
       await page.goto(sensitiveUrl);
       await grantActiveTab(page);
-      tabId = await activateFixture(popup, origin);
+      tabId = await activeFixtureTabId(popup, page);
       const blocked = await directApply(popup, tabId);
       assert.equal(blocked.policyDecision.allow, false);
       assert.equal(blocked.policyDecision.category, 'sensitive-form');
