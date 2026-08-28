@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const ServiceWorker = require('../apps/extension/src/service-worker');
+const WorkerTransport = require('../apps/extension/src/shared/dogfood-worker-transport');
 
 function fixture(options = {}) {
   const calls = [];
@@ -9,7 +9,7 @@ function fixture(options = {}) {
     status() { calls.push(['status']); return { schemaVersion: 1, mode: 'ready', captureEnabled: true, lastErrorCode: null }; },
     async persistCapture(envelope) { calls.push(['capture', envelope]); return { status: 'inserted', eventId: 'event:one' }; }
   };
-  const transport = ServiceWorker.createDogfoodWorkerTransport({
+  const transport = WorkerTransport.createDogfoodWorkerTransport({
     getService: async () => service,
     authorizeSender: async () => options.authorized !== false
   });
