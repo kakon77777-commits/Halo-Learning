@@ -18,10 +18,12 @@ async function extensionWorker(context) {
 
 async function activateFixture(extensionPage, origin) {
   return extensionPage.evaluate(async (url) => {
-    const tabs = await chrome.tabs.query({ url: `${url}/*` });
-    if (!tabs.length || !Number.isInteger(tabs[0].id)) throw new Error('fixture tab unavailable');
-    await chrome.tabs.update(tabs[0].id, { active: true });
-    return tabs[0].id;
+    const tabs = await chrome.tabs.query({});
+    const tab = tabs.find((candidate) => Number.isInteger(candidate.id) &&
+      typeof candidate.url === 'string' && candidate.url.startsWith(`${url}/`));
+    if (!tab) throw new Error(`fixture tab unavailable for ${url}; tabs=${JSON.stringify(tabs.map((value) => value.url))}`);
+    await chrome.tabs.update(tab.id, { active: true });
+    return tab.id;
   }, origin);
 }
 
