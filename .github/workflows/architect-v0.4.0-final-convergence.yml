@@ -11,21 +11,15 @@ permissions:
 
 jobs:
   core:
-    permissions:
-      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Apply guarded lexical identity closure patch
-        run: python3 scripts/final-closure-apply-lexical-identity-fix.py
       - name: Full Node regression
         run: npm test
       - name: Canonical lexical runtime
@@ -36,23 +30,6 @@ jobs:
         run: node --test tests/worker-e-descriptor-bytes.test.js tests/worker-e-gloss-validation.test.js tests/worker-e-runtime-performance.test.js
       - name: Worker C release-tooling regression
         run: node --test tests/release-validator-v0.4.0.test.js tests/release-packaging-v0.4.0.test.js
-      - name: Static closure checks
-        run: |
-          node --check apps/extension/src/service-worker.js
-          node --check apps/extension/src/content.js
-          node --check tests/final-closure-lexical-identity.test.js
-          git diff --check
-      - name: Publish green lexical identity fix
-        run: |
-          if git diff --quiet -- apps/extension/src/service-worker.js apps/extension/src/content.js; then
-            echo 'Lexical identity production patch already present.'
-            exit 0
-          fi
-          git config user.name 'Halo v0.4 Closure'
-          git config user.email 'actions@users.noreply.github.com'
-          git add apps/extension/src/service-worker.js apps/extension/src/content.js
-          git commit -m 'fix: align lexical runtime identity across enrichment [lexical-identity-green]'
-          git push origin HEAD:integration/v0.4.0-final-convergence
 
   browser-file:
     runs-on: ubuntu-latest
