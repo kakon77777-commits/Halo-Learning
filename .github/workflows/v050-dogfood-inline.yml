@@ -14,6 +14,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dogfood-node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Focused v0.5 dogfood tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          if compgen -G 'tests/dogfood-*.test.js' > /dev/null; then
+            node --test tests/dogfood-*.test.js
+          fi
+
   node:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -58,7 +76,7 @@ jobs:
           xvfb-run -a timeout --kill-after=10s 600s node --test tests/browser/v050-*.e2e.test.js
 
   dogfood-package:
-    needs: [node, browser-dogfood]
+    needs: [dogfood-node, node, browser-dogfood]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
