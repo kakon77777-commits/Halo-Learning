@@ -1,0 +1,29 @@
+name: v0.4.0 Final Closure B06 MV3 Recovery
+
+on:
+  push:
+    branches:
+      - integration/v0.4.0-final-convergence
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ordinary-mv3-recovery:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: Installed Chromium ordinary MV3 stop/restart recovery
+        env:
+          HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/final-closure-b06-mv3-recovery.e2e.test.js
