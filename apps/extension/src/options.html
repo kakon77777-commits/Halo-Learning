@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Halo Learning · Local Data Dashboard</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <header class="page-header">
+    <p class="eyebrow">HALO LEARNING · LOCAL ONLY</p>
+    <h1>Data Dashboard · 本機資料</h1>
+    <p>Observational dogfood history from this browser profile. No mastery, level, or learner-state inference.</p>
+  </header>
+
+  <nav aria-label="Dashboard sections" class="section-nav">
+    <a href="#overviewSection">Overview</a>
+    <a href="#activitySection">Activity</a>
+    <a href="#sitesSection">Sites &amp; Sessions</a>
+    <a href="#eventsSection">Learning Events</a>
+    <a href="#savedSection">Saved Sentences</a>
+    <a href="#notesSection">Dogfood Notes</a>
+    <a href="#privacySection">Data &amp; Privacy</a>
+    <a href="#systemSection">System / Replay</a>
+  </nav>
+
+  <main>
+    <section id="overviewSection" data-dashboard-section="Overview">
+      <h2>Overview</h2>
+      <p class="section-copy">Descriptive local observations only.</p>
+      <div class="metric-grid">
+        <article><strong data-testid="overview-event-count">0</strong><span>Events</span></article>
+        <article><strong data-testid="overview-site-count">0</strong><span>Sites</span></article>
+        <article><strong id="overviewActiveDays">0</strong><span>Active days</span></article>
+        <article><strong id="overviewExplicit">0</strong><span>Explicit signals</span></article>
+        <article><strong id="overviewSaved">0</strong><span>Saved sentences</span></article>
+        <article><strong id="overviewNotes">0</strong><span>Notes</span></article>
+      </div>
+      <dl class="detail-grid">
+        <div><dt>Languages</dt><dd id="overviewLanguages">—</dd></div>
+        <div><dt>Profile</dt><dd id="overviewProfile">—</dd></div>
+        <div><dt>Density</dt><dd id="overviewDensity">—</dd></div>
+        <div><dt>Approx. local bytes</dt><dd id="overviewBytes">0</dd></div>
+        <div><dt>Date range</dt><dd id="overviewRange">—</dd></div>
+      </dl>
+    </section>
+
+    <section id="activitySection" data-dashboard-section="Activity">
+      <h2>Activity</h2>
+      <p class="section-copy">Newest-first local activity, capped at 100 rows per view.</p>
+      <ol id="activityList" class="item-list"></ol>
+    </section>
+
+    <section id="sitesSection" data-dashboard-section="Sites & Sessions">
+      <h2>Sites &amp; Sessions</h2>
+      <div class="split-grid">
+        <div><h3>Sites</h3><ul id="siteList" class="item-list"></ul></div>
+        <div><h3>Sessions</h3><ul id="sessionList" class="item-list"></ul></div>
+      </div>
+    </section>
+
+    <section id="eventsSection" data-dashboard-section="Learning Events">
+      <h2>Learning Events</h2>
+      <div class="filters" aria-label="Learning event filters">
+        <label>Event type<select id="eventTypeFilter" aria-label="Event type"><option value="">All</option></select></label>
+        <label>Domain<select id="eventDomainFilter" aria-label="Domain"><option value="">All</option></select></label>
+        <label>From<input id="eventFromFilter" aria-label="Event from date" type="date"></label>
+        <label>To<input id="eventToFilter" aria-label="Event to date" type="date"></label>
+      </div>
+      <ol id="learningEventList" class="item-list"></ol>
+    </section>
+
+    <section id="savedSection" data-dashboard-section="Saved Sentences">
+      <h2>Saved Sentences</h2>
+      <div id="savedSentenceList" class="card-list"></div>
+    </section>
+
+    <section id="notesSection" data-dashboard-section="Dogfood Notes">
+      <h2>Dogfood Notes</h2>
+      <form id="newNoteForm" class="stack-form">
+        <label for="newNoteText">New dogfood note</label>
+        <textarea id="newNoteText" maxlength="4000" required></textarea>
+        <button type="submit">Create note</button>
+      </form>
+      <div id="dogfoodNoteList" class="card-list"></div>
+    </section>
+
+    <section id="privacySection" data-dashboard-section="Data & Privacy">
+      <h2>Data &amp; Privacy</h2>
+      <label class="toggle-line"><input id="captureEnabled" type="checkbox" aria-label="Local capture enabled"> <span>Local capture enabled</span></label>
+      <output id="captureStatus" class="inline-status">Loading…</output>
+      <p id="retentionText" class="section-copy">Retention: loading…</p>
+
+      <div class="action-grid">
+        <button id="exportJsonButton" type="button">Export JSON</button>
+        <button id="exportJsonlButton" type="button">Export JSONL</button>
+        <button id="clearCacheButton" type="button">Clear analysis cache</button>
+      </div>
+
+      <div class="danger-zone">
+        <h3>Delete local dogfood data</h3>
+        <label>Site<select id="deleteDomainSelect" aria-label="Delete site"><option value="">Choose site</option></select></label>
+        <button id="deleteDomainButton" type="button">Delete selected site data</button>
+        <div class="filters">
+          <label>From<input id="deleteFrom" type="date" aria-label="Delete from date"></label>
+          <label>To<input id="deleteTo" type="date" aria-label="Delete to date"></label>
+        </div>
+        <button id="deleteDateButton" type="button">Delete selected date range</button>
+        <button id="deleteAllButton" class="danger" type="button">Delete all dogfood data</button>
+      </div>
+    </section>
+
+    <section id="systemSection" data-dashboard-section="System / Replay">
+      <h2>System / Replay</h2>
+      <pre id="systemStatus" class="system-box">Loading…</pre>
+      <button id="replayButton" type="button">Replay now</button>
+      <output id="replayStatus" class="inline-status">Not run</output>
+    </section>
+  </main>
+
+  <footer>
+    <output id="operationStatus" aria-live="polite">Ready</output>
+  </footer>
+
+  <script src="shared/dogfood-contracts.js"></script>
+  <script src="shared/dogfood-source.js"></script>
+  <script src="shared/dogfood-storage-schema.js"></script>
+  <script src="shared/dogfood-store.js"></script>
+  <script src="shared/dogfood-projector.js"></script>
+  <script src="shared/dogfood-data-service.js"></script>
+  <script src="shared/site-policy.js"></script>
+  <script src="shared/settings.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
