@@ -12,6 +12,7 @@
   const LOCAL_SESSION_ID = 'session:local-control';
   const SESSION_POLICY_VERSION = 'top-level-page-v1';
   const CAPTURE_POLICY_VERSION = 'dogfood-capture-v1';
+  const SENTENCE_IDENTITY_FIELDS = Object.freeze(['sentenceId', 'text', 'language', 'textHash', 'sourceRef']);
 
   function errorCode(error) {
     if (error && error.name === 'QuotaExceededError') return 'QUOTA_EXCEEDED';
@@ -75,6 +76,26 @@
       });
     }
 
+    function sameSentenceIdentity(existing, incoming) {
+      return SENTENCE_IDENTITY_FIELDS.every((name) => existing[name] === incoming[name]);
+    }
+
+    async function persistSentenceAttachment(sentenceRecord) {
+      if (!sentenceRecord) return null;
+      if (typeof repository.getSentence === 'function') {
+        const rawExisting = await repository.getSentence(sentenceRecord.sentenceId);
+        if (rawExisting) {
+          const existing = Contracts.normalizeSentenceRecord(rawExisting);
+          if (!sameSentenceIdentity(existing, sentenceRecord)) {
+            throw new Error('SentenceRecord identity conflict');
+          }
+          return existing;
+        }
+      }
+      await repository.putSentence(sentenceRecord);
+      return sentenceRecord;
+    }
+
     async function persistCapture(envelope) {
       try {
         await preferences();
@@ -93,7 +114,7 @@
           throw new TypeError('capture envelope is missing its retained sentence');
         }
         await repository.putSource(source);
-        if (sentenceRecord) await repository.putSentence(sentenceRecord);
+        if (sentenceRecord) await persistSentenceAttachment(sentenceRecord);
         if (event.profileId && event.profileRevision !== null && typeof repository.putProfileSnapshot === 'function') {
           const current = await getCurrentProfile();
           if (current && current.profileId === event.profileId && current.profileRevision === event.profileRevision) {
