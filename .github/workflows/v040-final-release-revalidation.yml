@@ -57,7 +57,7 @@ jobs:
       - name: Browser runtime matrix
         run: timeout --kill-after=10s 180s node --test tests/browser/browser-runtime-matrix.e2e.test.js
       - name: Reversible renderer
-        run: timeout --kill-after=10s 180s node --test tests/browser/reversible-renderer.e2e.test.js
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/reversible-renderer.e2e.test.js
       - name: Trigger controller
         run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/trigger-controller.e2e.test.js
       - name: Accessibility
@@ -130,7 +130,9 @@ jobs:
           cmp "$HALO_FINAL_EVIDENCE/first.sha256" "$HALO_FINAL_EVIDENCE/second.sha256"
           test -z "$(git status --porcelain --untracked-files=all)"
       - name: Final development validator must pass
-        run: node scripts/validate-v0.4.0-final.js --development | tee "$HALO_FINAL_EVIDENCE/development-validator.log"
+        run: |
+          set -euo pipefail
+          node scripts/validate-v0.4.0-final.js --development | tee "$HALO_FINAL_EVIDENCE/development-validator.log"
       - name: Extract standalone and audit package contents
         run: |
           set -euo pipefail
