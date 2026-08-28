@@ -17,6 +17,7 @@
     captureEnabled: true,
     retention: Object.freeze({ passiveDays: 30, ordinaryDays: 90, explicitDays: null, dogfoodNoteDays: null })
   });
+  const EXPORT_STORE_NAMES = Object.freeze(['events', 'sources', 'sentences', 'profiles', 'analyses', 'settings']);
   const DAY_MS = 24 * 60 * 60 * 1000;
 
   function cloneJson(value) {
@@ -69,6 +70,12 @@
       hash = (hash * prime) & mask;
     }
     return `cache:${hash.toString(16).padStart(16, '0')}`;
+  }
+
+  function serializeEventsJsonl(events) {
+    if (!Array.isArray(events)) throw new TypeError('events: array required');
+    if (!events.length) return '';
+    return `${events.map((value) => JSON.stringify(Contracts.normalizeLearningEvent(value))).join('\n')}\n`;
   }
 
   async function initializePreferences(database) {
@@ -271,10 +278,7 @@
             .filter((value) => !before || value.timestamp < before)
             .sort((a, b) => b.timestamp.localeCompare(a.timestamp) || b.eventId.localeCompare(a.eventId))
             .slice(0, limit);
-          return Object.freeze({
-            items: Object.freeze(items),
-            next: items.length === limit ? items[items.length - 1].timestamp : null
-          });
+          return Object.freeze({ items: Object.freeze(items), next: items.length === limit ? items[items.length - 1].timestamp : null });
         });
       }
 
@@ -298,7 +302,7 @@
 
       async function readReplayDataset() {
         ensureOpen();
-        const stores = ['events', 'sources', 'sentences', 'profiles', 'analyses', 'settings'];
+        const stores = [...EXPORT_STORE_NAMES];
         return withTransaction(database, stores, 'readonly', async (transaction) => {
           const [events, sources, sentences, profiles, analyses, settingsValues] = await Promise.all(stores.map((name) => requestPromise(transaction.objectStore(name).getAll())));
           return Object.freeze({
@@ -323,93 +327,54 @@
           const cacheStore = transaction.objectStore('cache');
           const preferences = (await requestPromise(transaction.objectStore('settings').get('dogfood.preferences'))) || cloneJson(DEFAULT_PREFERENCES);
           const [events, sources, sentences, analyses, cache] = await Promise.all([
-            requestPromise(eventsStore.getAll()),
-            requestPromise(sourcesStore.getAll()),
-            requestPromise(sentencesStore.getAll()),
-            requestPromise(analysesStore.getAll()),
-            requestPromise(cacheStore.getAll())
+            requestPromise(eventsStore.getAll()), requestPromise(sourcesStore.getAll()), requestPromise(sentencesStore.getAll()),
+            requestPromise(analysesStore.getAll()), requestPromise(cacheStore.getAll())
           ]);
           const currentTime = Number(now());
           if (!Number.isFinite(currentTime)) throw new TypeError('now: finite milliseconds required');
           const retention = preferences.retention || DEFAULT_PREFERENCES.retention;
           const cutoffFor = (days) => days === null || days === undefined ? null : currentTime - Number(days) * DAY_MS;
           const cutoffs = {
-            passive: cutoffFor(retention.passiveDays),
-            ordinary: cutoffFor(retention.ordinaryDays),
-            'explicit-learning': cutoffFor(retention.explicitDays),
-            'dogfood-note': cutoffFor(retention.dogfoodNoteDays)
+            passive: cutoffFor(retention.passiveDays), ordinary: cutoffFor(retention.ordinaryDays),
+            'explicit-learning': cutoffFor(retention.explicitDays), 'dogfood-note': cutoffFor(retention.dogfoodNoteDays)
           };
           const surviving = [];
           let deletedEvents = 0;
           for (const rawEvent of events) {
             const event = Contracts.normalizeLearningEvent(rawEvent);
             const cutoff = cutoffs[event.interactionClass];
-            if (cutoff !== null && Date.parse(event.timestamp) < cutoff) {
-              eventsStore.delete(event.eventId);
-              deletedEvents += 1;
-            } else surviving.push(event);
+            if (cutoff !== null && Date.parse(event.timestamp) < cutoff) { eventsStore.delete(event.eventId); deletedEvents += 1; }
+            else surviving.push(event);
           }
-
           const referencedSentenceIds = new Set(surviving.map((value) => value.sentenceRef).filter(Boolean));
           const referencedSourceIds = new Set(surviving.map((value) => value.sourceRef).filter(Boolean));
           let deletedSentences = 0;
           const survivingSentences = [];
           for (const rawSentence of sentences) {
             const sentence = Contracts.normalizeSentenceRecord(rawSentence);
-            if (!referencedSentenceIds.has(sentence.sentenceId)) {
-              sentencesStore.delete(sentence.sentenceId);
-              deletedSentences += 1;
-            } else {
-              survivingSentences.push(sentence);
-              referencedSourceIds.add(sentence.sourceRef);
-            }
+            if (!referencedSentenceIds.has(sentence.sentenceId)) { sentencesStore.delete(sentence.sentenceId); deletedSentences += 1; }
+            else { survivingSentences.push(sentence); referencedSourceIds.add(sentence.sourceRef); }
           }
-
           let deletedAnalyses = 0;
           const survivingAnalyses = [];
           for (const analysis of analyses) {
-            const keep = (analysis.sourceRef && referencedSourceIds.has(analysis.sourceRef)) ||
-              (analysis.sentenceRef && referencedSentenceIds.has(analysis.sentenceRef));
-            if (!keep) {
-              analysesStore.delete(analysis.analysisId);
-              deletedAnalyses += 1;
-            } else {
-              survivingAnalyses.push(analysis);
-              if (analysis.sourceRef) referencedSourceIds.add(analysis.sourceRef);
-            }
+            const keep = (analysis.sourceRef && referencedSourceIds.has(analysis.sourceRef)) || (analysis.sentenceRef && referencedSentenceIds.has(analysis.sentenceRef));
+            if (!keep) { analysesStore.delete(analysis.analysisId); deletedAnalyses += 1; }
+            else { survivingAnalyses.push(analysis); if (analysis.sourceRef) referencedSourceIds.add(analysis.sourceRef); }
           }
-
           let deletedSources = 0;
           for (const rawSource of sources) {
             const source = Contracts.normalizeSourceRef(rawSource);
-            if (!referencedSourceIds.has(source.sourceId)) {
-              sourcesStore.delete(source.sourceId);
-              deletedSources += 1;
-            }
+            if (!referencedSourceIds.has(source.sourceId)) { sourcesStore.delete(source.sourceId); deletedSources += 1; }
           }
-
           let deletedCache = 0;
           for (const rawEntry of cache) {
             const entry = Contracts.normalizeAnalysisCacheEntry(rawEntry);
-            if (Date.parse(entry.expiresAt) <= currentTime) {
-              cacheStore.delete(entry.cacheKey);
-              deletedCache += 1;
-            }
+            if (Date.parse(entry.expiresAt) <= currentTime) { cacheStore.delete(entry.cacheKey); deletedCache += 1; }
           }
-
           return Object.freeze({
-            deleted: Object.freeze({
-              events: deletedEvents,
-              sources: deletedSources,
-              sentences: deletedSentences,
-              analyses: deletedAnalyses,
-              cache: deletedCache
-            }),
-            surviving: Object.freeze({
-              events: surviving.length,
-              sentences: survivingSentences.length,
-              analyses: survivingAnalyses.length
-            })
+            deleted: Object.freeze({ events: deletedEvents, sources: deletedSources, sentences: deletedSentences, analyses: deletedAnalyses, cache: deletedCache }),
+            surviving: Object.freeze({ events: surviving.length, sentences: survivingSentences.length, analyses: survivingAnalyses.length })
           });
         });
       }
@@ -427,30 +392,18 @@
       }
 
       return Object.freeze({
-        schemaStatus,
-        appendEvent,
-        putSource,
-        putSentence,
-        putProfileSnapshot,
-        putAnalysis,
-        getSetting,
-        putSetting,
-        putCache,
-        getCache,
-        queryEvents,
-        querySources,
-        querySentences,
-        readReplayDataset,
-        pruneRetention,
-        estimateUsage,
-        close
+        schemaStatus, appendEvent, putSource, putSentence, putProfileSnapshot, putAnalysis,
+        getSetting, putSetting, putCache, getCache, queryEvents, querySources, querySentences,
+        readReplayDataset, pruneRetention, estimateUsage, close
       });
     });
   }
 
   return Object.freeze({
     DEFAULT_PREFERENCES,
+    EXPORT_STORE_NAMES,
     cacheKeyFor,
+    serializeEventsJsonl,
     openHaloDogfoodStore
   });
 });
