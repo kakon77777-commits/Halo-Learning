@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { webcrypto } = require('node:crypto');
 const DogfoodContent = require('../apps/extension/src/shared/dogfood-content');
+const BrowserEntry = require('../apps/extension/src/shared/browser-entry');
 
 function profile(overrides = {}) {
   return {
@@ -117,4 +118,20 @@ test('blocked policy produces zero page-capture messages', async () => {
   assert.equal(session, null);
   assert.equal(result, null);
   assert.equal(sent.length, 0);
+});
+
+test('packaged content injection loads the dogfood client dependencies before content.js', () => {
+  const files = BrowserEntry.INJECT_FILES;
+  const contentIndex = files.indexOf('src/content.js');
+  assert.ok(contentIndex > 0);
+  for (const dependency of [
+    'src/shared/dogfood-contracts.js',
+    'src/shared/dogfood-source.js',
+    'src/shared/dogfood-capture.js',
+    'src/shared/dogfood-content.js'
+  ]) {
+    const index = files.indexOf(dependency);
+    assert.ok(index >= 0, `${dependency} must be packaged for content injection`);
+    assert.ok(index < contentIndex, `${dependency} must load before content.js`);
+  }
 });
