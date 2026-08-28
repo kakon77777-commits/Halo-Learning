@@ -1,0 +1,66 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #171717;
+  background: #f6f6f2;
+  line-height: 1.45;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 280px; overflow-wrap: anywhere; }
+.page-header, .section-nav, main, footer { width: min(1120px, calc(100% - 32px)); margin-inline: auto; }
+.page-header { padding: 28px 0 18px; }
+.eyebrow { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: .12em; opacity: .62; }
+h1 { margin: 6px 0; font-size: clamp(26px, 5vw, 40px); line-height: 1.08; }
+.page-header > p:last-child, .section-copy { margin: 0; opacity: .66; }
+.section-nav { position: sticky; top: 0; z-index: 2; display: flex; gap: 8px; overflow-x: auto; padding: 10px 0; background: #f6f6f2; border-block: 1px solid #d9d9d1; }
+.section-nav a { flex: 0 0 auto; padding: 6px 9px; border-radius: 999px; color: inherit; text-decoration: none; font-size: 12px; font-weight: 700; }
+.section-nav a:hover { text-decoration: underline; }
+main { display: grid; gap: 16px; padding: 18px 0 32px; }
+section { border: 1px solid #d8d8d0; border-radius: 14px; background: #fff; padding: 18px; }
+h2 { margin: 0 0 8px; font-size: 21px; }
+h3 { margin: 14px 0 7px; font-size: 15px; }
+.metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-top: 14px; }
+.metric-grid article { border: 1px solid #e0e0d8; border-radius: 10px; padding: 12px; }
+.metric-grid strong { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+.metric-grid span { font-size: 12px; opacity: .66; }
+.detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 14px 0 0; }
+.detail-grid div { background: #f8f8f5; border-radius: 8px; padding: 10px; }
+dt { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; opacity: .58; }
+dd { margin: 4px 0 0; }
+.split-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.item-list { margin: 10px 0 0; padding-left: 22px; }
+.item-list li { padding: 7px 4px; border-bottom: 1px solid #eee; }
+.item-list li:last-child { border-bottom: 0; }
+.card-list { display: grid; gap: 10px; margin-top: 12px; }
+.data-card { border: 1px solid #deded6; border-radius: 10px; padding: 12px; }
+.data-card p { margin: 0 0 8px; }
+.card-meta { font-size: 11px; opacity: .62; }
+.filters, .action-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin-top: 12px; }
+label { display: grid; gap: 5px; font-size: 12px; font-weight: 700; }
+select, input, textarea, button { font: inherit; }
+select, input[type="date"], textarea { width: 100%; border: 1px solid #c9c9c1; border-radius: 8px; padding: 8px; background: #fff; color: inherit; }
+textarea { min-height: 88px; resize: vertical; }
+button { border: 1px solid #c8c8c0; border-radius: 8px; background: #fff; color: inherit; padding: 8px 10px; font-weight: 700; cursor: pointer; }
+button:hover { background: #f3f3ee; }
+button.danger { border-color: #8d3c3c; }
+.stack-form { display: grid; gap: 8px; max-width: 660px; margin-top: 12px; }
+.toggle-line { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.toggle-line input { width: 18px; height: 18px; }
+.inline-status { display: inline-block; margin-top: 7px; font-size: 12px; font-weight: 700; }
+.danger-zone { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e3e3dc; display: grid; gap: 9px; }
+.system-box { margin-top: 12px; padding: 12px; border-radius: 8px; background: #f5f5f1; white-space: pre-wrap; overflow-x: auto; }
+footer { padding: 0 0 24px; font-size: 12px; }
+:focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+@media (forced-colors: active) {
+  section, .metric-grid article, .data-card, select, input, textarea, button { border-color: CanvasText; }
+  .detail-grid div, .system-box { background: Canvas; color: CanvasText; }
+}
+@media (max-width: 560px) {
+  .page-header, .section-nav, main, footer { width: min(100% - 20px, 1120px); }
+  section { padding: 14px; }
+  .filters, .action-grid, .split-grid { grid-template-columns: 1fr; }
+}
