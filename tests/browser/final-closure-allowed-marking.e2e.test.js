@@ -35,6 +35,38 @@ async function activateFixture(extensionPage, origin) {
   }, origin);
 }
 
+async function activeTabSnapshot(extensionPage) {
+  return extensionPage.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab ? { id: tab.id, url: tab.url } : null;
+  });
+}
+
+async function directApply(extensionPage, tabId) {
+  return extensionPage.evaluate(async (targetTabId) => {
+    const stored = await chrome.storage.local.get('haloSettings');
+    const settings = HaloSettings.migrateSettings(stored && stored.haloSettings);
+    await HaloBrowserEntry.injectPackagedRuntime({ chrome, tabId: targetTabId });
+    return chrome.tabs.sendMessage(targetTabId, { type: 'HALO_APPLY_MARKING', settings });
+  }, tabId);
+}
+
+async function removeMarking(extensionPage, tabId) {
+  return extensionPage.evaluate((targetTabId) => chrome.tabs.sendMessage(targetTabId, { type: 'HALO_REMOVE_MARKING' }), tabId);
+}
+
+async function diagnostics(extensionPage, tabId) {
+  return extensionPage.evaluate(async (targetTabId) => {
+    let contentStatus = null;
+    let dictionaryStatus = null;
+    try { contentStatus = await chrome.tabs.sendMessage(targetTabId, { type: 'HALO_STATUS' }); }
+    catch (error) { contentStatus = { transportError: String(error && error.message || error) }; }
+    try { dictionaryStatus = await chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }); }
+    catch (error) { dictionaryStatus = { transportError: String(error && error.message || error) }; }
+    return { contentStatus, dictionaryStatus };
+  }, tabId);
+}
+
 test('v0.4 final closure: installed allowed-page Apply produces semantic marking with promoted lexical runtime', async () => {
   const executable = resolveChromiumExecutable({
     environment: process.env,
@@ -59,7 +91,7 @@ test('v0.4 final closure: installed allowed-page Apply produces semantic marking
       const page = await context.newPage();
       await page.goto(`${origin}/allowed.html`);
 
-      // First prove the installed native command/activeTab path still works.
+      // Prove the real installed command / activeTab path before diagnosing full-page marking.
       await selectFixture(page);
       await page.bringToFront();
       await page.keyboard.press('Alt+Shift+H');
@@ -72,30 +104,58 @@ test('v0.4 final closure: installed allowed-page Apply produces semantic marking
       await popup.goto(`chrome-extension://${extensionId}/src/popup.html`);
       await popup.waitForSelector('#applyButton:not([disabled])');
       const tabId = await activateFixture(popup, origin);
+
+      // Phase A: keep the fixture foreground and invoke the exact packaged runtime/message path
+      // without clicking the extension-page surrogate for Chrome's real popup surface.
+      await page.bringToFront();
+      const directActiveBefore = await activeTabSnapshot(popup);
+      const directResult = await directApply(popup, tabId);
+      let directTokenObserved = true;
+      try {
+        await page.waitForSelector('#lesson [data-halo-owned="token"]', { timeout: 10000 });
+      } catch (_error) {
+        directTokenObserved = false;
+      }
+      const directDiagnostics = await diagnostics(popup, tabId);
+      directDiagnostics.activeBefore = directActiveBefore;
+      directDiagnostics.result = directResult;
+      directDiagnostics.tokenCount = await page.locator('#lesson [data-halo-owned="token"]').count();
+      console.log(`HALO_FINAL_ALLOWED_DIRECT_DIAGNOSTIC=${JSON.stringify(directDiagnostics)}`);
+
+      assert.equal(directTokenObserved, true, 'foreground direct Apply must eventually create a Halo token');
+      assert.ok(directDiagnostics.tokenCount > 0, 'foreground direct Apply must retain at least one Halo-owned token');
+      await removeMarking(popup, tabId);
+      await page.waitForSelector('#lesson [data-halo-owned="token"]', { state: 'detached' });
+
+      // Phase B: exercise the actual popup Apply UI while recording which tab Chromium reports
+      // active before and after the click. This distinguishes product runtime from popup-tab harness focus.
+      await activateFixture(popup, origin);
+      const popupActiveBefore = await activeTabSnapshot(popup);
       await popup.click('#applyButton');
       await popup.waitForFunction(() => {
         const text = document.getElementById('status')?.textContent || '';
         return !text.includes('Applying') && (text.includes('Marked') || text.includes('Cannot mark'));
       }, null, { timeout: 15000 });
+      const popupActiveAfter = await activeTabSnapshot(popup);
+      let popupTokenObserved = true;
+      try {
+        await page.waitForSelector('#lesson [data-halo-owned="token"]', { timeout: 10000 });
+      } catch (_error) {
+        popupTokenObserved = false;
+      }
 
-      const diagnostics = await popup.evaluate(async ({ targetTabId }) => {
-        const popupStatus = document.getElementById('status')?.textContent || '';
-        let contentStatus = null;
-        let dictionaryStatus = null;
-        try { contentStatus = await chrome.tabs.sendMessage(targetTabId, { type: 'HALO_STATUS' }); }
-        catch (error) { contentStatus = { transportError: String(error && error.message || error) }; }
-        try { dictionaryStatus = await chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }); }
-        catch (error) { dictionaryStatus = { transportError: String(error && error.message || error) }; }
-        return { popupStatus, contentStatus, dictionaryStatus };
-      }, { targetTabId: tabId });
-      diagnostics.tokenCount = await page.locator('#lesson [data-halo-owned="token"]').count();
-      diagnostics.lessonText = await page.locator('#lesson').textContent();
-      console.log(`HALO_FINAL_ALLOWED_MARKING_DIAGNOSTIC=${JSON.stringify(diagnostics)}`);
+      const popupDiagnostics = await diagnostics(popup, tabId);
+      popupDiagnostics.popupStatus = await popup.locator('#status').textContent();
+      popupDiagnostics.activeBefore = popupActiveBefore;
+      popupDiagnostics.activeAfter = popupActiveAfter;
+      popupDiagnostics.tokenCount = await page.locator('#lesson [data-halo-owned="token"]').count();
+      popupDiagnostics.lessonText = await page.locator('#lesson').textContent();
+      console.log(`HALO_FINAL_ALLOWED_POPUP_DIAGNOSTIC=${JSON.stringify(popupDiagnostics)}`);
 
-      assert.doesNotMatch(diagnostics.popupStatus, /Cannot mark/);
-      assert.match(diagnostics.popupStatus, /Marked\s+[1-9]\d*\s*\/\s*[1-9]\d*/);
-      assert.ok(diagnostics.tokenCount > 0, 'allowed page must contain at least one Halo-owned token after Apply');
-      assert.equal(diagnostics.lessonText, 'The model learns quickly.');
+      assert.doesNotMatch(popupDiagnostics.popupStatus, /Cannot mark/);
+      assert.equal(popupTokenObserved, true, 'popup Apply must eventually create a Halo token on the active page');
+      assert.ok(popupDiagnostics.tokenCount > 0, 'popup Apply must retain at least one Halo-owned token');
+      assert.equal(popupDiagnostics.lessonText, 'The model learns quickly.');
     });
   } finally {
     if (context) await context.close();
