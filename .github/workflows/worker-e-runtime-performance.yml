@@ -1,0 +1,79 @@
+name: Worker E Runtime Performance Evidence
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-runtime-performance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-worker-e:
+    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'chore: finalize Worker E blocked handoff'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      - name: Full Node regression suite
+        run: npm test
+
+      - name: Verify canonical lexical runtime
+        run: npm run verify:runtime
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Collect fresh real-Chromium Worker E evidence
+        run: |
+          mkdir -p evidence/worker-e
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const { runShardComparison, verifyBrowserShardComparison } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            verifyBrowserShardComparison(comparison);
+            fs.writeFileSync(
+              'evidence/worker-e/v0.4.0-worker-e-browser-shard-comparison.json',
+              JSON.stringify(comparison, null, 2) + '\n'
+            );
+            console.log(JSON.stringify({
+              browser: comparison.browser,
+              host: comparison.host,
+              selection: comparison.selection,
+              candidates: comparison.candidates.map((candidate) => ({
+                bucketCount: candidate.bucketCount,
+                measurements: candidate.measurements,
+                bottleneckDecomposition: candidate.bottleneckDecomposition,
+                gates: candidate.gates,
+                allBlockingPassed: candidate.allBlockingPassed,
+                coldRawMs: candidate.conditions.cold.samples.map((sample) => sample.durationMs),
+                warmSampleCount: candidate.conditions.warm.samples.reduce((count, sample) => count + sample.samplesMs.length, 0),
+                longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
+              }))
+            }, null, 2));
+          })().catch((error) => {
+            console.error(error.stack || error.message);
+            process.exitCode = 1;
+          });
+          NODE
+
+      - name: Upload raw Worker E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-e-runtime-performance-evidence
+          path: evidence/worker-e/
+          if-no-files-found: error
+          retention-days: 30

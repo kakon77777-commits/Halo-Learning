@@ -6,6 +6,7 @@ const path = require('node:path');
 const extensionRoot = path.join(__dirname, '..', 'apps', 'extension');
 const contentPath = path.join(extensionRoot, 'src', 'content.js');
 const cssPath = path.join(extensionRoot, 'src', 'content.css');
+const rendererPath = path.join(extensionRoot, 'src', 'shared', 'reversible-renderer.js');
 
 function loadContent() {
   return require(contentPath);
@@ -63,23 +64,36 @@ test('content-service failure fallback uses the conservative semantic engine ins
   assert.equal(sets[0].diagnostics.fallbackActivated, true);
 });
 
-test('content renderer source defines reversible handlers, safety skips, and budgets', () => {
+test('content delegates reversible DOM ownership to the versioned renderer boundary', () => {
   const source = fs.readFileSync(contentPath, 'utf8');
+  const renderer = fs.readFileSync(rendererPath, 'utf8');
   assert.match(source, /HALO_APPLY_MARKING/);
   assert.match(source, /HALO_REMOVE_MARKING/);
   assert.match(source, /HALO_STATUS/);
-  assert.match(source, /data-halo-token/);
-  assert.match(source, /haloOriginal/);
+  assert.match(source, /HALO_EXPLICIT_SELECTION/);
+  assert.match(source, /validateExplicitSelectionMessage/);
+  assert.match(source, /readExplicitSelection/);
+  assert.match(source, /createContentTriggerRuntime/);
+  assert.match(source, /__HALO_CONTENT_INITIALIZED__/);
+  assert.match(source, /HaloReversibleRenderer/);
+  assert.match(source, /createReversibleRenderer/);
+  assert.doesNotMatch(source, /function spanFor|function replaceTextNode|function removeRenderedDom/);
+  assert.match(renderer, /data-halo-owned/);
+  assert.match(renderer, /data-halo-original/);
+  assert.match(renderer, /createReversibleRenderer/);
+  assert.match(renderer, /createCorePanel/);
+  assert.doesNotMatch(renderer, /innerHTML\s*=/);
   for (const tag of ['SCRIPT', 'STYLE', 'TEXTAREA', 'INPUT', 'CODE', 'PRE']) {
     assert.match(source, new RegExp(tag));
   }
-  assert.match(source, /maxTextNodes/);
-  assert.match(source, /maxMarkedTokens/);
-  assert.match(source, /HALO_ANNOTATE_BATCH/);
-  assert.match(source, /annotationSets/);
+  assert.match(source, /runtimeBudgets/);
+  assert.match(source, /HaloRuntimeScheduler/);
+  assert.match(source, /HALO_ENRICH_BATCH/);
+  assert.match(source, /annotationSet/);
+  assert.doesNotMatch(source, /settings\.maxTextNodes|settings\.maxMarkedTokens/);
+  assert.doesNotMatch(source, /lastAnnotationSets/);
   assert.match(source, /async function applyMarking/);
   assert.match(source, /return true/);
-  assert.match(source, /textContent/);
   assert.doesNotMatch(source, /innerHTML\s*=/);
 });
 
@@ -92,44 +106,60 @@ test('CSS uses POS pseudo labels and does not replace the visible word', () => {
   assert.match(css, /halo-pos-v/);
   assert.match(css, /content:\s*attr\(data-halo-meta\)/);
   assert.match(css, /halo-structure-chunk/);
+  assert.match(css, /halo-noncolor-marker/);
+  assert.match(css, /text-decoration-style:\s*dotted/);
 });
 
-test('Manifest V3 uses minimal click-scoped permissions and no host permissions', () => {
+test('Manifest V3 uses minimal click-scoped trigger permissions and no host permissions', () => {
   const manifestPath = path.join(extensionRoot, 'manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.action.default_popup, 'src/popup.html');
-  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'scripting', 'storage'].sort());
+  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'contextMenus', 'scripting', 'storage'].sort());
+  assert.deepEqual(manifest.commands, {
+    'halo-analyze-selection': {
+      suggested_key: { default: 'Alt+Shift+H' },
+      description: 'Analyze selected text with Halo Learning'
+    }
+  });
   assert.equal(Object.hasOwn(manifest, 'host_permissions'), false);
   assert.equal(Object.hasOwn(manifest, 'content_scripts'), false);
 });
 
-test('popup exposes bilingual basic controls and injects only packaged local files', () => {
+test('popup exposes trigger mode and explicit current-tab action through the canonical packaged entry', () => {
   const html = fs.readFileSync(path.join(extensionRoot, 'src', 'popup.html'), 'utf8');
   const js = fs.readFileSync(path.join(extensionRoot, 'src', 'popup.js'), 'utf8');
   for (const id of [
     'posLabels', 'posColors', 'lemma', 'morphology', 'glossHint', 'grammarRole',
     'tenseAspect', 'chunk', 'learningState', 'density', 'languageMode',
-    'labelPosition', 'applyButton', 'removeButton'
+    'labelPosition', 'triggerMode', 'sitePolicyHost', 'blockSiteButton', 'allowSiteButton',
+    'analyzeSelectionButton', 'applyButton', 'removeButton'
   ]) {
     assert.match(html, new RegExp(`id=["']${id}["']`));
   }
   assert.match(html, /詞性/);
   assert.match(html, /POS/);
   assert.match(js, /chrome\.storage\.local/);
-  assert.match(js, /chrome\.scripting\.executeScript/);
-  assert.match(js, /chrome\.scripting\.insertCSS/);
+  assert.match(js, /HaloBrowserEntry\.injectAndSendExplicitSelection/);
   assert.match(js, /settings\.channels/);
   assert.match(html, /id=["']learningState["'][^>]*disabled/);
   assert.match(html, /value=["']zh-Hant["']/);
   assert.doesNotMatch(js, /fetch\s*\(/);
   assert.doesNotMatch(js, /XMLHttpRequest/);
+  assert.doesNotMatch(js, /const INJECT_FILES/);
+  assert.match(html, /shared\/browser-entry\.js/);
+  assert.match(html, /shared\/site-policy\.js/);
+  assert.match(js, /sitePolicy\.userDenylist/);
+  assert.match(js, /HALO_POLICY_REEVALUATE/);
 });
 
 test('executable extension source contains no remote script or API dependency', () => {
   const sourceFiles = [
     'src/popup.js', 'src/content.js', 'src/shared/linguistics.js',
-    'src/shared/projection.js', 'src/shared/settings.js', 'src/shared/dictionary-provider.js'
+    'src/shared/projection.js', 'src/shared/settings.js', 'src/shared/dictionary-provider.js',
+    'src/shared/runtime-scheduler.js', 'src/shared/semantic-contracts.js',
+    'src/shared/reversible-renderer.js', 'src/shared/trigger-controller.js',
+    'src/shared/site-policy.js', 'src/shared/browser-entry.js', 'src/service-worker.js'
   ];
   const combined = sourceFiles.map((rel) => fs.readFileSync(path.join(extensionRoot, rel), 'utf8')).join('\n');
   assert.doesNotMatch(combined, /https?:\/\//i);
@@ -139,8 +169,11 @@ test('executable extension source contains no remote script or API dependency', 
 
 test('content privacy gate fails closed on sensitive form attributes without reading field values', () => {
   const source = fs.readFileSync(contentPath, 'utf8');
+  const policy = fs.readFileSync(path.join(extensionRoot, 'src', 'shared', 'site-policy.js'), 'utf8');
   assert.match(source, /SENSITIVE_PAGE_BLOCKED/);
-  assert.match(source, /input\[type=["']password["']\]/);
-  assert.doesNotMatch(source, /\.value\b/);
-  assert.doesNotMatch(source, /document\.cookie|chrome\.history|chrome\.cookies/);
+  assert.match(source, /HaloSitePolicy/);
+  assert.match(source, /scanSecurityAttributes|classifySite/);
+  assert.match(source, /HALO_POLICY_REEVALUATE/);
+  assert.doesNotMatch(policy, /\belement\.value\b|textContent|innerText/);
+  assert.doesNotMatch(policy, /document\.cookie|chrome\.history|chrome\.cookies/);
 });

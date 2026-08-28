@@ -1,0 +1,201 @@
+name: Worker B Performance and MV3 Gate
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-ux
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  real-chromium-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: parallel/v0.4.0-browser-ux
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      - name: Finalize collector source
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/collect-worker-b-browser-evidence.js')
+          s = p.read_text(encoding='utf-8')
+
+          old_reload = """    const priorReloadWorker = worker;
+              await worker.evaluate(() => {
+                setTimeout(() => chrome.runtime.reload(), 0);
+                return true;
+              }).catch(() => false);
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              const reloadPage = await context.newPage();
+              await reloadPage.goto(`chrome-extension://${extensionId}/src/popup.html`);
+              let reloadedWorker = context.serviceWorkers().find((candidate) => candidate !== priorReloadWorker);
+              if (!reloadedWorker) reloadedWorker = await context.waitForEvent('serviceworker', { timeout: 12_000 });
+              const reloadStatus = await reloadPage.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));"""
+          new_reload = """    const priorReloadWorker = worker;
+              const reloadedWorkerPromise = context.waitForEvent('serviceworker', { timeout: 12_000 });
+              await worker.evaluate(() => {
+                setTimeout(() => chrome.runtime.reload(), 0);
+                return true;
+              }).catch(() => false);
+              const reloadedWorker = await reloadedWorkerPromise;
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              const reloadPage = await context.newPage();
+              await reloadPage.goto(`chrome-extension://${extensionId}/src/popup.html`);
+              const reloadStatus = await reloadPage.evaluate(() => chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' }));"""
+          if old_reload in s:
+              s = s.replace(old_reload, new_reload, 1)
+          elif 'const reloadedWorkerPromise = context.waitForEvent' not in s:
+              raise SystemExit('extension reload collector pattern not recognized')
+
+          old_perf = """  const performanceEvaluation = evaluateBrowserPerformance(performanceReport);
+            if (!performanceEvaluation.allBlockingPassed) {"""
+          new_perf = """  const performanceEvaluation = evaluateBrowserPerformance(performanceReport);
+            writeJson('v0.4.0-worker-b-browser-performance.json', performanceReport);
+            writeJson('v0.4.0-worker-b-browser-performance-evaluation.json', {
+              measurements: performanceEvaluation.measurements,
+              budgets: require('../packages/quality/browser-performance').BUDGETS,
+              gates: performanceEvaluation.gates,
+              allBlockingPassed: performanceEvaluation.allBlockingPassed
+            });
+            if (!performanceEvaluation.allBlockingPassed) {"""
+          if old_perf in s:
+              s = s.replace(old_perf, new_perf, 1)
+          elif "writeJson('v0.4.0-worker-b-browser-performance.json', performanceReport);" not in s.split('const mv3Report', 1)[0]:
+              raise SystemExit('early performance evidence pattern not recognized')
+
+          old_mv3 = """  const mv3Evaluation = evaluateMv3Lifecycle(mv3Report);
+            if (!mv3Evaluation.allBlockingPassed) {"""
+          new_mv3 = """  const mv3Evaluation = evaluateMv3Lifecycle(mv3Report);
+            writeJson('v0.4.0-worker-b-mv3-lifecycle.json', mv3Report);
+            writeJson('v0.4.0-worker-b-mv3-lifecycle-evaluation.json', mv3Evaluation);
+            if (!mv3Evaluation.allBlockingPassed) {"""
+          if old_mv3 in s:
+              s = s.replace(old_mv3, new_mv3, 1)
+          elif "writeJson('v0.4.0-worker-b-mv3-lifecycle.json', mv3Report);" not in s.split("if (!mv3Evaluation.allBlockingPassed)", 1)[0]:
+              raise SystemExit('early MV3 evidence pattern not recognized')
+
+          p.write_text(s, encoding='utf-8', newline='\n')
+          PY
+          node --check scripts/collect-worker-b-browser-evidence.js
+          git diff --check
+          if ! git diff --quiet -- scripts/collect-worker-b-browser-evidence.js; then
+            git config user.name 'Halo Worker B'
+            git config user.email 'worker-b@users.noreply.github.com'
+            git add scripts/collect-worker-b-browser-evidence.js
+            git commit -m 'fix: make MV3 evidence capture race-safe'
+            git push origin HEAD:parallel/v0.4.0-browser-ux
+          fi
+
+      - name: Browser performance acceptance model
+        run: node --test tests/browser-performance-metrics.test.js
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Prepare evidence directories
+        run: |
+          rm -rf evidence/worker-b-final evidence/shard-diagnostic
+          mkdir -p evidence/worker-b-final evidence/shard-diagnostic
+
+      - name: Run fixed 64/128 real Chromium diagnostic
+        id: shard
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node - <<'NODE' 2>&1 | tee evidence/shard-diagnostic/summary.txt
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const { runShardComparison, verifyBrowserShardComparison } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            verifyBrowserShardComparison(comparison);
+            fs.writeFileSync('evidence/shard-diagnostic/v0.4.0-browser-shard-comparison.json', JSON.stringify(comparison, null, 2) + '\n');
+            console.log(JSON.stringify({
+              browser: comparison.browser,
+              host: comparison.host,
+              selection: comparison.selection,
+              candidates: comparison.candidates.map((candidate) => ({
+                bucketCount: candidate.bucketCount,
+                measurements: candidate.measurements,
+                budgets: candidate.budgets,
+                gates: candidate.gates,
+                allBlockingPassed: candidate.allBlockingPassed,
+                coldRawMs: candidate.conditions.cold.samples.map((sample) => sample.durationMs),
+                warmSampleCount: candidate.conditions.warm.samples.reduce((n, sample) => n + sample.samplesMs.length, 0),
+                longTasksMs: candidate.conditions.longTasks.samples.flatMap((sample) => sample.durationsMs)
+              }))
+            }, null, 2));
+          })().catch((error) => { console.error(error.stack || error.message); process.exitCode = 1; });
+          NODE
+
+      - name: Enforce frozen shard selection
+        id: selection
+        continue-on-error: true
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const comparison = JSON.parse(fs.readFileSync('evidence/shard-diagnostic/v0.4.0-browser-shard-comparison.json', 'utf8'));
+          if (!comparison.selection || comparison.selection.status !== 'selected') {
+            throw new Error(`frozen browser shard selection blocked: ${JSON.stringify(comparison.selection)}`);
+          }
+          console.log(`selected=${comparison.selection.selectedBucketCount}`);
+          NODE
+
+      - name: Collect real Chromium performance and MV3 evidence
+        id: collector
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          timeout 1500s node scripts/collect-worker-b-browser-evidence.js evidence/worker-b-final 2>&1 | tee evidence/worker-b-final.log
+
+      - name: Verify generated UX performance and MV3 evidence
+        id: verify
+        continue-on-error: true
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { evaluateBrowserPerformance, evaluateMv3Lifecycle } = require('./packages/quality/browser-performance');
+          const performance = JSON.parse(fs.readFileSync('evidence/worker-b-final/v0.4.0-worker-b-browser-performance.json', 'utf8'));
+          const mv3 = JSON.parse(fs.readFileSync('evidence/worker-b-final/v0.4.0-worker-b-mv3-lifecycle.json', 'utf8'));
+          const perf = evaluateBrowserPerformance(performance);
+          const lifecycle = evaluateMv3Lifecycle(mv3);
+          console.log(JSON.stringify({ performance: perf.measurements, performanceGates: perf.gates, mv3Gates: lifecycle.gates }, null, 2));
+          if (!perf.allBlockingPassed) throw new Error('UX performance evidence does not pass frozen gates');
+          if (!lifecycle.allBlockingPassed) throw new Error('MV3 evidence does not pass frozen gates');
+          if (!mv3.details || mv3.details.routeNavigation !== true) throw new Error('route-navigation evidence is missing');
+          NODE
+
+      - name: Upload Worker B performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-b-performance-mv3-evidence
+          path: |
+            evidence/worker-b-final/
+            evidence/worker-b-final.log
+            evidence/shard-diagnostic/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce Worker B performance gate
+        if: always()
+        env:
+          SHARD: ${{ steps.shard.outcome }}
+          SELECTION: ${{ steps.selection.outcome }}
+          COLLECTOR: ${{ steps.collector.outcome }}
+          VERIFY: ${{ steps.verify.outcome }}
+        run: |
+          printf 'shard=%s\nselection=%s\ncollector=%s\nverify=%s\n' "$SHARD" "$SELECTION" "$COLLECTOR" "$VERIFY"
+          test "$SHARD" = success
+          test "$SELECTION" = success
+          test "$COLLECTOR" = success
+          test "$VERIFY" = success

@@ -6,6 +6,14 @@
   -webkit-box-decoration-break: clone;
 }
 
+/* A dotted shape remains visible when projection colors are unavailable. */
+.halo-token.halo-noncolor-marker {
+  text-decoration-line: underline !important;
+  text-decoration-style: dotted !important;
+  text-decoration-thickness: 0.08em !important;
+  text-underline-offset: 0.18em !important;
+}
+
 .halo-token.halo-label-top-right::after,
 .halo-token.halo-label-top-left::after,
 .halo-token.halo-label-bottom-right::after,
@@ -84,3 +92,32 @@
 .halo-pos-pron { color: var(--halo-pos-pron, #be185d) !important; }
 .halo-pos-aux { color: var(--halo-pos-aux, #c2410c) !important; }
 .halo-pos-modal { color: var(--halo-pos-modal, #6d28d9) !important; }
+
+
+/* v0.4 accessibility: visual projection never becomes the only carrier. */
+.halo-token::before,
+.halo-token::after {
+  speak: none;
+}
+
+[data-halo-owned]:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-halo-owned] {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .halo-token {
+    color: CanvasText !important;
+    outline: 1px dotted CanvasText;
+    text-decoration-color: CanvasText !important;
+    forced-color-adjust: auto;
+  }
+}

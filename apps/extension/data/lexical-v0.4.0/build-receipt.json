@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "receiptFormat": "BrowserLexicalBuildReceipt/v1",
+  "builder": {
+    "id": "halo-browser-lexical-builder",
+    "version": "1.0.0"
+  },
+  "builtAt": "2026-08-25T00:00:00.000Z",
+  "bucketCount": 64,
+  "sourceIndexHash": {
+    "algorithm": "sha256",
+    "value": "f2a63b7b5af3673a7faea6acaed53776cb94bcf4146949d965a37b76003fca21"
+  },
+  "manifestRootHash": {
+    "algorithm": "sha256",
+    "value": "50bd7b032a48cb0536e2aff5138e70014edc510baf3afabec053f180efd21031"
+  },
+  "manifestHash": {
+    "algorithm": "sha256",
+    "value": "8d5e11ccf28f4872879ed84444d99c317969892bacfc1048110c6243f56e3d92"
+  },
+  "deterministic": true,
+  "statistics": {
+    "lexicalRowCount": 331903,
+    "englishRowCount": 206978,
+    "chineseRowCount": 124925,
+    "morphologyRowCount": 6052,
+    "rejectedCount": 0,
+    "shardCount": 128
+  }
+}

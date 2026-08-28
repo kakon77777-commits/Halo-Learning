@@ -1,0 +1,210 @@
+name: v0.4.0 Final Release Revalidation
+
+on:
+  push:
+    branches:
+      - integration/v0.4.0-final-convergence
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Full Node regression
+        run: npm test
+      - name: Canonical lexical runtime
+        run: npm run verify:runtime
+      - name: Semantic quality regression
+        run: npm run quality:verify
+      - name: Release tooling regression
+        run: node --test tests/release-validator-v0.4.0.test.js tests/release-packaging-v0.4.0.test.js
+      - name: Source hygiene
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  product-browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: B03 sensitive-site product security
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/sensitive-site-product-security.e2e.test.js
+      - name: B06 ordinary installed MV3 recovery
+        run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/final-closure-b06-mv3-recovery.e2e.test.js
+      - name: Browser runtime matrix
+        run: timeout --kill-after=10s 180s node --test tests/browser/browser-runtime-matrix.e2e.test.js
+      - name: Reversible renderer
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/reversible-renderer.e2e.test.js
+      - name: Accessibility
+        run: timeout --kill-after=10s 180s node --test tests/browser/accessibility.e2e.test.js
+
+  allowed-site-marking:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: Allowed-site marking product path
+        run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/final-closure-allowed-marking.e2e.test.js
+
+  trigger-controller:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: Trigger controller unit regression
+        run: node --test tests/trigger-controller.test.js tests/browser-trigger-entry.test.js
+      - name: Trigger controller installed-browser lifecycle
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/trigger-controller.e2e.test.js
+
+  performance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Frozen 64/128 Chromium comparison
+        run: |
+          mkdir -p evidence/final-release-performance
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const { runShardComparison } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            fs.writeFileSync('evidence/final-release-performance/v0.4.0-browser-shard-comparison.json', JSON.stringify(comparison, null, 2) + '\n');
+            console.log(JSON.stringify({ browser: comparison.browser, selection: comparison.selection, candidates: comparison.candidates.map((c) => ({ bucketCount: c.bucketCount, measurements: c.measurements, gates: c.gates, allBlockingPassed: c.allBlockingPassed })) }, null, 2));
+            if (!comparison.selection || comparison.selection.status !== 'selected' || comparison.selection.selectedBucketCount !== 64) process.exitCode = 2;
+          })().catch((error) => { console.error(error.stack || error.message); process.exitCode = 1; });
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: halo-v0.4.0-final-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/final-release-performance/
+          if-no-files-found: error
+          retention-days: 30
+
+  release-package-validator:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      HALO_FINAL_EVIDENCE: /tmp/halo-v040-final-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Prepare final evidence root
+        run: |
+          rm -rf "$HALO_FINAL_EVIDENCE" /tmp/halo-v040-final-first /tmp/halo-v040-final-standalone
+          mkdir -p "$HALO_FINAL_EVIDENCE" /tmp/halo-v040-final-first
+      - name: Deterministic package twice
+        run: |
+          set -euo pipefail
+          npm run package:release | tee "$HALO_FINAL_EVIDENCE/package-first.log"
+          cp dist/halo-learning-magic-hand-v0.4.0.zip /tmp/halo-v040-final-first/extension.zip
+          cp releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip /tmp/halo-v040-final-first/source.zip
+          cp dist/halo-learning-v0.4.0-package-manifest.json /tmp/halo-v040-final-first/manifest.json
+          sha256sum dist/halo-learning-magic-hand-v0.4.0.zip releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip dist/halo-learning-v0.4.0-package-manifest.json > "$HALO_FINAL_EVIDENCE/first.sha256"
+          npm run package:release | tee "$HALO_FINAL_EVIDENCE/package-second.log"
+          sha256sum dist/halo-learning-magic-hand-v0.4.0.zip releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip dist/halo-learning-v0.4.0-package-manifest.json > "$HALO_FINAL_EVIDENCE/second.sha256"
+          cmp /tmp/halo-v040-final-first/extension.zip dist/halo-learning-magic-hand-v0.4.0.zip
+          cmp /tmp/halo-v040-final-first/source.zip releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
+          cmp /tmp/halo-v040-final-first/manifest.json dist/halo-learning-v0.4.0-package-manifest.json
+          cmp "$HALO_FINAL_EVIDENCE/first.sha256" "$HALO_FINAL_EVIDENCE/second.sha256"
+          test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Final development validator must pass
+        run: |
+          set -euo pipefail
+          node scripts/validate-v0.4.0-final.js --development | tee "$HALO_FINAL_EVIDENCE/development-validator.log"
+      - name: Extract standalone and audit package contents
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/halo-v040-final-standalone
+          unzip -q releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip -d /tmp/halo-v040-final-standalone
+          ! find /tmp/halo-v040-final-standalone -name .git -print -quit | grep -q .
+          unzip -Z1 dist/halo-learning-magic-hand-v0.4.0.zip | grep -q '^data/lexical-v0.4.0/manifest.json$'
+          unzip -Z1 dist/halo-learning-magic-hand-v0.4.0.zip | grep -q '^data/lexical-v0.4.0/shards/'
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const d = JSON.parse(fs.readFileSync('apps/extension/data/lexical-v0.4.0/data-manifest.json', 'utf8'));
+          const c = JSON.parse(fs.readFileSync('docs/validation/v0.4.0-browser-shard-comparison.json', 'utf8'));
+          if (d.selectionStatus !== 'selected-by-browser-comparison' || d.bucketCount !== 64) throw new Error('selected runtime manifest is not canonical 64');
+          if (!c.selection || c.selection.status !== 'selected' || c.selection.selectedBucketCount !== 64) throw new Error('comparison evidence does not select 64');
+          const selected = c.candidates.find((x) => x.bucketCount === 64);
+          if (!selected || selected.manifestHash.value !== d.manifest.hash.value || selected.manifestRootHash.value !== d.manifest.rootHash.value) throw new Error('selected runtime hashes do not bind to comparison evidence');
+          const manifest = JSON.parse(fs.readFileSync('apps/extension/manifest.json', 'utf8'));
+          if (Object.prototype.hasOwnProperty.call(manifest, 'host_permissions')) throw new Error('production manifest widened host permissions');
+          NODE
+      - name: Final standalone validator must pass
+        run: |
+          set -euo pipefail
+          cd /tmp/halo-v040-final-standalone
+          npm ci
+          node scripts/validate-v0.4.0-final.js --standalone | tee "$HALO_FINAL_EVIDENCE/standalone-validator.log"
+      - name: Final release summary
+        run: |
+          printf 'source_head=%s\n' "$GITHUB_SHA" > "$HALO_FINAL_EVIDENCE/final-summary.txt"
+          printf 'deterministic_package=true\nvalidators_passed=true\nselected_runtime=64\npermission_widening=false\n' >> "$HALO_FINAL_EVIDENCE/final-summary.txt"
+          sha256sum dist/halo-learning-magic-hand-v0.4.0.zip releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip dist/halo-learning-v0.4.0-package-manifest.json > "$HALO_FINAL_EVIDENCE/final.sha256"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: halo-v0.4.0-final-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/halo-v040-final-release/
+            dist/halo-learning-v0.4.0-package-manifest.json
+            dist/halo-learning-magic-hand-v0.4.0.zip
+            releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
+          if-no-files-found: warn
+          retention-days: 30

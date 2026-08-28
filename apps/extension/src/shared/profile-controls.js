@@ -15,10 +15,23 @@
       ? { ...current.channels, ...ui.channels }
       : current.channels;
     const merged = { ...current, channels };
-    for (const name of ['density', 'languageMode', 'labelPosition']) {
+    for (const name of ['density', 'languageMode', 'labelPosition', 'triggerMode']) {
       if (Object.hasOwn(ui, name)) merged[name] = ui[name];
     }
-    return normalizeSettings(merged);
+    if (Object.hasOwn(ui, 'sitePolicy')) merged.sitePolicy = ui.sitePolicy;
+    const candidate = normalizeSettings(merged);
+    const changed = candidate.density !== current.density ||
+      candidate.languageMode !== current.languageMode ||
+      candidate.labelPosition !== current.labelPosition ||
+      candidate.triggerMode !== current.triggerMode ||
+      candidate.sitePolicy.userDenylist.length !== current.sitePolicy.userDenylist.length ||
+      candidate.sitePolicy.userDenylist.some((value, index) => value !== current.sitePolicy.userDenylist[index]) ||
+      Object.keys(current.channels).some((name) => candidate.channels[name] !== current.channels[name]);
+    if (!changed) return candidate;
+    if (current.profileRevision >= Number.MAX_SAFE_INTEGER) {
+      throw new RangeError('profileRevision: cannot be incremented safely');
+    }
+    return normalizeSettings({ ...candidate, profileRevision: current.profileRevision + 1 });
   }
 
   return Object.freeze({ mergeUiSettings });

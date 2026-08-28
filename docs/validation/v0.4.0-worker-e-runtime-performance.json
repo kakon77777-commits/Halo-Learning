@@ -1,0 +1,90 @@
+{
+  "schema": "halo-worker-e-runtime-performance-v1",
+  "status": "verification-pending",
+  "worker": "E",
+  "branch": "parallel/v0.4.0-runtime-performance",
+  "baseSha": "b6cd8ccfd705563bad7dcea87900d50fa8ca0b80",
+  "productionCodeSha": "64f60c77ed62c3d2a453ac6596bb1a79bba86e37",
+  "frozenBudgets": {
+    "coldRequiredShardsP95Ms": 300,
+    "warmLookupP95Ms": 100,
+    "longTaskMaxMs": 50
+  },
+  "historicalBaseline": {
+    "candidate64": {
+      "coldRequiredShardsP95Ms": 567.7,
+      "warmLookupP95Ms": 0.2,
+      "longTaskMaxMs": 73,
+      "passed": false
+    },
+    "candidate128": {
+      "coldRequiredShardsP95Ms": 398.7,
+      "warmLookupP95Ms": 0.5,
+      "longTaskMaxMs": 0,
+      "passed": false
+    },
+    "selection": "blocked"
+  },
+  "lastCompletedRealChromiumRun": {
+    "actionsRunId": 32960614569,
+    "chromiumVersion": "151.0.7922.34",
+    "candidate64": {
+      "coldRequiredShardsP50Ms": 529.3,
+      "coldRequiredShardsP95Ms": 553.2,
+      "warmLookupP95Ms": 0.2,
+      "longTaskMaxMs": 81,
+      "passed": false
+    },
+    "candidate128": {
+      "coldRawMs": [362.1, 335.9, 328.0, 319.8, 347.5],
+      "coldRequiredShardsP50Ms": 335.9,
+      "coldRequiredShardsP95Ms": 362.1,
+      "coldRequiredShardsMaxMs": 362.1,
+      "warmLookupP95Ms": 0.2,
+      "longTaskMaxMs": 0,
+      "requiredShardCount": 13,
+      "bytesLoaded": 3005316,
+      "usedJsHeapBytesMax": 21684811,
+      "dominantStagesP95Ms": {
+        "shardValidationMs": 207.4,
+        "shardCanonicalizeMs": 46.9,
+        "shardJsonParseMs": 18.4,
+        "shardSha256Ms": 17.0,
+        "shardDescriptorBytesMs": 13.0,
+        "shardDeepFreezeMs": 10.9,
+        "shardMaterializationMs": 8.6
+      },
+      "passed": false
+    },
+    "selection": "blocked"
+  },
+  "boundedAttempts": [
+    {
+      "name": "linear canonical lexical/morphology row validation",
+      "mechanismEvidence": "32-row dense shard RED observed 96 TextEncoder.encode calls; GREEN bounds ordering work to one encoding per row",
+      "browserEvidence": "128 cold p95 improved from approximately 439.6 ms to 371.6 ms; validation p95 from approximately 261.4 ms to 187.2 ms; long-task max from approximately 53 ms to 0 ms",
+      "decision": "accepted"
+    },
+    {
+      "name": "bind manifest descriptor bytes to delivered shard text",
+      "mechanismEvidence": "RED accepted changed delivered byte length; GREEN rejects it while retaining canonical payload SHA-256 verification",
+      "browserEvidence": "descriptor-byte stage p95 improved from approximately 43.8 ms to 7.9 ms; 128 cold p95 reached 314.4 ms on that runner",
+      "decision": "accepted"
+    },
+    {
+      "name": "linear canonical gloss validation",
+      "mechanismEvidence": "32-gloss RED observed 128 TextEncoder.encode calls; GREEN bounds gloss ordering to one encoding per gloss",
+      "browserEvidence": "final separate Azure runner measured 128 cold p95 362.1 ms, warm 0.2 ms, long-task 0 ms; runner variance prevents claiming a direct latency delta",
+      "decision": "accepted-mechanism-gate-still-blocked"
+    },
+    {
+      "name": "fewer required shards per request",
+      "mechanismEvidence": "rejected before architecture change: frozen fixture resolves to 13 distinct deterministic routing buckets; omitting them under current lookup/longest-match semantics would create false negatives",
+      "decision": "rejected-without-change"
+    }
+  ],
+  "finalVerification": {
+    "state": "pending",
+    "note": "A clean final workflow run is triggered by this commit; replace this section with its fresh evidence before handoff completion."
+  }
+}

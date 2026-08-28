@@ -1,0 +1,265 @@
+name: Architect v0.4.0 Final Convergence
+
+on:
+  push:
+    branches:
+      - integration/v0.4.0-final-convergence
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Full Node regression
+        run: npm test
+      - name: Canonical lexical runtime
+        run: npm run verify:runtime
+      - name: Semantic quality regression
+        run: npm run quality:verify
+      - name: Worker E focused regression
+        run: node --test tests/worker-e-descriptor-bytes.test.js tests/worker-e-gloss-validation.test.js tests/worker-e-runtime-performance.test.js
+      - name: Worker C release-tooling regression
+        run: node --test tests/release-validator-v0.4.0.test.js tests/release-packaging-v0.4.0.test.js
+
+  browser-file:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        file:
+          - accessibility
+          - browser-runtime-matrix
+          - dynamic-dom
+          - reversible-renderer
+          - sensitive-site
+          - sentence-pipeline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Run isolated real-browser file
+        run: timeout --kill-after=10s 180s node --test "tests/browser/${{ matrix.file }}.e2e.test.js"
+
+  trigger-controller:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: Trigger controller unit regression
+        run: node --test tests/trigger-controller.test.js tests/browser-trigger-entry.test.js
+      - name: Trigger controller installed-browser lifecycle
+        env:
+          HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/trigger-controller.e2e.test.js
+
+  mv3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Collect MV3 lifecycle evidence
+        run: |
+          mkdir -p evidence/architect-mv3
+          node scripts/collect-worker-b-browser-evidence.js evidence/architect-mv3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: architect-v0.4.0-mv3-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/architect-mv3/
+          if-no-files-found: warn
+          retention-days: 14
+
+  performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Fresh frozen 64/128 comparison
+        run: |
+          mkdir -p evidence/architect-performance
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { chromium } = require('playwright');
+          const { runShardComparison } = require('./scripts/profile-browser-runtime');
+          (async () => {
+            const comparison = await runShardComparison({ executablePath: chromium.executablePath() });
+            fs.writeFileSync(
+              'evidence/architect-performance/v0.4.0-browser-shard-comparison.json',
+              JSON.stringify(comparison, null, 2) + '\n'
+            );
+            console.log(JSON.stringify({
+              browser: comparison.browser,
+              selection: comparison.selection,
+              candidates: comparison.candidates.map((candidate) => ({
+                bucketCount: candidate.bucketCount,
+                measurements: candidate.measurements,
+                bottleneckDecomposition: candidate.bottleneckDecomposition,
+                gates: candidate.gates,
+                allBlockingPassed: candidate.allBlockingPassed
+              }))
+            }, null, 2));
+            if (!comparison.selection || comparison.selection.status !== 'selected') process.exitCode = 2;
+          })().catch((error) => {
+            console.error(error.stack || error.message);
+            process.exitCode = 1;
+          });
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: architect-v0.4.0-performance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/architect-performance/
+          if-no-files-found: error
+          retention-days: 14
+
+  release-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HALO_EVIDENCE_ROOT: /tmp/halo-v040-release-evidence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Prepare isolated release evidence workspace
+        run: |
+          rm -rf "$HALO_EVIDENCE_ROOT" /tmp/halo-release-first
+          mkdir -p "$HALO_EVIDENCE_ROOT" /tmp/halo-release-first
+      - name: Build deterministic candidate twice and compare bytes
+        run: |
+          set -euo pipefail
+          npm run package:release | tee "$HALO_EVIDENCE_ROOT/package-first.log"
+          cp dist/halo-learning-magic-hand-v0.4.0.zip /tmp/halo-release-first/extension.zip
+          cp releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip /tmp/halo-release-first/source.zip
+          cp dist/halo-learning-v0.4.0-package-manifest.json /tmp/halo-release-first/manifest.json
+          sha256sum \
+            dist/halo-learning-magic-hand-v0.4.0.zip \
+            releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip \
+            dist/halo-learning-v0.4.0-package-manifest.json \
+            > "$HALO_EVIDENCE_ROOT/first.sha256"
+          npm run package:release | tee "$HALO_EVIDENCE_ROOT/package-second.log"
+          sha256sum \
+            dist/halo-learning-magic-hand-v0.4.0.zip \
+            releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip \
+            dist/halo-learning-v0.4.0-package-manifest.json \
+            > "$HALO_EVIDENCE_ROOT/second.sha256"
+          cmp /tmp/halo-release-first/extension.zip dist/halo-learning-magic-hand-v0.4.0.zip
+          cmp /tmp/halo-release-first/source.zip releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
+          cmp /tmp/halo-release-first/manifest.json dist/halo-learning-v0.4.0-package-manifest.json
+          cmp "$HALO_EVIDENCE_ROOT/first.sha256" "$HALO_EVIDENCE_ROOT/second.sha256"
+          printf 'deterministic=true\n' > "$HALO_EVIDENCE_ROOT/package-byte-comparison.txt"
+
+          git status --porcelain --untracked-files=all > "$HALO_EVIDENCE_ROOT/post-package-source-status.txt"
+          if [ -s "$HALO_EVIDENCE_ROOT/post-package-source-status.txt" ]; then
+            echo 'source checkout is dirty after deterministic packaging' >&2
+            cat "$HALO_EVIDENCE_ROOT/post-package-source-status.txt" >&2
+            exit 1
+          fi
+      - name: Extract standalone source and prove Git metadata absent
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/halo-v040-standalone
+          mkdir -p /tmp/halo-v040-standalone
+          unzip -q releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip -d /tmp/halo-v040-standalone
+          if find /tmp/halo-v040-standalone -name .git -print -quit | grep -q .; then
+            echo 'standalone contains prohibited .git metadata' >&2
+            exit 1
+          fi
+          printf 'git_metadata_present=false\n' > "$HALO_EVIDENCE_ROOT/standalone-git-audit.txt"
+      - name: Run development and extracted standalone validators without hiding failure
+        run: |
+          set -euo pipefail
+          git status --porcelain --untracked-files=all > "$HALO_EVIDENCE_ROOT/pre-development-validator-git-status.txt"
+          if [ -s "$HALO_EVIDENCE_ROOT/pre-development-validator-git-status.txt" ]; then
+            echo 'development validator source must start clean' >&2
+            cat "$HALO_EVIDENCE_ROOT/pre-development-validator-git-status.txt" >&2
+            exit 1
+          fi
+
+          set +e
+          npm run validate > "$HALO_EVIDENCE_ROOT/development-validator.log" 2>&1
+          DEV_EXIT=$?
+          set -e
+
+          git status --porcelain --untracked-files=all > "$HALO_EVIDENCE_ROOT/post-development-validator-git-status.txt"
+          if [ -s "$HALO_EVIDENCE_ROOT/post-development-validator-git-status.txt" ]; then
+            echo 'development validator dirtied source checkout' >&2
+            cat "$HALO_EVIDENCE_ROOT/post-development-validator-git-status.txt" >&2
+            exit 1
+          fi
+
+          (cd /tmp/halo-v040-standalone && npm ci)
+          set +e
+          (cd /tmp/halo-v040-standalone && npm run validate:standalone) > "$HALO_EVIDENCE_ROOT/standalone-validator.log" 2>&1
+          STANDALONE_EXIT=$?
+          set -e
+          python - "$DEV_EXIT" "$STANDALONE_EXIT" "$HALO_EVIDENCE_ROOT" <<'PY2'
+          import json, sys
+          from pathlib import Path
+          dev = int(sys.argv[1])
+          standalone = int(sys.argv[2])
+          evidence_root = Path(sys.argv[3])
+          payload = {
+              'schemaVersion': 1,
+              'release': 'v0.4.0',
+              'developmentValidator': {'exitCode': dev, 'passed': dev == 0},
+              'standaloneValidator': {'exitCode': standalone, 'passed': standalone == 0},
+              'deterministicPackageBytes': True,
+              'sourceCheckoutCleanBeforeDevelopmentValidator': True,
+              'sourceCheckoutCleanAfterDevelopmentValidator': True,
+              'standaloneGitMetadataPresent': False,
+          }
+          (evidence_root / 'release-validation-summary.json').write_text(
+              json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(payload, indent=2))
+          PY2
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: architect-v0.4.0-release-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/halo-v040-release-evidence/
+            dist/halo-learning-magic-hand-v0.4.0.zip
+            dist/halo-learning-v0.4.0-package-manifest.json
+            releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,43 @@
+name: Worker B Accessibility Apply
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-ux
+
+permissions:
+  contents: write
+
+jobs:
+  apply-green:
+    if: "${{ startsWith(github.event.head_commit.message, 'ci: apply Worker B accessibility GREEN') }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Apply minimal production patch
+        run: node scripts/worker-b-apply-accessibility-green.js
+      - name: Focused static GREEN
+        run: node --test tests/accessibility-contract.test.js
+      - name: Renderer regression
+        run: node --test tests/reversible-renderer.test.js
+      - name: Focused real Chromium GREEN
+        run: node --test tests/browser/accessibility.e2e.test.js
+      - name: Diff hygiene
+        run: git diff --check
+      - name: Commit verified production change
+        run: |
+          git config user.name "EveMissLab Worker B"
+          git config user.email "worker-b@users.noreply.github.com"
+          git add apps/extension/src/shared/reversible-renderer.js apps/extension/src/content.css apps/extension/src/popup.css
+          git diff --cached --quiet && { echo 'No production change to commit'; exit 1; }
+          git commit -m "feat: harden browser accessibility"
+          git push origin HEAD:parallel/v0.4.0-browser-ux

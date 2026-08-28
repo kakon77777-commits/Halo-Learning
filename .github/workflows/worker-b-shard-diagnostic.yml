@@ -1,0 +1,39 @@
+name: Worker E Exact Harness Repair
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-runtime-performance
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Restore and patch exact harness
+        run: |
+          python scripts/worker-e-repair-browser-harness.py
+          git diff --check
+      - name: Full Node regression suite
+        run: npm test
+      - name: Verify canonical lexical runtime
+        run: npm run verify:runtime
+      - name: Commit repaired harness
+        run: |
+          git config user.name 'Halo Worker E'
+          git config user.email 'worker-e@users.noreply.github.com'
+          git add tests/browser-harness.test.js
+          git commit -m 'test: align shard comparison fixture with enriched measurements'
+          git push origin HEAD:parallel/v0.4.0-runtime-performance

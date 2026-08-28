@@ -30,14 +30,14 @@ test('default profile renders compact POS labels at top-right', () => {
 
 test('POS color is disabled when it would be the only POS semantic carrier', () => {
   const { Projection, Settings } = loadModules();
-  const profile = Settings.normalizeSettings({ posLabels: false, posColors: true, density: 1 });
+  const profile = Settings.migrateSettings({ posLabels: false, posColors: true, density: 1 });
   const plan = Projection.createMarkingPlan(sampleTokens(), profile);
   const verb = plan.find((x) => x.text === 'learns');
   assert.equal(verb.marked, false);
   assert.equal(verb.label, null);
   assert.equal(verb.colorClass, null);
 
-  const labelsOnly = Settings.normalizeSettings({ posLabels: true, posColors: false, density: 1 });
+  const labelsOnly = Settings.migrateSettings({ posLabels: true, posColors: false, density: 1 });
   const plan2 = Projection.createMarkingPlan(sampleTokens(), labelsOnly);
   const verb2 = plan2.find((x) => x.text === 'learns');
   assert.equal(verb2.label, 'v');
@@ -103,7 +103,7 @@ test('available semantic channels select only their corresponding projection dec
   };
 
   for (const [channel, value] of Object.entries(expected)) {
-    const profile = Settings.normalizeSettings({ channels: channelsWith(channel), density: 1 });
+    const profile = Settings.migrateSettings({ channels: channelsWith(channel), density: 1 });
     const item = Projection.createMarkingPlan([semanticToken()], profile)[0];
     assert.equal(item.marked, true, channel);
     assert.deepEqual(item.decorations[channel], value, channel);
@@ -119,7 +119,7 @@ test('all visual channels off yields zero decoration while semantic tokens remai
   const snapshot = JSON.stringify(token);
   const channels = channelsWith('learningState');
   channels.learningState = false;
-  const profile = Settings.normalizeSettings({ channels, density: 1 });
+  const profile = Settings.migrateSettings({ channels, density: 1 });
   const plan = Projection.createMarkingPlan([token], profile);
 
   assert.equal(plan.filter((item) => item.marked).length, 0);
@@ -132,10 +132,10 @@ test('profile position, density, color, and channel changes never mutate canonic
   const token = semanticToken();
   const snapshot = JSON.stringify(token);
   const profiles = [
-    Settings.normalizeSettings({ density: 1, labelPosition: 'top-left' }),
-    Settings.normalizeSettings({ density: 0, labelPosition: 'inline' }),
-    Settings.normalizeSettings({ channels: { ...channelsWith('posLabel'), posColor: true }, density: 1 }),
-    Settings.normalizeSettings({ channels: channelsWith('glossHint'), density: 1 })
+    Settings.migrateSettings({ density: 1, labelPosition: 'top-left' }),
+    Settings.migrateSettings({ density: 0, labelPosition: 'inline' }),
+    Settings.migrateSettings({ channels: { ...channelsWith('posLabel'), posColor: true }, density: 1 }),
+    Settings.migrateSettings({ channels: channelsWith('glossHint'), density: 1 })
   ];
 
   const plans = profiles.map((profile) => Projection.createMarkingPlan([token], profile));
@@ -146,7 +146,7 @@ test('profile position, density, color, and channel changes never mutate canonic
 
 test('density selection is deterministic and priority-aware', () => {
   const { Projection, Settings } = loadModules();
-  const profile = Settings.normalizeSettings({ density: 0.5, minConfidence: 0.5, languageMode: 'both' });
+  const profile = Settings.migrateSettings({ density: 0.5, minConfidence: 0.5, languageMode: 'both' });
   const a = Projection.createMarkingPlan(sampleTokens(), profile);
   const b = Projection.createMarkingPlan(sampleTokens(), profile);
   assert.deepEqual(a.map((x) => x.marked), b.map((x) => x.marked));
@@ -156,7 +156,7 @@ test('density selection is deterministic and priority-aware', () => {
 
 test('low-confidence and filtered-language tokens are not marked', () => {
   const { Projection, Settings } = loadModules();
-  const profile = Settings.normalizeSettings({ density: 1, minConfidence: 0.6, languageMode: 'en' });
+  const profile = Settings.migrateSettings({ density: 1, minConfidence: 0.6, languageMode: 'en' });
   const plan = Projection.createMarkingPlan(sampleTokens(), profile);
   assert.equal(plan.find((x) => x.text === '快速').marked, false);
   assert.equal(plan.find((x) => x.text === 'xqz').marked, false);
@@ -173,16 +173,16 @@ test('projection thresholds each annotation channel instead of promoting low-con
       { type: 'gloss', value: 'to print', confidence: 0.98 }
     ]
   };
-  const posOnly = Settings.normalizeSettings({ channels: channelsWith('posLabel'), density: 1, minConfidence: 0.6 });
-  const glossOnly = Settings.normalizeSettings({ channels: channelsWith('glossHint'), density: 1, minConfidence: 0.6 });
-  const combined = Settings.normalizeSettings({
+  const posOnly = Settings.migrateSettings({ channels: channelsWith('posLabel'), density: 1, minConfidence: 0.6 });
+  const glossOnly = Settings.migrateSettings({ channels: channelsWith('glossHint'), density: 1, minConfidence: 0.6 });
+  const combined = Settings.migrateSettings({
     channels: { ...channelsWith('glossHint'), posLabel: true, posColor: true },
     density: 1,
     minConfidence: 0.6
   });
 
   assert.equal(Projection.createMarkingPlan([token], posOnly)[0].marked, false);
-  const visibleLowConfidencePos = Projection.createMarkingPlan([token], Settings.normalizeSettings({
+  const visibleLowConfidencePos = Projection.createMarkingPlan([token], Settings.migrateSettings({
     channels: channelsWith('posLabel'),
     density: 1,
     minConfidence: 0.5
@@ -198,7 +198,7 @@ test('projection thresholds each annotation channel instead of promoting low-con
   assert.equal(combinedItem.label, null);
   assert.equal(combinedItem.colorClass, null);
   assert.equal(combinedItem.glossHint, 'to print');
-  const visibleCombined = Projection.createMarkingPlan([token], Settings.normalizeSettings({
+  const visibleCombined = Projection.createMarkingPlan([token], Settings.migrateSettings({
     channels: { ...channelsWith('glossHint'), posLabel: true },
     density: 1,
     minConfidence: 0.5
@@ -211,7 +211,7 @@ test('projection thresholds each annotation channel instead of promoting low-con
 test('canonical tokens never project a derived field without matching annotation evidence', () => {
   const { Projection, Settings } = loadModules();
   const token = { ...semanticToken(), annotations: [] };
-  const profile = Settings.normalizeSettings({ channels: channelsWith('posLabel'), density: 1, minConfidence: 0 });
+  const profile = Settings.migrateSettings({ channels: channelsWith('posLabel'), density: 1, minConfidence: 0 });
 
   const item = Projection.createMarkingPlan([token], profile)[0];
 
@@ -227,7 +227,7 @@ test('canonical projection rejects same-type evidence whose value contradicts th
     simplifiedPos: 'v',
     annotations: [{ type: 'simplified-pos', value: 'n', confidence: 0.99 }]
   };
-  const profile = Settings.normalizeSettings({ channels: channelsWith('posLabel'), density: 1, minConfidence: 0.6 });
+  const profile = Settings.migrateSettings({ channels: channelsWith('posLabel'), density: 1, minConfidence: 0.6 });
 
   const item = Projection.createMarkingPlan([token], profile)[0];
 
@@ -238,7 +238,7 @@ test('canonical projection rejects same-type evidence whose value contradicts th
 
 test('settings normalization clamps invalid values and accepts label positions', () => {
   const { Settings } = loadModules();
-  const settings = Settings.normalizeSettings({
+  const settings = Settings.migrateSettings({
     density: 9,
     minConfidence: -2,
     languageMode: 'nonsense',
@@ -248,5 +248,5 @@ test('settings normalization clamps invalid values and accepts label positions',
   assert.equal(settings.minConfidence, 0);
   assert.equal(settings.languageMode, 'both');
   assert.equal(settings.labelPosition, 'bottom-right');
-  assert.equal(Settings.normalizeSettings({ labelPosition: 'bad' }).labelPosition, 'top-right');
+  assert.equal(Settings.migrateSettings({ labelPosition: 'bad' }).labelPosition, 'top-right');
 });

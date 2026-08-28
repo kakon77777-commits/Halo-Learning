@@ -4,8 +4,8 @@
   background: #f7f7f4;
 }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 330px; }
-.panel { padding: 16px; }
+body { margin: 0; min-width: min(330px, 100vw); max-width: 100vw; overflow-x: hidden; overflow-wrap: anywhere; }
+.panel { padding: 16px; max-width: 100%; overflow-wrap: anywhere; }
 header { padding: 2px 2px 12px; border-bottom: 1px solid #d8d8d2; }
 .eyebrow { font-size: 10px; font-weight: 800; letter-spacing: .12em; opacity: .6; }
 h1 { margin: 5px 0 2px; font-size: 22px; line-height: 1.1; }
@@ -27,6 +27,7 @@ output { margin-left: 6px; font-variant-numeric: tabular-nums; }
 input[type="range"] { width: 100%; accent-color: #222; }
 select { width: 100%; padding: 7px 9px; border: 1px solid #cfcfc8; border-radius: 8px; background: #fff; color: inherit; }
 .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding-top: 13px; }
+.actions .analyze { grid-column: 1 / -1; }
 button { border-radius: 9px; padding: 9px 10px; font-weight: 700; cursor: pointer; }
 button.primary { border: 1px solid #181818; background: #181818; color: #fff; }
 button.secondary { border: 1px solid #c9c9c2; background: #fff; color: #222; }
@@ -34,3 +35,33 @@ button:disabled { opacity: .45; cursor: wait; }
 .status { min-height: 18px; margin: 10px 2px 0; font-size: 12px; }
 .status.error { color: #a11; }
 .privacy { margin: 4px 2px 0; font-size: 10px; opacity: .48; }
+
+
+:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  button, select, input, summary {
+    forced-color-adjust: auto;
+  }
+  button.primary, button.secondary, select {
+    border: 1px solid ButtonText;
+  }
+}
+
+@media (max-width: 360px) {
+  .panel { padding: 12px; }
+  .row, .label-line { align-items: flex-start; gap: 8px; }
+  .actions { grid-template-columns: 1fr; }
+  .actions .analyze { grid-column: auto; }
+}

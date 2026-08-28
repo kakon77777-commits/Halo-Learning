@@ -1,11 +1,15 @@
 'use strict';
 
-const SEMANTIC_SCHEMA_VERSION = 1;
+const BrowserSemanticContracts = require('../../apps/extension/src/shared/semantic-contracts');
+const SitePolicy = require('../../apps/extension/src/shared/site-policy');
+
+const SEMANTIC_SCHEMA_VERSION = BrowserSemanticContracts.SEMANTIC_SCHEMA_VERSION;
 const MARKING_PROFILE_SCHEMA_VERSION = 2;
 const LANGUAGES = Object.freeze(['en', 'zh-Hant']);
 const LANGUAGE_MODES = Object.freeze(['auto', 'both', 'en', 'zh-Hant']);
 const POS_TAGS = Object.freeze(['n', 'v', 'adj', 'adv', 'prep', 'conj', 'det', 'pron', 'aux', 'modal', 'x']);
 const LABEL_POSITIONS = Object.freeze(['top-right', 'top-left', 'bottom-right', 'inline']);
+const TRIGGER_MODES = Object.freeze(['adaptive-hover', 'explicit-only', 'hybrid']);
 const CHANNELS = Object.freeze([
   'posLabel',
   'posColor',
@@ -25,6 +29,23 @@ function fail(path, message) {
 function objectAt(value, path) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail(path, 'must be an object');
   return value;
+}
+
+function exactObjectAt(value, path, allowed) {
+  const result = objectAt(value, path);
+  const prototype = Object.getPrototypeOf(result);
+  if (prototype !== Object.prototype && prototype !== null) fail(path, 'must be plain JSON data');
+  const descriptors = Object.getOwnPropertyDescriptors(result);
+  const snapshot = {};
+  for (const name of allowed) {
+    const descriptor = descriptors[name];
+    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value') || !descriptor.enumerable) fail(`${path}.${name}`, 'must be an own JSON data property');
+    snapshot[name] = descriptor.value;
+  }
+  for (const name of Object.keys(descriptors)) {
+    if (!allowed.includes(name)) fail(`${path}.${name}`, 'is not allowed');
+  }
+  return snapshot;
 }
 
 function stringAt(value, path) {
@@ -254,8 +275,26 @@ function normalizeAnnotationSet(value) {
 }
 
 function normalizeMarkingProfile(value) {
-  const raw = objectAt(value, 'profile');
-  const channels = objectAt(raw.channels, 'profile.channels');
+  const raw = exactObjectAt(value, 'profile', [
+    'schemaVersion', 'profileId', 'profileRevision', 'enabled', 'languageMode', 'triggerMode',
+    'sitePolicy', 'channels', 'density', 'minConfidence', 'labelPosition', 'runtimeBudgets',
+    'maxTextNodes', 'maxMarkedTokens'
+  ]);
+  const channels = exactObjectAt(raw.channels, 'profile.channels', CHANNELS);
+  const runtimeBudgets = exactObjectAt(raw.runtimeBudgets, 'profile.runtimeBudgets', [
+    'maxTextNodes', 'maxCharacters', 'maxSentences', 'maxSemanticTokens',
+    'maxShardIds', 'timeSliceMs', 'maxQueuedRoots', 'viewportBufferPx'
+  ]);
+  const sitePolicy = exactObjectAt(raw.sitePolicy, 'profile.sitePolicy', ['schemaVersion', 'userDenylist']);
+  if (sitePolicy.schemaVersion !== 1) fail('profile.sitePolicy.schemaVersion', 'must equal 1');
+  let userDenylist;
+  try { userDenylist = SitePolicy.normalizeDenylist(sitePolicy.userDenylist); } catch (_error) {
+    fail('profile.sitePolicy.userDenylist', 'must be a canonical hostname denylist');
+  }
+  if (userDenylist.length !== sitePolicy.userDenylist.length ||
+      userDenylist.some((value, index) => value !== sitePolicy.userDenylist[index])) {
+    fail('profile.sitePolicy.userDenylist', 'must be sorted, deduplicated, and canonical');
+  }
   const normalizedChannels = {};
   for (const channel of CHANNELS) {
     normalizedChannels[channel] = booleanAt(channels[channel], `profile.channels.${channel}`);
@@ -267,14 +306,27 @@ function normalizeMarkingProfile(value) {
       'profile.schemaVersion'
     ),
     profileId: stringAt(raw.profileId, 'profile.profileId'),
+    profileRevision: integerAt(raw.profileRevision, 'profile.profileRevision', 0, Number.MAX_SAFE_INTEGER),
     enabled: booleanAt(raw.enabled, 'profile.enabled'),
     languageMode: enumAt(raw.languageMode, LANGUAGE_MODES, 'profile.languageMode'),
+    triggerMode: enumAt(raw.triggerMode, TRIGGER_MODES, 'profile.triggerMode'),
+    sitePolicy: { schemaVersion: 1, userDenylist },
     channels: normalizedChannels,
     density: numberAt(raw.density, 'profile.density', 0, 1),
     minConfidence: numberAt(raw.minConfidence, 'profile.minConfidence', 0, 1),
     labelPosition: enumAt(raw.labelPosition, LABEL_POSITIONS, 'profile.labelPosition'),
-    maxTextNodes: integerAt(raw.maxTextNodes, 'profile.maxTextNodes', 1, 10000),
-    maxMarkedTokens: integerAt(raw.maxMarkedTokens, 'profile.maxMarkedTokens', 1, 100000)
+    runtimeBudgets: {
+      maxTextNodes: integerAt(runtimeBudgets.maxTextNodes, 'profile.runtimeBudgets.maxTextNodes', 1, 24),
+      maxCharacters: integerAt(runtimeBudgets.maxCharacters, 'profile.runtimeBudgets.maxCharacters', 1, 12000),
+      maxSentences: integerAt(runtimeBudgets.maxSentences, 'profile.runtimeBudgets.maxSentences', 1, 24),
+      maxSemanticTokens: integerAt(runtimeBudgets.maxSemanticTokens, 'profile.runtimeBudgets.maxSemanticTokens', 1, 600),
+      maxShardIds: integerAt(runtimeBudgets.maxShardIds, 'profile.runtimeBudgets.maxShardIds', 1, 24),
+      timeSliceMs: integerAt(runtimeBudgets.timeSliceMs, 'profile.runtimeBudgets.timeSliceMs', 1, 8),
+      maxQueuedRoots: integerAt(runtimeBudgets.maxQueuedRoots, 'profile.runtimeBudgets.maxQueuedRoots', 1, 200),
+      viewportBufferPx: integerAt(runtimeBudgets.viewportBufferPx, 'profile.runtimeBudgets.viewportBufferPx', 0, 1200)
+    },
+    maxTextNodes: integerAt(raw.maxTextNodes, 'profile.maxTextNodes', 50, 2000),
+    maxMarkedTokens: integerAt(raw.maxMarkedTokens, 'profile.maxMarkedTokens', 100, 10000)
   });
 }
 
@@ -329,7 +381,7 @@ module.exports = Object.freeze({
   CHANNELS,
   normalizeSemanticAnnotation,
   normalizeSemanticToken,
-  normalizeAnnotationSet,
+  normalizeAnnotationSet: BrowserSemanticContracts.normalizeAnnotationSet,
   normalizeMarkingProfile,
   migrateLegacySemanticToken
 });

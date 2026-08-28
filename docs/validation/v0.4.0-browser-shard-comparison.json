@@ -1,0 +1,1002 @@
+{
+  "schemaVersion": 1,
+  "comparisonFormat": "BrowserLexicalShardComparison/v1",
+  "generatedAt": "2026-08-27T10:36:25.743Z",
+  "browser": {
+    "name": "Chromium",
+    "version": "Chromium 151.0.7922.34"
+  },
+  "host": {
+    "os": "Linux 6.17.0-1022-azure x64",
+    "cpuClass": "4 logical CPU; Intel(R) Xeon(R) Platinum 8370C CPU @ 2.80GHz",
+    "memoryClass": "16 GiB system memory"
+  },
+  "fixture": {
+    "id": "bilingual-required-shards-v1",
+    "text": "The students were learning models while 老師幫助學生學習。",
+    "languageMode": "both"
+  },
+  "candidates": [
+    {
+      "bucketCount": 64,
+      "manifestHash": {
+        "algorithm": "sha256",
+        "value": "8d5e11ccf28f4872879ed84444d99c317969892bacfc1048110c6243f56e3d92"
+      },
+      "manifestRootHash": {
+        "algorithm": "sha256",
+        "value": "50bd7b032a48cb0536e2aff5138e70014edc510baf3afabec053f180efd21031"
+      },
+      "shardCount": 128,
+      "sizes": {
+        "manifestBytes": 63354,
+        "totalShardBytes": 56045987,
+        "totalShardGzipBytes": 15910022,
+        "maximumShardBytes": 588880
+      },
+      "browserVersion": "Chromium 151.0.7922.34",
+      "bottleneckDecomposition": {
+        "sampleCount": 5,
+        "stages": [
+          {
+            "name": "firstSemanticConsumerMs",
+            "p50Ms": 0.5999999999912689,
+            "p95Ms": 0.6000000000058208,
+            "maxMs": 0.6000000000058208
+          },
+          {
+            "name": "lookupReadinessMs",
+            "p50Ms": 140.1999999999971,
+            "p95Ms": 151.09999999999127,
+            "maxMs": 151.09999999999127
+          },
+          {
+            "name": "manifestDeepFreezeMs",
+            "p50Ms": 0.6999999999970896,
+            "p95Ms": 1,
+            "maxMs": 1
+          },
+          {
+            "name": "manifestFetchMs",
+            "p50Ms": 2.3999999999941792,
+            "p95Ms": 5.5,
+            "maxMs": 5.5
+          },
+          {
+            "name": "manifestIntegrityMs",
+            "p50Ms": 2.3000000000029104,
+            "p95Ms": 3.3999999999941792,
+            "maxMs": 3.3999999999941792
+          },
+          {
+            "name": "manifestJsonParseMs",
+            "p50Ms": 0.3000000000029104,
+            "p95Ms": 0.3000000000029104,
+            "maxMs": 0.3000000000029104
+          },
+          {
+            "name": "manifestTextDecodeMs",
+            "p50Ms": 0.6999999999970896,
+            "p95Ms": 0.8000000000029104,
+            "maxMs": 0.8000000000029104
+          },
+          {
+            "name": "manifestValidationMs",
+            "p50Ms": 2,
+            "p95Ms": 4.900000000008731,
+            "maxMs": 4.900000000008731
+          },
+          {
+            "name": "shardAttestationValidationMs",
+            "p50Ms": 0.4999999999854481,
+            "p95Ms": 0.7000000000116415,
+            "maxMs": 0.7000000000116415
+          },
+          {
+            "name": "shardDeepFreezeMs",
+            "p50Ms": 13.000000000029104,
+            "p95Ms": 18.10000000000582,
+            "maxMs": 18.10000000000582
+          },
+          {
+            "name": "shardFetchMs",
+            "p50Ms": 191.50000000001455,
+            "p95Ms": 318.7999999999738,
+            "maxMs": 318.7999999999738
+          },
+          {
+            "name": "shardJsonParseMs",
+            "p50Ms": 24.09999999999127,
+            "p95Ms": 29.80000000000291,
+            "maxMs": 29.80000000000291
+          },
+          {
+            "name": "shardMaterializationMs",
+            "p50Ms": 12.19999999999709,
+            "p95Ms": 20.599999999947613,
+            "maxMs": 20.599999999947613
+          },
+          {
+            "name": "shardSelectionMs",
+            "p50Ms": 3.6000000000058208,
+            "p95Ms": 6.5,
+            "maxMs": 6.5
+          },
+          {
+            "name": "shardSerializedBytesMs",
+            "p50Ms": 20.60000000000582,
+            "p95Ms": 24.000000000014552,
+            "maxMs": 24.000000000014552
+          },
+          {
+            "name": "shardSerializedHashMs",
+            "p50Ms": 5.999999999985448,
+            "p95Ms": 6.7000000000116415,
+            "maxMs": 6.7000000000116415
+          },
+          {
+            "name": "shardTextDecodeMs",
+            "p50Ms": 856.0999999999913,
+            "p95Ms": 1004.0999999999767,
+            "maxMs": 1004.0999999999767
+          }
+        ],
+        "bytesLoaded": {
+          "p50": 5705106,
+          "p95": 5705106,
+          "max": 5705106
+        },
+        "shardCount": {
+          "p50": 13,
+          "p95": 13,
+          "max": 13
+        },
+        "usedJsHeapBytes": {
+          "measurableSamples": 5,
+          "max": 24443855
+        }
+      },
+      "conditions": {
+        "cold": {
+          "browserContexts": 5,
+          "samples": [
+            {
+              "condition": "cold",
+              "contextIndex": 0,
+              "durationMs": 159,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 5.5,
+                  "manifestTextDecodeMs": 0.6999999999970896,
+                  "manifestJsonParseMs": 0.19999999999708962,
+                  "manifestIntegrityMs": 2.599999999991269,
+                  "manifestValidationMs": 1.6999999999970896,
+                  "manifestDeepFreezeMs": 0.5,
+                  "shardSelectionMs": 2.8999999999941792,
+                  "shardFetchMs": 318.7999999999738,
+                  "shardTextDecodeMs": 831.0000000000146,
+                  "shardSerializedBytesMs": 21.59999999999127,
+                  "shardSerializedHashMs": 6.7000000000116415,
+                  "shardJsonParseMs": 24.09999999999127,
+                  "shardAttestationValidationMs": 0.6999999999970896,
+                  "shardDeepFreezeMs": 16.20000000001164,
+                  "shardMaterializationMs": 13.099999999976717,
+                  "lookupReadinessMs": 144.10000000000582,
+                  "firstSemanticConsumerMs": 0.5999999999912689
+                },
+                "bytesLoaded": 5705106,
+                "shardCount": 13,
+                "usedJsHeapBytes": 24366937
+              }
+            },
+            {
+              "condition": "cold",
+              "contextIndex": 1,
+              "durationMs": 163.89999999999418,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 2.8000000000029104,
+                  "manifestTextDecodeMs": 0.5999999999912689,
+                  "manifestJsonParseMs": 0.3000000000029104,
+                  "manifestIntegrityMs": 2.3000000000029104,
+                  "manifestValidationMs": 2,
+                  "manifestDeepFreezeMs": 0.8999999999941792,
+                  "shardSelectionMs": 3.1000000000058208,
+                  "shardFetchMs": 191.50000000001455,
+                  "shardTextDecodeMs": 885.9999999999854,
+                  "shardSerializedBytesMs": 24.000000000014552,
+                  "shardSerializedHashMs": 5.999999999985448,
+                  "shardJsonParseMs": 23.19999999999709,
+                  "shardAttestationValidationMs": 0.7000000000116415,
+                  "shardDeepFreezeMs": 13.000000000029104,
+                  "shardMaterializationMs": 20.599999999947613,
+                  "lookupReadinessMs": 151.09999999999127,
+                  "firstSemanticConsumerMs": 0.6000000000058208
+                },
+                "bytesLoaded": 5705106,
+                "shardCount": 13,
+                "usedJsHeapBytes": 24443855
+              }
+            },
+            {
+              "condition": "cold",
+              "contextIndex": 2,
+              "durationMs": 154.20000000001164,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 2.1000000000058208,
+                  "manifestTextDecodeMs": 0.6999999999970896,
+                  "manifestJsonParseMs": 0.29999999998835847,
+                  "manifestIntegrityMs": 3.3999999999941792,
+                  "manifestValidationMs": 2.3000000000029104,
+                  "manifestDeepFreezeMs": 1,
+                  "shardSelectionMs": 4.5,
+                  "shardFetchMs": 114.40000000002328,
+                  "shardTextDecodeMs": 1004.0999999999767,
+                  "shardSerializedBytesMs": 20.599999999976717,
+                  "shardSerializedHashMs": 6.500000000014552,
+                  "shardJsonParseMs": 27.500000000014552,
+                  "shardAttestationValidationMs": 0.29999999998835847,
+                  "shardDeepFreezeMs": 12.000000000014552,
+                  "shardMaterializationMs": 8.999999999970896,
+                  "lookupReadinessMs": 139,
+                  "firstSemanticConsumerMs": 0.5
+                },
+                "bytesLoaded": 5705106,
+                "shardCount": 13,
+                "usedJsHeapBytes": 23888635
+              }
+            },
+            {
+              "condition": "cold",
+              "contextIndex": 3,
+              "durationMs": 146.1999999999971,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 2.099999999991269,
+                  "manifestTextDecodeMs": 0.8000000000029104,
+                  "manifestJsonParseMs": 0.3000000000029104,
+                  "manifestIntegrityMs": 2.2999999999883585,
+                  "manifestValidationMs": 4.900000000008731,
+                  "manifestDeepFreezeMs": 0.39999999999417923,
+                  "shardSelectionMs": 3.6000000000058208,
+                  "shardFetchMs": 134.80000000003201,
+                  "shardTextDecodeMs": 856.0999999999913,
+                  "shardSerializedBytesMs": 17.700000000026193,
+                  "shardSerializedHashMs": 5.900000000008731,
+                  "shardJsonParseMs": 23.5,
+                  "shardAttestationValidationMs": 0.4999999999854481,
+                  "shardDeepFreezeMs": 18.10000000000582,
+                  "shardMaterializationMs": 10.599999999976717,
+                  "lookupReadinessMs": 131.09999999999127,
+                  "firstSemanticConsumerMs": 0.5
+                },
+                "bytesLoaded": 5705106,
+                "shardCount": 13,
+                "usedJsHeapBytes": 23714486
+              }
+            },
+            {
+              "condition": "cold",
+              "contextIndex": 4,
+              "durationMs": 155.5,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 2.3999999999941792,
+                  "manifestTextDecodeMs": 0.6999999999970896,
+                  "manifestJsonParseMs": 0.3000000000029104,
+                  "manifestIntegrityMs": 2.2999999999883585,
+                  "manifestValidationMs": 1.6000000000058208,
+                  "manifestDeepFreezeMs": 0.6999999999970896,
+                  "shardSelectionMs": 6.5,
+                  "shardFetchMs": 220.1999999999971,
+                  "shardTextDecodeMs": 853.8000000000029,
+                  "shardSerializedBytesMs": 20.60000000000582,
+                  "shardSerializedHashMs": 5.7000000000116415,
+                  "shardJsonParseMs": 29.80000000000291,
+                  "shardAttestationValidationMs": 0.39999999999417923,
+                  "shardDeepFreezeMs": 10.799999999988358,
+                  "shardMaterializationMs": 12.19999999999709,
+                  "lookupReadinessMs": 140.1999999999971,
+                  "firstSemanticConsumerMs": 0.6000000000058208
+                },
+                "bytesLoaded": 5705106,
+                "shardCount": 13,
+                "usedJsHeapBytes": 23515038
+              }
+            }
+          ]
+        },
+        "warm": {
+          "annotationsPerContext": 20,
+          "samples": [
+            {
+              "condition": "warm",
+              "contextIndex": 0,
+              "samplesMs": [
+                0.10000000000582077,
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0,
+                0.10000000000582077,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0,
+                0,
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0.10000000000582077,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0.09999999999126885,
+                0.10000000000582077
+              ]
+            },
+            {
+              "condition": "warm",
+              "contextIndex": 1,
+              "samplesMs": [
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0.10000000000582077,
+                0,
+                0,
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0,
+                0.10000000000582077,
+                0.10000000000582077,
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0.20000000001164153
+              ]
+            },
+            {
+              "condition": "warm",
+              "contextIndex": 2,
+              "samplesMs": [
+                0.09999999999126885,
+                0.19999999999708962,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0.10000000000582077,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0
+              ]
+            },
+            {
+              "condition": "warm",
+              "contextIndex": 3,
+              "samplesMs": [
+                0.19999999999708962,
+                0,
+                0.10000000000582077,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0,
+                0.10000000000582077,
+                0.09999999999126885,
+                0,
+                0,
+                0.10000000000582077,
+                0,
+                0.10000000000582077,
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0.10000000000582077
+              ]
+            },
+            {
+              "condition": "warm",
+              "contextIndex": 4,
+              "samplesMs": [
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0,
+                0.10000000000582077,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0,
+                0,
+                0.19999999999708962,
+                0,
+                0.10000000000582077,
+                0.10000000000582077,
+                0,
+                0.19999999999708962,
+                0.09999999999126885
+              ]
+            }
+          ]
+        },
+        "longTasks": {
+          "samples": [
+            {
+              "condition": "long-tasks",
+              "contextIndex": 0,
+              "durationsMs": []
+            },
+            {
+              "condition": "long-tasks",
+              "contextIndex": 1,
+              "durationsMs": []
+            },
+            {
+              "condition": "long-tasks",
+              "contextIndex": 2,
+              "durationsMs": []
+            },
+            {
+              "condition": "long-tasks",
+              "contextIndex": 3,
+              "durationsMs": []
+            },
+            {
+              "condition": "long-tasks",
+              "contextIndex": 4,
+              "durationsMs": []
+            }
+          ]
+        }
+      },
+      "measurements": {
+        "coldRequiredShardsP50Ms": 155.5,
+        "coldRequiredShardsP95Ms": 163.89999999999418,
+        "coldRequiredShardsMaxMs": 163.89999999999418,
+        "warmLookupP50Ms": 0.09999999999126885,
+        "warmLookupP95Ms": 0.10000000000582077,
+        "warmLookupMaxMs": 0.20000000001164153,
+        "longTaskP50Ms": 0,
+        "longTaskP95Ms": 0,
+        "longTaskMaxMs": 0
+      },
+      "budgets": {
+        "coldRequiredShardsP95Ms": 300,
+        "warmLookupP95Ms": 100,
+        "longTaskMaxMs": 50
+      },
+      "gates": {
+        "coldRequiredShards": true,
+        "warmLookup": true,
+        "longTask": true
+      },
+      "allBlockingPassed": true
+    },
+    {
+      "bucketCount": 128,
+      "manifestHash": {
+        "algorithm": "sha256",
+        "value": "926d64ba5c2a01d0d392c06fd98da1e8721ffafcc8921bf1794766b7fb9612c7"
+      },
+      "manifestRootHash": {
+        "algorithm": "sha256",
+        "value": "c0e6368b42c1c24e806347978e6abfe0f2100ebd7d1403ac4d018033903a351c"
+      },
+      "shardCount": 256,
+      "sizes": {
+        "manifestBytes": 121075,
+        "totalShardBytes": 56110654,
+        "totalShardGzipBytes": 16302728,
+        "maximumShardBytes": 315304
+      },
+      "browserVersion": "Chromium 151.0.7922.34",
+      "bottleneckDecomposition": {
+        "sampleCount": 5,
+        "stages": [
+          {
+            "name": "firstSemanticConsumerMs",
+            "p50Ms": 0.5,
+            "p95Ms": 0.6999999999970896,
+            "maxMs": 0.6999999999970896
+          },
+          {
+            "name": "lookupReadinessMs",
+            "p50Ms": 81.19999999999709,
+            "p95Ms": 93.79999999998836,
+            "maxMs": 93.79999999998836
+          },
+          {
+            "name": "manifestDeepFreezeMs",
+            "p50Ms": 0.8000000000029104,
+            "p95Ms": 0.9000000000087311,
+            "maxMs": 0.9000000000087311
+          },
+          {
+            "name": "manifestFetchMs",
+            "p50Ms": 2.5,
+            "p95Ms": 3.400000000008731,
+            "maxMs": 3.400000000008731
+          },
+          {
+            "name": "manifestIntegrityMs",
+            "p50Ms": 5.7999999999883585,
+            "p95Ms": 9.60000000000582,
+            "maxMs": 9.60000000000582
+          },
+          {
+            "name": "manifestJsonParseMs",
+            "p50Ms": 0.6000000000058208,
+            "p95Ms": 1,
+            "maxMs": 1
+          },
+          {
+            "name": "manifestTextDecodeMs",
+            "p50Ms": 1.1999999999970896,
+            "p95Ms": 1.4000000000087311,
+            "maxMs": 1.4000000000087311
+          },
+          {
+            "name": "manifestValidationMs",
+            "p50Ms": 2.6999999999970896,
+            "p95Ms": 3.6999999999970896,
+            "maxMs": 3.6999999999970896
+          },
+          {
+            "name": "shardAttestationValidationMs",
+            "p50Ms": 0.6000000000058208,
+            "p95Ms": 0.6999999999970896,
+            "maxMs": 0.6999999999970896
+          },
+          {
+            "name": "shardDeepFreezeMs",
+            "p50Ms": 7.400000000008731,
+            "p95Ms": 8.400000000008731,
+            "maxMs": 8.400000000008731
+          },
+          {
+            "name": "shardFetchMs",
+            "p50Ms": 177.59999999999127,
+            "p95Ms": 256.50000000001455,
+            "maxMs": 256.50000000001455
+          },
+          {
+            "name": "shardJsonParseMs",
+            "p50Ms": 14.200000000040745,
+            "p95Ms": 16.09999999999127,
+            "maxMs": 16.09999999999127
+          },
+          {
+            "name": "shardMaterializationMs",
+            "p50Ms": 11.000000000043656,
+            "p95Ms": 14.399999999950523,
+            "maxMs": 14.399999999950523
+          },
+          {
+            "name": "shardSelectionMs",
+            "p50Ms": 3.8000000000029104,
+            "p95Ms": 5.5,
+            "maxMs": 5.5
+          },
+          {
+            "name": "shardSerializedBytesMs",
+            "p50Ms": 9.900000000008731,
+            "p95Ms": 12.800000000032014,
+            "maxMs": 12.800000000032014
+          },
+          {
+            "name": "shardSerializedHashMs",
+            "p50Ms": 3.1999999999970896,
+            "p95Ms": 3.5,
+            "maxMs": 3.5
+          },
+          {
+            "name": "shardTextDecodeMs",
+            "p50Ms": 427.6999999999971,
+            "p95Ms": 464.90000000003783,
+            "maxMs": 464.90000000003783
+          }
+        ],
+        "bytesLoaded": {
+          "p50": 3054724,
+          "p95": 3054724,
+          "max": 3054724
+        },
+        "shardCount": {
+          "p50": 13,
+          "p95": 13,
+          "max": 13
+        },
+        "usedJsHeapBytes": {
+          "measurableSamples": 5,
+          "max": 10319636
+        }
+      },
+      "conditions": {
+        "cold": {
+          "browserContexts": 5,
+          "samples": [
+            {
+              "condition": "cold",
+              "contextIndex": 0,
+              "durationMs": 94.70000000001164,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 2.400000000008731,
+                  "manifestTextDecodeMs": 0.8999999999941792,
+                  "manifestJsonParseMs": 0.5,
+                  "manifestIntegrityMs": 4.399999999994179,
+                  "manifestValidationMs": 2.6999999999970896,
+                  "manifestDeepFreezeMs": 0.9000000000087311,
+                  "shardSelectionMs": 3.599999999991269,
+                  "shardFetchMs": 115.19999999996799,
+                  "shardTextDecodeMs": 464.90000000003783,
+                  "shardSerializedBytesMs": 8.60000000000582,
+                  "shardSerializedHashMs": 3.2999999999738066,
+                  "shardJsonParseMs": 13.5,
+                  "shardAttestationValidationMs": 0.6000000000058208,
+                  "shardDeepFreezeMs": 7.80000000000291,
+                  "shardMaterializationMs": 6.7000000000261934,
+                  "lookupReadinessMs": 78.20000000001164,
+                  "firstSemanticConsumerMs": 0.5
+                },
+                "bytesLoaded": 3054724,
+                "shardCount": 13,
+                "usedJsHeapBytes": 9939834
+              }
+            },
+            {
+              "condition": "cold",
+              "contextIndex": 1,
+              "durationMs": 110.20000000001164,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 2.7000000000116415,
+                  "manifestTextDecodeMs": 1.3999999999941792,
+                  "manifestJsonParseMs": 1,
+                  "manifestIntegrityMs": 8.200000000011642,
+                  "manifestValidationMs": 3.6999999999970896,
+                  "manifestDeepFreezeMs": 0.8999999999941792,
+                  "shardSelectionMs": 5.5,
+                  "shardFetchMs": 211.40000000000873,
+                  "shardTextDecodeMs": 365.1999999999971,
+                  "shardSerializedBytesMs": 10.799999999988358,
+                  "shardSerializedHashMs": 3.5,
+                  "shardJsonParseMs": 16.09999999999127,
+                  "shardAttestationValidationMs": 0.40000000000873115,
+                  "shardDeepFreezeMs": 6.699999999967986,
+                  "shardMaterializationMs": 11.000000000043656,
+                  "lookupReadinessMs": 85.40000000000873,
+                  "firstSemanticConsumerMs": 0.6999999999970896
+                },
+                "bytesLoaded": 3054724,
+                "shardCount": 13,
+                "usedJsHeapBytes": 10041942
+              }
+            },
+            {
+              "condition": "cold",
+              "contextIndex": 2,
+              "durationMs": 98.90000000000873,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 2.5,
+                  "manifestTextDecodeMs": 1.1000000000058208,
+                  "manifestJsonParseMs": 1,
+                  "manifestIntegrityMs": 9.60000000000582,
+                  "manifestValidationMs": 3,
+                  "manifestDeepFreezeMs": 0.8000000000029104,
+                  "shardSelectionMs": 4.69999999999709,
+                  "shardFetchMs": 177.59999999999127,
+                  "shardTextDecodeMs": 339.3999999999942,
+                  "shardSerializedBytesMs": 9.900000000008731,
+                  "shardSerializedHashMs": 3,
+                  "shardJsonParseMs": 14.200000000040745,
+                  "shardAttestationValidationMs": 0.6000000000058208,
+                  "shardDeepFreezeMs": 5.599999999991269,
+                  "shardMaterializationMs": 6.600000000005821,
+                  "lookupReadinessMs": 74.80000000000291,
+                  "firstSemanticConsumerMs": 0.5
+                },
+                "bytesLoaded": 3054724,
+                "shardCount": 13,
+                "usedJsHeapBytes": 9957647
+              }
+            },
+            {
+              "condition": "cold",
+              "contextIndex": 3,
+              "durationMs": 111.69999999999709,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 3.400000000008731,
+                  "manifestTextDecodeMs": 1.1999999999970896,
+                  "manifestJsonParseMs": 0.6000000000058208,
+                  "manifestIntegrityMs": 5.7999999999883585,
+                  "manifestValidationMs": 2.3000000000029104,
+                  "manifestDeepFreezeMs": 0.6999999999970896,
+                  "shardSelectionMs": 3,
+                  "shardFetchMs": 256.50000000001455,
+                  "shardTextDecodeMs": 451.7000000000262,
+                  "shardSerializedBytesMs": 12.800000000032014,
+                  "shardSerializedHashMs": 3.1999999999970896,
+                  "shardJsonParseMs": 15,
+                  "shardAttestationValidationMs": 0.6999999999970896,
+                  "shardDeepFreezeMs": 8.400000000008731,
+                  "shardMaterializationMs": 14.399999999950523,
+                  "lookupReadinessMs": 93.79999999998836,
+                  "firstSemanticConsumerMs": 0.6000000000058208
+                },
+                "bytesLoaded": 3054724,
+                "shardCount": 13,
+                "usedJsHeapBytes": 10319636
+              }
+            },
+            {
+              "condition": "cold",
+              "contextIndex": 4,
+              "durationMs": 98.69999999999709,
+              "requiredShardCount": 13,
+              "residentShardCount": 13,
+              "decomposition": {
+                "stageMs": {
+                  "manifestFetchMs": 2,
+                  "manifestTextDecodeMs": 1.4000000000087311,
+                  "manifestJsonParseMs": 0.5,
+                  "manifestIntegrityMs": 5.69999999999709,
+                  "manifestValidationMs": 2.3000000000029104,
+                  "manifestDeepFreezeMs": 0.6999999999970896,
+                  "shardSelectionMs": 3.8000000000029104,
+                  "shardFetchMs": 133.90000000000873,
+                  "shardTextDecodeMs": 427.6999999999971,
+                  "shardSerializedBytesMs": 9.39999999999418,
+                  "shardSerializedHashMs": 2.8000000000174623,
+                  "shardJsonParseMs": 11.69999999999709,
+                  "shardAttestationValidationMs": 0.3000000000174623,
+                  "shardDeepFreezeMs": 7.400000000008731,
+                  "shardMaterializationMs": 13.899999999979627,
+                  "lookupReadinessMs": 81.19999999999709,
+                  "firstSemanticConsumerMs": 0.5
+                },
+                "bytesLoaded": 3054724,
+                "shardCount": 13,
+                "usedJsHeapBytes": 9226559
+              }
+            }
+          ]
+        },
+        "warm": {
+          "annotationsPerContext": 20,
+          "samples": [
+            {
+              "condition": "warm",
+              "contextIndex": 0,
+              "samplesMs": [
+                0.09999999999126885,
+                0.10000000000582077,
+                0.09999999999126885,
+                0,
+                0,
+                0,
+                0.10000000000582077,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0,
+                0.10000000000582077,
+                0,
+                0,
+                0.19999999999708962,
+                0,
+                0.10000000000582077,
+                0,
+                0
+              ]
+            },
+            {
+              "condition": "warm",
+              "contextIndex": 1,
+              "samplesMs": [
+                0.09999999999126885,
+                0.10000000000582077,
+                0.10000000000582077,
+                0.19999999999708962,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0.10000000000582077,
+                0,
+                0.19999999999708962,
+                0,
+                0.09999999999126885,
+                0.10000000000582077,
+                0.10000000000582077,
+                0.09999999999126885,
+                0.10000000000582077,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0
+              ]
+            },
+            {
+              "condition": "warm",
+              "contextIndex": 2,
+              "samplesMs": [
+                0.09999999999126885,
+                0.10000000000582077,
+                0.10000000000582077,
+                0,
+                0,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0,
+                0,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0,
+                0,
+                0.10000000000582077,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0
+              ]
+            },
+            {
+              "condition": "warm",
+              "contextIndex": 3,
+              "samplesMs": [
+                0.19999999999708962,
+                0,
+                0,
+                0,
+                0.10000000000582077,
+                0,
+                0,
+                0.09999999999126885,
+                0.10000000000582077,
+                0.10000000000582077,
+                0,
+                0,
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0.10000000000582077,
+                0.10000000000582077,
+                0.09999999999126885
+              ]
+            },
+            {
+              "condition": "warm",
+              "contextIndex": 4,
+              "samplesMs": [
+                0.09999999999126885,
+                0.10000000000582077,
+                0,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0,
+                0.10000000000582077,
+                0,
+                0.09999999999126885,
+                0,
+                0.20000000001164153,
+                0,
+                0,
+                0.09999999999126885,
+                0,
+                0,
+                0.10000000000582077,
+                0
+              ]
+            }
+          ]
+        },
+        "longTasks": {
+          "samples": [
+            {
+              "condition": "long-tasks",
+              "contextIndex": 0,
+              "durationsMs": []
+            },
+            {
+              "condition": "long-tasks",
+              "contextIndex": 1,
+              "durationsMs": []
+            },
+            {
+              "condition": "long-tasks",
+              "contextIndex": 2,
+              "durationsMs": []
+            },
+            {
+              "condition": "long-tasks",
+              "contextIndex": 3,
+              "durationsMs": []
+            },
+            {
+              "condition": "long-tasks",
+              "contextIndex": 4,
+              "durationsMs": []
+            }
+          ]
+        }
+      },
+      "measurements": {
+        "coldRequiredShardsP50Ms": 98.90000000000873,
+        "coldRequiredShardsP95Ms": 111.69999999999709,
+        "coldRequiredShardsMaxMs": 111.69999999999709,
+        "warmLookupP50Ms": 0.09999999999126885,
+        "warmLookupP95Ms": 0.10000000000582077,
+        "warmLookupMaxMs": 0.20000000001164153,
+        "longTaskP50Ms": 0,
+        "longTaskP95Ms": 0,
+        "longTaskMaxMs": 0
+      },
+      "budgets": {
+        "coldRequiredShardsP95Ms": 300,
+        "warmLookupP95Ms": 100,
+        "longTaskMaxMs": 50
+      },
+      "gates": {
+        "coldRequiredShards": true,
+        "warmLookup": true,
+        "longTask": true
+      },
+      "allBlockingPassed": true
+    }
+  ],
+  "selection": {
+    "rule": "64 if both pass; 128 if only 128 passes; blocked if neither passes",
+    "status": "selected",
+    "selectedBucketCount": 64
+  }
+}

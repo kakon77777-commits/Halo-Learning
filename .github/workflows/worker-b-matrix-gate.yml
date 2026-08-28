@@ -1,0 +1,25 @@
+name: Worker B Fixture Matrix Gate
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-ux
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Matrix inventory and real Chromium behavior
+        run: node --test tests/browser/browser-runtime-matrix.e2e.test.js

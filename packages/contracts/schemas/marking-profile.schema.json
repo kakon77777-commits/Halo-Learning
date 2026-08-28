@@ -4,14 +4,36 @@
   "title": "MarkingProfile/v2",
   "type": "object",
   "required": [
-    "schemaVersion", "profileId", "enabled", "languageMode", "channels",
-    "density", "minConfidence", "labelPosition", "maxTextNodes", "maxMarkedTokens"
+    "schemaVersion", "profileId", "profileRevision", "enabled", "languageMode", "triggerMode", "sitePolicy", "channels",
+    "density", "minConfidence", "labelPosition", "runtimeBudgets", "maxTextNodes", "maxMarkedTokens"
   ],
   "properties": {
     "schemaVersion": { "const": 2 },
-    "profileId": { "type": "string", "minLength": 1 },
+    "profileId": { "type": "string", "minLength": 1, "pattern": "\\S" },
+    "profileRevision": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
     "enabled": { "type": "boolean" },
     "languageMode": { "enum": ["auto", "both", "en", "zh-Hant"] },
+    "triggerMode": { "enum": ["adaptive-hover", "explicit-only", "hybrid"] },
+    "sitePolicy": {
+      "type": "object",
+      "required": ["schemaVersion", "userDenylist"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "userDenylist": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "x-haloCanonicalHostnameDenylist": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "channels": {
       "type": "object",
       "required": [
@@ -34,8 +56,26 @@
     "density": { "type": "number", "minimum": 0, "maximum": 1 },
     "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "labelPosition": { "enum": ["top-right", "top-left", "bottom-right", "inline"] },
-    "maxTextNodes": { "type": "integer", "minimum": 1, "maximum": 10000 },
-    "maxMarkedTokens": { "type": "integer", "minimum": 1, "maximum": 100000 }
+    "runtimeBudgets": {
+      "type": "object",
+      "required": [
+        "maxTextNodes", "maxCharacters", "maxSentences", "maxSemanticTokens",
+        "maxShardIds", "timeSliceMs", "maxQueuedRoots", "viewportBufferPx"
+      ],
+      "properties": {
+        "maxTextNodes": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "maxCharacters": { "type": "integer", "minimum": 1, "maximum": 12000 },
+        "maxSentences": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "maxSemanticTokens": { "type": "integer", "minimum": 1, "maximum": 600 },
+        "maxShardIds": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "timeSliceMs": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "maxQueuedRoots": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "viewportBufferPx": { "type": "integer", "minimum": 0, "maximum": 1200 }
+      },
+      "additionalProperties": false
+    },
+    "maxTextNodes": { "type": "integer", "minimum": 50, "maximum": 2000 },
+    "maxMarkedTokens": { "type": "integer", "minimum": 100, "maximum": 10000 }
   },
   "additionalProperties": false
 }

@@ -1,0 +1,52 @@
+name: Worker B Accessibility Gate
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-ux
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  accessibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: mkdir -p evidence
+      - name: Static accessibility RED/GREEN
+        id: contract
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test tests/accessibility-contract.test.js 2>&1 | tee evidence/accessibility-contract.tap
+      - name: Real Chromium accessibility RED/GREEN
+        id: e2e
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test tests/browser/accessibility.e2e.test.js 2>&1 | tee evidence/accessibility-e2e.tap
+      - name: Upload focused evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-b-accessibility-evidence
+          path: evidence/
+          retention-days: 14
+      - name: Enforce focused result
+        if: always()
+        env:
+          CONTRACT: ${{ steps.contract.outcome }}
+          E2E: ${{ steps.e2e.outcome }}
+        run: |
+          printf 'contract=%s\ne2e=%s\n' "$CONTRACT" "$E2E"
+          test "$CONTRACT" = success
+          test "$E2E" = success

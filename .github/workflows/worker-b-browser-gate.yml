@@ -1,0 +1,96 @@
+name: Worker B Browser Gate
+
+on:
+  push:
+    branches:
+      - parallel/v0.4.0-browser-ux
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  chromium-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Worker B branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Prepare evidence directory
+        run: mkdir -p evidence
+
+      - name: Record Chromium executable and version
+        run: |
+          node - <<'NODE' | tee evidence/chromium.txt
+          const { chromium } = require('playwright');
+          const fs = require('node:fs');
+          const { spawnSync } = require('node:child_process');
+          const executable = chromium.executablePath();
+          console.log('HALO_CHROMIUM_EXECUTABLE=' + executable);
+          console.log('exists=' + fs.existsSync(executable));
+          const version = spawnSync(executable, ['--version'], { encoding: 'utf8' });
+          process.stdout.write(version.stdout || version.stderr || 'version unavailable\n');
+          NODE
+
+      - name: Browser harness supplement
+        id: harness
+        continue-on-error: true
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/halo-no-browser
+        run: |
+          set -o pipefail
+          rm -rf "$PLAYWRIGHT_BROWSERS_PATH"
+          mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+          node --test tests/browser-harness.test.js 2>&1 | tee evidence/browser-harness.tap
+
+      - name: Accessibility contract
+        id: accessibility
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          node --test tests/accessibility-contract.test.js 2>&1 | tee evidence/accessibility-contract.tap
+
+      - name: Real-browser suites
+        id: browser
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          : > evidence/browser-e2e.tap
+          for file in tests/browser/*.e2e.test.js; do
+            printf '\n===== %s =====\n' "$file" | tee -a evidence/browser-e2e.tap
+            timeout 180s node --test "$file" 2>&1 | tee -a evidence/browser-e2e.tap
+          done
+
+      - name: Upload Worker B evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-b-browser-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Enforce gate result
+        if: always()
+        env:
+          HARNESS: ${{ steps.harness.outcome }}
+          ACCESSIBILITY: ${{ steps.accessibility.outcome }}
+          BROWSER: ${{ steps.browser.outcome }}
+        run: |
+          printf 'harness=%s\naccessibility=%s\nbrowser=%s\n' "$HARNESS" "$ACCESSIBILITY" "$BROWSER"
+          test "$HARNESS" = success
+          test "$ACCESSIBILITY" = success
+          test "$BROWSER" = success

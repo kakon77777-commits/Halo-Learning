@@ -1,0 +1,31 @@
+name: v0.4.0 Final Closure — B03 Product Security
+
+on:
+  push:
+    branches:
+      - integration/v0.4.0-final-convergence
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  b03-product-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: B03 policy and fail-closed contracts
+        run: node --test tests/site-policy.test.js tests/content-policy-lifecycle.test.js tests/browser-trigger-entry.test.js
+      - name: B03 installed Chromium product-security matrix with native command gesture
+        env:
+          HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+        run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/sensitive-site-product-security.e2e.test.js
