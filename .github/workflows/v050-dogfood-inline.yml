@@ -1,0 +1,92 @@
+name: v0.5.0 Dogfood Inline Execution
+
+on:
+  push:
+    branches:
+      - workbench/v0.5.0-local-dogfood
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v050-dogfood-inline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Full Node regression
+        run: npm test
+      - name: Source hygiene
+        run: git diff --check
+
+  browser-dogfood:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - id: detect
+        name: Detect v0.5 browser tests
+        shell: bash
+        run: |
+          if compgen -G 'tests/browser/v050-*.e2e.test.js' > /dev/null; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.detect.outputs.run == 'true'
+        run: npx playwright install --with-deps chromium
+      - if: steps.detect.outputs.run == 'true'
+        name: v0.5 dogfood Chromium gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          xvfb-run -a timeout --kill-after=10s 600s node --test tests/browser/v050-*.e2e.test.js
+
+  dogfood-package:
+    needs: [node, browser-dogfood]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - id: detect
+        name: Detect dogfood packager
+        shell: bash
+        run: |
+          if test -f scripts/package-v0.5.0-dogfood.js; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.detect.outputs.run == 'true'
+        name: Build v0.5 DOGFOOD package
+        run: node scripts/package-v0.5.0-dogfood.js
+      - if: steps.detect.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: halo-v0.5.0-dogfood-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/halo-learning-magic-hand-v0.5.0-dogfood.zip
+            docs/dogfood/v0.5.0-local-install.md
+            docs/dogfood/v0.5.0-dogfood-validation.md
+          if-no-files-found: error
+          retention-days: 30
