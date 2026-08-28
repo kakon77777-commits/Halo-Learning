@@ -50,8 +50,6 @@ jobs:
         run: sudo apt-get install -y xdotool
       - name: B03 sensitive-site product security
         run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/sensitive-site-product-security.e2e.test.js
-      - name: Allowed-site marking product path
-        run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/final-closure-allowed-marking.e2e.test.js
       - name: B06 ordinary installed MV3 recovery
         run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/final-closure-b06-mv3-recovery.e2e.test.js
       - name: Browser runtime matrix
@@ -60,6 +58,24 @@ jobs:
         run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/reversible-renderer.e2e.test.js
       - name: Accessibility
         run: timeout --kill-after=10s 180s node --test tests/browser/accessibility.e2e.test.js
+
+  allowed-site-marking:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HALO_NATIVE_SHORTCUT_DRIVER: xdotool
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install native shortcut driver
+        run: sudo apt-get install -y xdotool
+      - name: Allowed-site marking product path
+        run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/final-closure-allowed-marking.e2e.test.js
 
   trigger-controller:
     runs-on: ubuntu-24.04
@@ -187,8 +203,8 @@ jobs:
           name: halo-v0.4.0-final-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             /tmp/halo-v040-final-release/
+            dist/halo-learning-magic-hand-v0.4.0-package-manifest.json
             dist/halo-learning-magic-hand-v0.4.0.zip
-            dist/halo-learning-v0.4.0-package-manifest.json
             releases/Halo_Learning_v0.4.0_Browser_Runtime_UX_Release.zip
           if-no-files-found: warn
           retention-days: 30
