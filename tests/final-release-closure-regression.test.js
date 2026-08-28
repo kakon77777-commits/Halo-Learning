@@ -69,4 +69,19 @@ test('final release workflow fail-closes validator pipes and isolates focus-sens
     /name: Trigger controller/,
     'combined product-browser job must not rerun the focus-sensitive trigger lifecycle'
   );
+
+  const releaseArtifactUpload = workflow.match(
+    /name: halo-v0\.4\.0-final-release-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}[\s\S]*?retention-days: 30/
+  );
+  assert.ok(releaseArtifactUpload, 'final release artifact upload must remain present');
+  assert.match(
+    releaseArtifactUpload[0],
+    /dist\/halo-learning-v0\.4\.0-package-manifest\.json/,
+    'final release artifact envelope must upload the canonical package manifest path'
+  );
+  assert.doesNotMatch(
+    releaseArtifactUpload[0],
+    /dist\/halo-learning-magic-hand-v0\.4\.0-package-manifest\.json/,
+    'final release artifact envelope must not reference a non-existent package manifest path'
+  );
 });
