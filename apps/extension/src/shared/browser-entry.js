@@ -20,6 +20,7 @@
     'src/shared/navigation-route-bridge.js',
     'src/shared/token-child-continuity.js',
     'src/shared/reversible-renderer.js',
+    'src/shared/dogfood-renderer.js',
     'src/shared/trigger-controller.js',
     'src/shared/dogfood-contracts.js',
     'src/shared/dogfood-source.js',
