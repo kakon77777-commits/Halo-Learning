@@ -37,11 +37,16 @@ const FINAL_ACCEPTANCE_MAP = Object.freeze([
     'docs/validation/v0.4.0-b07-runtime-performance.md',
     'docs/validation/v0.4.0-browser-shard-comparison.json'
   ]) }),
+  Object.freeze({ id: 'canonical-browser-evidence-envelope', evidenceAny: Object.freeze([
+    'docs/validation/v0.4.0-b08-canonical-browser-evidence.md'
+  ]) }),
   Object.freeze({ id: 'package-integrity', evidenceAny: Object.freeze([
     'tests/release-packaging-v0.4.0.test.js',
     'scripts/package-v0.4.0.js'
   ]) })
 ]);
+
+const FINAL_EVIDENCE_BLOCKERS = Object.freeze([]);
 
 const RELEASE_DEBT = Object.freeze([
   Object.freeze({
@@ -163,12 +168,13 @@ function validateFinalRelease(rootValue, mode) {
     generatedAt: new Date().toISOString(),
     classification: Object.freeze({
       productBlockers: Object.freeze([]),
-      evidenceBlockers: Object.freeze(['B08 until canonical envelope publication']),
+      evidenceBlockers: FINAL_EVIDENCE_BLOCKERS,
       releaseDebt
     }),
     gates: Object.freeze([
       'source-hygiene',
       'scope-correct-final-acceptance-map',
+      'canonical-browser-evidence-envelope',
       'local-only-mv3-manifest',
       'privacy-security-static',
       'selected-production-lexical-runtime',
@@ -203,6 +209,7 @@ if (require.main === module) {
 
 module.exports = Object.freeze({
   FINAL_ACCEPTANCE_MAP,
+  FINAL_EVIDENCE_BLOCKERS,
   RELEASE_DEBT,
   parseCli,
   validateFinalAcceptance,
