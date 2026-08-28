@@ -13,6 +13,11 @@
   const OBSERVATION_MAX = 512;
   const NOTE_MAX = 2000;
 
+  function observationRuntime() {
+    const value = root && root.__HALO_DOGFOOD_OBSERVATION_RUNTIME__;
+    return value && typeof value === 'object' ? value : null;
+  }
+
   function observationKey(value) {
     if (value === undefined || value === null || value === '') return null;
     if (typeof value !== 'string' || value.length > OBSERVATION_MAX) {
@@ -47,6 +52,7 @@
     const onPanelAction = typeof settings.onPanelAction === 'function' ? settings.onPanelAction : null;
     const base = Base.createReversibleRenderer(settings);
     const observations = new WeakMap();
+    let publicApi = null;
 
     function rememberObservations(rawRequest) {
       if (!rawRequest || !rawRequest.root || !Array.isArray(rawRequest.fragments) ||
@@ -66,15 +72,23 @@
       }
     }
 
+    function instrument(rawRequest) {
+      const runtime = observationRuntime();
+      if (!runtime || typeof runtime.instrumentRenderRequest !== 'function') return rawRequest;
+      try { return runtime.instrumentRenderRequest(rawRequest) || rawRequest; } catch (_error) { return rawRequest; }
+    }
+
     function apply(rawRequest) {
+      const observedRequest = instrument(rawRequest);
       const result = base.apply(rawRequest);
-      rememberObservations(rawRequest);
+      rememberObservations(observedRequest);
       return result;
     }
 
     function reconcile(rawRequest) {
+      const observedRequest = instrument(rawRequest);
       const result = base.reconcile(rawRequest);
-      rememberObservations(rawRequest);
+      rememberObservations(observedRequest);
       return result;
     }
 
@@ -91,14 +105,20 @@
       return null;
     }
 
-    function emitPanelAction(action) {
-      if (!onPanelAction) return;
+    function invokeAction(callback, action) {
+      if (typeof callback !== 'function') return;
       try {
-        const result = onPanelAction(Object.freeze(action));
+        const result = callback(Object.freeze(action));
         if (result && typeof result.then === 'function') result.catch(() => {});
       } catch (_error) {
         // Dogfood observation must never break the v0.4 interaction surface.
       }
+    }
+
+    function emitPanelAction(action) {
+      invokeAction(onPanelAction, action);
+      const runtime = observationRuntime();
+      if (runtime && typeof runtime.handlePanelAction === 'function') invokeAction(runtime.handlePanelAction.bind(runtime), action);
     }
 
     function decoratePanel(model, actions) {
@@ -174,19 +194,33 @@
       panel.append(actionsRow, editor);
     }
 
-    function openPanel(model) {
-      if (!model || typeof model !== 'object' || Array.isArray(model)) return base.openPanel(model);
+    function openPanel(rawModel) {
+      if (!rawModel || typeof rawModel !== 'object' || Array.isArray(rawModel)) return base.openPanel(rawModel);
+      let model = rawModel;
+      const runtime = observationRuntime();
+      if (runtime && typeof runtime.preparePanelModel === 'function') {
+        try { model = runtime.preparePanelModel(rawModel) || rawModel; } catch (_error) { model = rawModel; }
+      }
       const actions = normalizeActions(model.actions);
       const result = base.openPanel(model);
       decoratePanel(model, actions);
       return result;
     }
 
-    return Object.freeze({
+    function removeAll(reason) {
+      const result = base.removeAll(reason);
+      const runtime = observationRuntime();
+      if (runtime && typeof runtime.clearAll === 'function') {
+        try { runtime.clearAll(); } catch (_error) {}
+      }
+      return result;
+    }
+
+    publicApi = Object.freeze({
       apply,
       reconcile,
       removeRoot: base.removeRoot,
-      removeAll: base.removeAll,
+      removeAll,
       openPanel,
       closePanel: base.closePanel,
       status: base.status,
@@ -194,6 +228,11 @@
       ownsPanel: base.ownsPanel,
       observationKeyForToken
     });
+    const runtime = observationRuntime();
+    if (runtime && typeof runtime.setActiveRenderer === 'function') {
+      try { runtime.setActiveRenderer(publicApi); } catch (_error) {}
+    }
+    return publicApi;
   }
 
   return Object.freeze({ ...Base, createReversibleRenderer });
