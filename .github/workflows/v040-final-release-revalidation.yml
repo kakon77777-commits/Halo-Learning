@@ -49,7 +49,7 @@ jobs:
       - name: Install native shortcut driver
         run: sudo apt-get install -y xdotool
       - name: B03 sensitive-site product security
-        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/final-closure-b03-product-security.e2e.test.js
+        run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/sensitive-site-product-security.e2e.test.js
       - name: Allowed-site marking product path
         run: xvfb-run -a timeout --kill-after=10s 240s node --test tests/browser/final-closure-allowed-marking.e2e.test.js
       - name: B06 ordinary installed MV3 recovery
@@ -60,6 +60,8 @@ jobs:
         run: timeout --kill-after=10s 180s node --test tests/browser/reversible-renderer.e2e.test.js
       - name: Trigger controller
         run: xvfb-run -a timeout --kill-after=10s 180s node --test tests/browser/trigger-controller.e2e.test.js
+      - name: Accessibility
+        run: timeout --kill-after=10s 180s node --test tests/browser/accessibility.e2e.test.js
 
   performance:
     runs-on: ubuntu-24.04
@@ -108,7 +110,6 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
       - name: Prepare final evidence root
         run: |
           rm -rf "$HALO_FINAL_EVIDENCE" /tmp/halo-v040-final-first /tmp/halo-v040-final-standalone
@@ -128,8 +129,8 @@ jobs:
           cmp /tmp/halo-v040-final-first/manifest.json dist/halo-learning-v0.4.0-package-manifest.json
           cmp "$HALO_FINAL_EVIDENCE/first.sha256" "$HALO_FINAL_EVIDENCE/second.sha256"
           test -z "$(git status --porcelain --untracked-files=all)"
-      - name: Development validator must pass
-        run: npm run validate | tee "$HALO_FINAL_EVIDENCE/development-validator.log"
+      - name: Final development validator must pass
+        run: node scripts/validate-v0.4.0-final.js --development | tee "$HALO_FINAL_EVIDENCE/development-validator.log"
       - name: Extract standalone and audit package contents
         run: |
           set -euo pipefail
@@ -149,12 +150,12 @@ jobs:
           const manifest = JSON.parse(fs.readFileSync('apps/extension/manifest.json', 'utf8'));
           if (Object.prototype.hasOwnProperty.call(manifest, 'host_permissions')) throw new Error('production manifest widened host permissions');
           NODE
-      - name: Standalone validator must pass
+      - name: Final standalone validator must pass
         run: |
           set -euo pipefail
           cd /tmp/halo-v040-final-standalone
           npm ci
-          npm run validate:standalone | tee "$HALO_FINAL_EVIDENCE/standalone-validator.log"
+          node scripts/validate-v0.4.0-final.js --standalone | tee "$HALO_FINAL_EVIDENCE/standalone-validator.log"
       - name: Final release summary
         run: |
           printf 'source_head=%s\n' "$GITHUB_SHA" > "$HALO_FINAL_EVIDENCE/final-summary.txt"
