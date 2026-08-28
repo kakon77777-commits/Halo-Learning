@@ -62,7 +62,18 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Full Node regression
-        run: npm test
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm test 2>&1 | tee full-node-regression.log
+      - if: failure()
+        name: Upload full Node failure log
+        uses: actions/upload-artifact@v4
+        with:
+          name: halo-v0.5.0-full-node-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: full-node-regression.log
+          if-no-files-found: error
+          retention-days: 7
       - name: Source hygiene
         run: git diff --check
 
