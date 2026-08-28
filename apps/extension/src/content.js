@@ -508,11 +508,34 @@
     }));
   }
 
-  function validateEnrichmentResponse(response, request, Contracts) {
+  function lexicalVersionFromDictionaryStatus(status) {
+    const value = status && status.lexicalVersion;
+    if (typeof value !== 'string' || value.length < 1 || value.length > 256 ||
+        !/^[A-Za-z0-9._:@-]+$/u.test(value)) return null;
+    return value;
+  }
+
+  function resolveProgressiveAnalysisKeyModule(Progressive) {
+    if (Progressive && typeof Progressive.createAnalysisKey === 'function') return Progressive;
+    if (root.HaloProgressiveRuntime && typeof root.HaloProgressiveRuntime.createAnalysisKey === 'function') {
+      return root.HaloProgressiveRuntime;
+    }
+    if (typeof require === 'function') {
+      try {
+        const required = require('./shared/progressive-runtime');
+        if (required && typeof required.createAnalysisKey === 'function') return required;
+      } catch (_error) {}
+    }
+    return null;
+  }
+
+  function validateEnrichmentResponse(response, request, Contracts, Progressive) {
     if (!Contracts || typeof Contracts.normalizeAnnotationSet !== 'function' ||
         !Number.isInteger(Contracts.SEMANTIC_SCHEMA_VERSION)) {
       throw new TypeError('canonical semantic contracts are required');
     }
+    const keyModule = resolveProgressiveAnalysisKeyModule(Progressive);
+    if (!keyModule) throw new TypeError('canonical progressive analysis key module is required');
     const schemaVersion = Contracts.SEMANTIC_SCHEMA_VERSION;
     if (!response || typeof response !== 'object' || response.error ||
         response.schemaVersion !== schemaVersion ||
@@ -538,8 +561,23 @@
         const expected = expectedByRoot.get(result.rootId);
         if (!expected || result.requestId !== request.requestId ||
             result.pageEpoch !== request.pageEpoch || result.rootRevision !== expected.rootRevision ||
-            result.analysisKey !== expected.analysisKey || !['bootstrap', 'lexical'].includes(result.phase) ||
-            result.lexicalVersion !== expected.lexicalVersion || typeof result.generatedAt !== 'string') return null;
+            !['bootstrap', 'lexical'].includes(result.phase) || typeof result.generatedAt !== 'string' ||
+            typeof result.lexicalVersion !== 'string' || result.lexicalVersion.length < 1 ||
+            result.lexicalVersion.length > 256 || !/^[A-Za-z0-9._:@-]+$/u.test(result.lexicalVersion)) return null;
+        let expectedAnalysisKey = expected.analysisKey;
+        if (result.phase === 'lexical') {
+          if (result.lexicalVersion !== expected.lexicalVersion) return null;
+        } else {
+          expectedAnalysisKey = keyModule.createAnalysisKey({
+            text: expected.text,
+            languageMode: expected.languageMode,
+            semanticVersion: expected.semanticVersion,
+            grammarVersion: expected.grammarVersion,
+            profileRevision: expected.profileRevision,
+            lexicalVersion: result.lexicalVersion
+          });
+        }
+        if (result.analysisKey !== expectedAnalysisKey) return null;
         const annotationSet = Contracts.normalizeAnnotationSet(result.annotationSet);
         if (annotationSet.textLength !== expected.text.length ||
             annotationSet.languageMode !== expected.languageMode ||
@@ -1531,7 +1569,7 @@
         incrementBoundary('semanticMessages');
         const response = await root.chrome.runtime.sendMessage(request);
         if (context.signal.aborted || !activeRuntime || activeRuntime.epoch !== epoch) return null;
-        const validated = validateEnrichmentResponse(response, request, modules.Contracts);
+        const validated = validateEnrichmentResponse(response, request, modules.Contracts, modules.Progressive);
         if (!validated) throw new Error('Local semantic service returned an invalid response');
         observeWorkerNetworkActivity(validated.networkActivity);
         return validated;
@@ -1648,7 +1686,15 @@
       const Contracts = root.HaloSemanticContracts;
       const Renderer = root.HaloReversibleRenderer;
       const provider = Dictionary.createBootstrapDictionaryProvider();
-      const lexicalVersion = `${provider.id}@${provider.version}`;
+      let lexicalVersion = `${provider.id}@${provider.version}`;
+      const installedRuntime = root.chrome && root.chrome.runtime &&
+        typeof root.chrome.runtime.id === 'string' && root.chrome.runtime.id.length > 0;
+      if (installedRuntime) {
+        const dictionaryStatus = await root.chrome.runtime.sendMessage({ type: 'HALO_DICTIONARY_STATUS' });
+        const canonicalLexicalVersion = lexicalVersionFromDictionaryStatus(dictionaryStatus);
+        if (!canonicalLexicalVersion) throw new Error('Canonical lexical runtime identity is unavailable');
+        lexicalVersion = canonicalLexicalVersion;
+      }
       const renderer = ensureRenderer(Renderer);
       ensureTriggerRuntime(settings);
       const modules = {
@@ -1973,6 +2019,7 @@
     eligibleTextNode,
     viewportRootMargin,
     buildEnrichmentItems,
+    lexicalVersionFromDictionaryStatus,
     validateEnrichmentResponse,
     rootWorkIsCurrent,
     rendererRootIdsForInvalidation,

@@ -372,7 +372,14 @@ if (typeof importScripts === 'function') {
         pageEpoch: validated.pageEpoch,
         rootId: value.rootId,
         rootRevision: value.rootRevision,
-        analysisKey: value.analysisKey,
+        analysisKey: Progressive.createAnalysisKey({
+          text: value.text,
+          languageMode: value.languageMode,
+          semanticVersion: value.semanticVersion,
+          grammarVersion: value.grammarVersion,
+          profileRevision: value.profileRevision,
+          lexicalVersion
+        }),
         phase,
         annotationSet: engine.annotateText(value.text, {
           languageMode: value.languageMode,
@@ -507,7 +514,16 @@ if (typeof importScripts === 'function') {
       if (message.type === 'HALO_ENRICH_BATCH') return enrichBatch(message, sender);
       if (message.type === 'HALO_CANCEL_REQUEST') return cancelRequest(message, sender);
       if (message.type === 'HALO_DICTIONARY_STATUS') {
-        return statusWithNetworkActivity((await getContext()).status());
+        const context = await getContext();
+        const lexicalVersion = context && context.lexicalVersion;
+        if (typeof lexicalVersion !== 'string' || lexicalVersion.length < 1 || lexicalVersion.length > 256 ||
+            !/^[A-Za-z0-9._:@-]+$/u.test(lexicalVersion)) {
+          throw new TypeError('lexical runtime identity is invalid');
+        }
+        return deepFreeze({
+          ...statusWithNetworkActivity(context.status()),
+          lexicalVersion
+        });
       }
       return null;
     }
