@@ -5,7 +5,7 @@
   "description": "Local-first English/Traditional-Chinese semantic annotation with configurable, reversible projection.",
   "permissions": ["activeTab", "contextMenus", "scripting", "storage"],
   "background": {
-    "service_worker": "src/service-worker.js"
+    "service_worker": "src/worker-entry.js"
   },
   "action": {
     "default_popup": "src/popup.html",
